@@ -80,47 +80,49 @@ export function buildOpenAICompatibleRequest({ provider, messages, stream = fals
   };
 }
 
-export async function callOpenAICompatible({ provider, messages, fetchImpl = fetch, tools = null }) {
+export async function callOpenAICompatible({ provider, messages, fetchImpl = fetch, tools = null, signal = null }) {
   try {
-    return await callOpenAICompatibleOnce({ provider, messages, fetchImpl, tools });
+    return await callOpenAICompatibleOnce({ provider, messages, fetchImpl, tools, signal });
   } catch (error) {
     if (!shouldRetryWithoutReasoning({ error, provider, messages })) throw error;
     const result = await callOpenAICompatibleOnce({
       provider: { ...provider, reasoningMode: 'disabled' },
       messages,
       fetchImpl,
-      tools
+      tools,
+      signal
     });
     result.reasoningRecovery = { used: true, mode: 'disabled' };
     return result;
   }
 }
 
-export async function streamOpenAICompatible({ provider, messages, onToken, fetchImpl = fetch }) {
+export async function streamOpenAICompatible({ provider, messages, onToken, fetchImpl = fetch, signal = null }) {
   try {
-    return await streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl });
+    return await streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl, signal });
   } catch (error) {
     if (!shouldRetryWithoutReasoning({ error, provider, messages })) throw error;
     const result = await streamOpenAICompatibleOnce({
       provider: { ...provider, reasoningMode: 'disabled' },
       messages,
       onToken,
-      fetchImpl
+      fetchImpl,
+      signal
     });
     result.reasoningRecovery = { used: true, mode: 'disabled' };
     return result;
   }
 }
 
-async function callOpenAICompatibleOnce({ provider, messages, fetchImpl, tools }) {
+async function callOpenAICompatibleOnce({ provider, messages, fetchImpl, tools, signal }) {
   const { url, init } = buildOpenAICompatibleRequest({ provider, messages, tools });
-  const response = await fetchImpl(url, init);
+  const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   return readOpenAICompatibleResponse(response);
 }
 
-async function streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl }) {
+async function streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl, signal }) {
   const { url, init } = buildOpenAICompatibleRequest({ provider, messages, stream: true });
-  const response = await fetchImpl(url, init);
+  const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Provider stream error ${response.status}: ${text.slice(0, 240)}`);

@@ -1,9 +1,17 @@
 import { appendTurnEvent } from '../agent/memoryUpdater.js';
-import { normalizeActionEnvelope } from '../simulation/actionProtocol.js';
+import { MAX_ACTIONS_PER_ENVELOPE, normalizeActionEnvelope } from '../simulation/actionProtocol.js';
 import { appendLedgerEvent, createManualLedgerEvent, projectEventLedger } from '../simulation/eventLedger.js';
 import { ensureSimulationMemory, normalizeActors, projectSimulation } from '../simulation/npcSimulation.js';
-import { adjudicateActionEnvelope } from '../simulation/worldStateArbiter.js';
+import { adjudicateActionEnvelope, replayActionHistory } from '../simulation/worldStateArbiter.js';
+import { buildTurnChroniclePlan, combineChronicleActionEnvelope } from '../simulation/chronicleEngine.js';
 import { compileStructuredWorldSystems } from '../resources/playableResourceCompiler.js';
+import {
+  beginCardRuntimeInteraction,
+  ensureCardRuntimeMemory,
+  projectCardRuntime,
+  recordCardRuntimeFeedback
+} from '../agent/cardRuntime.js';
+import { syncCharacterRegistry } from '../agent/characterRegistry.js';
 
 export class WorldSimulationService {
   constructor({ sessionService, resolveCharacterPresets }) {
@@ -11,11 +19,19 @@ export class WorldSimulationService {
     this.resolveCharacterPresets = typeof resolveCharacterPresets === 'function'
       ? resolveCharacterPresets
       : () => [];
+    this.preparedChronicles = new WeakMap();
   }
 
   prepareSession(session, seeds = {}) {
+    this.preparedChronicles.delete(session);
     const resolvedSeeds = resolveSessionSeeds(session, seeds, this.resolveCharacterPresets);
     session.memory = ensureSimulationMemory(session.memory, resolvedSeeds);
+    session.memory = reconcileSimulationHistory(session.memory, session.messages);
+    session.memory = ensureCardRuntimeMemory(session.memory, {
+      ...resolvedSeeds,
+      worldBook: session.config?.worldBook
+    }, { enabled: session.settings?.cardRuntimeEnabled !== false });
+    session.memory = syncCharacterRegistry(session.memory, resolvedSeeds);
     const baselineMemory = ensureSimulationMemory({ simulation: session.memory.simulationBaseline }, resolvedSeeds);
     session.memory.simulationBaseline = baselineMemory.simulation;
     if (!session.memory.worldStateBaseline) {
@@ -24,13 +40,68 @@ export class WorldSimulationService {
     return session;
   }
 
-  applyTurn({ session, userMessage, assistantMessage, actionEnvelope, actionError }) {
-    let adjudication = null;
+  refreshCurrentAct(session, assistantMessage) {
+    session.memory = syncCharacterRegistry(session.memory, {
+      ...sessionSeedFromSession(session),
+      assistantMessage,
+      turnId: assistantMessage?.id
+    });
+    return session;
+  }
+
+  prepareInteraction({ session, userMessage, generationType = 'normal' }) {
+    const prepared = beginCardRuntimeInteraction(session.memory, { userMessage, generationType });
+    session.memory = prepared.memory;
+    const chronicle = this.prepareChronicle({ session, userMessage, generationType });
+    return {
+      ...prepared.interaction,
+      chronicle: chronicle ? structuredClone(chronicle.metadata) : null
+    };
+  }
+
+  projectDecisionMemory({ session, assistantMessage, actionEnvelope = null }) {
+    let memory = structuredClone(session?.memory || {});
     if (actionEnvelope) {
-      const adjudicated = adjudicateActionEnvelope({ memory: session.memory, envelope: actionEnvelope });
+      const projected = adjudicateActionEnvelope({ memory, envelope: actionEnvelope });
+      if (projected.result?.status !== 'rejected') memory = projected.memory;
+    }
+    return syncCharacterRegistry(memory, {
+      ...sessionSeedFromSession(session || {}),
+      assistantMessage,
+      turnId: assistantMessage?.id || 'decision-preview'
+    });
+  }
+
+  applyTurn({ session, userMessage, assistantMessage, actionEnvelope, actionError }) {
+    let chronicle = this.preparedChronicles.get(session) || null;
+    this.preparedChronicles.delete(session);
+    if (!chronicle) chronicle = this.prepareChronicle({ session, userMessage });
+    this.preparedChronicles.delete(session);
+
+    let modelEnvelope = actionEnvelope;
+    if (modelEnvelope && chronicle) {
+      modelEnvelope = limitModelActionsForChronicle(modelEnvelope, chronicle.envelope.actions.length);
+    }
+    let adjudication = null;
+    if (chronicle) {
+      const combinedEnvelope = combineChronicleActionEnvelope({
+        chronicleEnvelope: chronicle.envelope,
+        modelEnvelope,
+        acceptedModelActions: modelEnvelope?.actions || []
+      });
+      const commitMemory = restoreChronicleBaseline(session.memory, chronicle.memoryBefore);
+      const adjudicated = adjudicateActionEnvelope({ memory: commitMemory, envelope: combinedEnvelope });
+      session.memory = adjudicated.memory;
+      adjudication = orderChronicleEffects(adjudicated.result, chronicle.envelope);
+      assistantMessage.actionEnvelope = combinedEnvelope;
+      assistantMessage.chronicle = structuredClone(chronicle.metadata);
+    } else if (modelEnvelope) {
+      const adjudicated = adjudicateActionEnvelope({ memory: session.memory, envelope: modelEnvelope });
       session.memory = adjudicated.memory;
       adjudication = adjudicated.result;
-      assistantMessage.actionEnvelope = structuredClone(actionEnvelope);
+      assistantMessage.actionEnvelope = structuredClone(modelEnvelope);
+    }
+    if (adjudication) {
       assistantMessage.adjudication = summarizeAdjudication(adjudication);
     }
     if (actionError) {
@@ -39,6 +110,19 @@ export class WorldSimulationService {
         detail: String(actionError.detail || actionError.message || '')
       };
     }
+    const runtimeTurn = recordCardRuntimeFeedback(session.memory, {
+      userMessage,
+      assistantMessage,
+      adjudication,
+      actionError
+    });
+    session.memory = runtimeTurn.memory;
+    session.memory = syncCharacterRegistry(session.memory, {
+      ...sessionSeedFromSession(session),
+      assistantMessage,
+      turnId: assistantMessage.id
+    });
+    if (runtimeTurn.feedback) assistantMessage.runtimeFeedback = structuredClone(runtimeTurn.feedback);
     const swipeIndex = Number(assistantMessage.activeSwipeIndex || 0);
     const swipeMetadata = Array.isArray(assistantMessage.swipeMetadata) ? assistantMessage.swipeMetadata : [];
     while (swipeMetadata.length <= swipeIndex) swipeMetadata.push({});
@@ -49,8 +133,15 @@ export class WorldSimulationService {
       mvuError: assistantMessage.mvuError ? structuredClone(assistantMessage.mvuError) : null,
       adjudication: assistantMessage.adjudication ? structuredClone(assistantMessage.adjudication) : null,
       recommendedActions: Array.isArray(assistantMessage.recommendedActions) ? structuredClone(assistantMessage.recommendedActions) : [],
+      recommendedActionOptions: Array.isArray(assistantMessage.recommendedActionOptions) ? structuredClone(assistantMessage.recommendedActionOptions) : [],
+      decisionNode: assistantMessage.decisionNode ? structuredClone(assistantMessage.decisionNode) : null,
+      turnFrame: assistantMessage.turnFrame ? structuredClone(assistantMessage.turnFrame) : null,
+      turnFrameError: assistantMessage.turnFrameError ? structuredClone(assistantMessage.turnFrameError) : null,
+      narrativeConsistency: assistantMessage.narrativeConsistency ? structuredClone(assistantMessage.narrativeConsistency) : null,
       roleplayPanels: assistantMessage.roleplayPanels ? structuredClone(assistantMessage.roleplayPanels) : null,
       worldBookActivation: assistantMessage.worldBookActivation ? structuredClone(assistantMessage.worldBookActivation) : null,
+      runtimeFeedback: assistantMessage.runtimeFeedback ? structuredClone(assistantMessage.runtimeFeedback) : null,
+      chronicle: assistantMessage.chronicle ? structuredClone(assistantMessage.chronicle) : null,
       speaker: assistantMessage.speaker ? String(assistantMessage.speaker).slice(0, 30) : ''
     };
     assistantMessage.swipeMetadata = swipeMetadata;
@@ -62,7 +153,19 @@ export class WorldSimulationService {
       adjudication,
       actionError
     });
-    return { session, adjudication };
+    return { session, adjudication, chronicle: assistantMessage.chronicle || null };
+  }
+
+  prepareChronicle({ session, userMessage, generationType = 'normal' }) {
+    const plan = buildTurnChroniclePlan({ memory: session.memory, userMessage, generationType });
+    if (!plan) return null;
+    const memoryBefore = structuredClone(session.memory);
+    const adjudicated = adjudicateActionEnvelope({ memory: session.memory, envelope: plan.envelope });
+    if (adjudicated.result.status === 'rejected') return null;
+    session.memory = adjudicated.memory;
+    const chronicle = { ...plan, memoryBefore };
+    this.preparedChronicles.set(session, chronicle);
+    return chronicle;
   }
 
   async getSnapshot(sessionId = 'main', { director = true } = {}) {
@@ -172,7 +275,9 @@ function projectSnapshot(session, { director }) {
     simulation: projectSimulation(memory.simulation, { director }),
     events: projectEventLedger(memory.eventLedger, { director, limit: 100 }),
     narrativeState: structuredClone(memory.narrativeState || {}),
-    ruleSystem: structuredClone(memory.ruleSystem || null)
+    characterRegistry: structuredClone(memory.characterRegistry || null),
+    ruleSystem: structuredClone(memory.ruleSystem || null),
+    cardRuntime: projectCardRuntime(memory.cardRuntime, { includeFeedback: director })
   };
 }
 
@@ -180,6 +285,7 @@ function sessionSeedFromSession(session) {
   return {
     characterCard: session.config?.characterCard,
     groupMembers: session.config?.groupMembers || [],
+    worldBook: session.config?.worldBook || [],
     worldSystems: session.config?.worldSystems,
     ...(Object.hasOwn(session.config || {}, 'characterPresets')
       ? { characterPresets: session.config.characterPresets }
@@ -209,9 +315,40 @@ function resolveSessionSeeds(session, seeds, resolveCharacterPresets) {
   return {
     characterCard: seeds.characterCard || config.characterCard,
     groupMembers: Array.isArray(seeds.groupMembers) ? seeds.groupMembers : config.groupMembers,
+    worldBook: Array.isArray(seeds.worldBook) ? seeds.worldBook : config.worldBook,
     characterPresets: Array.isArray(resolvedPresets) ? resolvedPresets : [],
     worldSystems
   };
+}
+
+function reconcileSimulationHistory(memory, messages) {
+  const source = memory && typeof memory === 'object' ? memory : {};
+  const history = Array.isArray(messages) ? messages : [];
+  if (!history.some((message) => message?.role === 'assistant' && message?.actionEnvelope)) {
+    return source;
+  }
+
+  const replayed = replayActionHistory({ memory: source, messages: history }).memory;
+  const current = source.simulation || {};
+  const canonical = replayed.simulation || {};
+  if (sameSimulationRevision(current, canonical)) return source;
+
+  // Narrative extraction may update free-form state, but it must never make the
+  // deterministic clock/actor simulation diverge from the selected message branch.
+  return {
+    ...source,
+    simulation: structuredClone(canonical),
+    worldState: {
+      ...(source.worldState || {}),
+      timeline: structuredClone(replayed.worldState?.timeline || source.worldState?.timeline || [])
+    }
+  };
+}
+
+function sameSimulationRevision(left = {}, right = {}) {
+  return Number(left?.revision || 0) === Number(right?.revision || 0)
+    && Number(left?.clock?.day || 1) === Number(right?.clock?.day || 1)
+    && Number(left?.clock?.minuteOfDay || 0) === Number(right?.clock?.minuteOfDay || 0);
 }
 
 function checkpointMemory(session) {
@@ -236,5 +373,43 @@ function summarizeAdjudication(result, { includeEffects = false } = {}) {
     rejectedCount: result.rejected?.length || 0,
     rejected: (result.rejected || []).map((item) => ({ id: item.action?.id, type: item.action?.type, code: item.code, detail: item.detail })),
     ...(includeEffects ? { effects: structuredClone(result.effects || []) } : {})
+  };
+}
+
+function limitModelActionsForChronicle(envelope, chronicleActionCount) {
+  const normalized = normalizeActionEnvelope(envelope);
+  const remaining = Math.max(0, MAX_ACTIONS_PER_ENVELOPE - chronicleActionCount);
+  if (normalized.actions.length <= remaining) return normalized;
+  if (!remaining) return null;
+  return {
+    ...normalized,
+    actions: normalized.actions.slice(0, remaining),
+    summary: `${normalized.summary || '模型世界动作'}（仅保留前 ${remaining} 项）`.slice(0, 240)
+  };
+}
+
+function restoreChronicleBaseline(currentMemory, baselineMemory) {
+  const next = structuredClone(currentMemory || {});
+  const baseline = baselineMemory || {};
+  // The preview is intentionally visible to the prompt. At commit time restore
+  // only its deterministic mutations, keeping lifecycle/MVU changes produced
+  // after prompt assembly intact.
+  next.simulation = structuredClone(baseline.simulation || next.simulation);
+  next.worldState = {
+    ...(next.worldState || {}),
+    timeline: structuredClone(baseline.worldState?.timeline || [])
+  };
+  return next;
+}
+
+function orderChronicleEffects(adjudication, chronicleEnvelope) {
+  if (!adjudication || !chronicleEnvelope) return adjudication;
+  const chronicleActionIds = new Set((chronicleEnvelope.actions || []).map((action) => action.id));
+  return {
+    ...adjudication,
+    effects: [
+      ...(adjudication.effects || []).filter((effect) => !chronicleActionIds.has(effect.actionId)),
+      ...(adjudication.effects || []).filter((effect) => chronicleActionIds.has(effect.actionId))
+    ]
   };
 }

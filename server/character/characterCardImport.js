@@ -1,6 +1,8 @@
 import { inflateSync } from 'node:zlib';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// ZIP 本地文件头签名（PK\x03\x04）。CharX 角色卡本质上是包含 card.json 与 assets/ 的 ZIP 包。
+const ZIP_LOCAL_HEADER = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 
 export function importCharacterCardFromPayload(payload = {}) {
   const rawCard = readCardJson(payload);
@@ -26,6 +28,9 @@ export function importCharacterCardFromPayload(payload = {}) {
 
 export function extractCharacterCardImage(payload = {}) {
   const bytes = decodePayloadBytes(payload);
+  // CharX 压缩包：尝试从 assets/ 提取头像图片（PNG 优先）。
+  const charxImage = readCharxPortrait(bytes);
+  if (charxImage) return charxImage;
   if (!PNG_SIGNATURE.equals(bytes.subarray(0, PNG_SIGNATURE.length))) return null;
 
   const dimensions = readPngDimensions(bytes);
@@ -40,6 +45,9 @@ export function extractCharacterCardImage(payload = {}) {
 function readCardJson(payload) {
   const data = typeof payload.data === 'string' ? payload.data : '';
   const bytes = decodePayloadBytes(payload);
+  // CharX 压缩包：优先从 ZIP 中提取 card.json。
+  const charxCardJson = readCharxCardJson(bytes);
+  if (charxCardJson !== null) return charxCardJson;
   const isPng = String(payload.mimeType || '').includes('png') || PNG_SIGNATURE.equals(bytes.subarray(0, PNG_SIGNATURE.length));
   const text = isPng ? readPngCharacterText(bytes) : bytes.toString('utf8') || data;
 
@@ -53,6 +61,93 @@ function readCardJson(payload) {
       return parseYamlLikeCharacterCard(text);
     }
   }
+}
+
+// CharX（Character eXchange）是 SillyTavern/RisuAI 的 ZIP 角色卡格式，
+// 包含 card.json（V2/V3 角色卡）、assets/（头像、表情精灵）等资源。
+// 本读取器实现最小化的 ZIP 本地文件头解析，仅提取 card.json 与首张 PNG 头像。
+function readCharxCardJson(bytes) {
+  if (!isZipBytes(bytes)) return null;
+  const entries = parseZipEntries(bytes);
+  const cardEntry = entries.find((entry) => normalizeZipPath(entry.name) === 'card.json');
+  if (!cardEntry) return null;
+  const cardText = extractZipEntryData(bytes, cardEntry).toString('utf8');
+  try {
+    return JSON.parse(cardText);
+  } catch {
+    return null;
+  }
+}
+
+function readCharxPortrait(bytes) {
+  if (!isZipBytes(bytes)) return null;
+  const entries = parseZipEntries(bytes);
+  // 头像候选：assets/ 下的 png，文件名含 avatar/portrait/icon 优先。
+  const pngCandidates = entries.filter((entry) => {
+    const name = normalizeZipPath(entry.name).toLowerCase();
+    return name.startsWith('assets/') && name.endsWith('.png');
+  });
+  if (!pngCandidates.length) return null;
+  const ranked = [...pngCandidates].sort((a, b) => {
+    const score = (entry) => {
+      const name = normalizeZipPath(entry.name).toLowerCase();
+      if (name.includes('avatar')) return 0;
+      if (name.includes('portrait')) return 1;
+      if (name.includes('icon')) return 2;
+      return 3;
+    };
+    return score(a) - score(b);
+  });
+  const portraitBytes = extractZipEntryData(bytes, ranked[0]);
+  const dimensions = readPngDimensions(portraitBytes);
+  return {
+    bytes: portraitBytes,
+    mimeType: 'image/png',
+    width: dimensions.width,
+    height: dimensions.height
+  };
+}
+
+function isZipBytes(bytes) {
+  return bytes.length > 4 && bytes.subarray(0, 4).equals(ZIP_LOCAL_HEADER);
+}
+
+function parseZipEntries(bytes) {
+  const entries = [];
+  let offset = 0;
+  // 仅扫描本地文件头；不解析中央目录。对常规 CharX 足够。
+  while (offset + 30 <= bytes.length) {
+    if (!bytes.subarray(offset, offset + 4).equals(ZIP_LOCAL_HEADER)) break;
+    const compressionMethod = bytes.readUInt16LE(offset + 8);
+    const compressedSize = bytes.readUInt32LE(offset + 18);
+    const uncompressedSize = bytes.readUInt32LE(offset + 22);
+    const fileNameLength = bytes.readUInt16LE(offset + 26);
+    const extraFieldLength = bytes.readUInt16LE(offset + 28);
+    const dataOffset = offset + 30 + fileNameLength + extraFieldLength;
+    const name = bytes.subarray(offset + 30, offset + 30 + fileNameLength).toString('utf8');
+    entries.push({
+      name,
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      dataOffset
+    });
+    offset = dataOffset + compressedSize;
+  }
+  return entries;
+}
+
+function extractZipEntryData(bytes, entry) {
+  const { compressionMethod, compressedSize, uncompressedSize, dataOffset } = entry;
+  const compressed = bytes.subarray(dataOffset, dataOffset + compressedSize);
+  if (compressionMethod === 0) return Buffer.from(compressed); // stored
+  if (compressionMethod === 8) return inflateSync(compressed); // deflate
+  // 不支持的压缩方式：返回空，调用方按缺失处理。
+  return Buffer.alloc(0);
+}
+
+function normalizeZipPath(name) {
+  return String(name || '').replace(/\\/g, '/').replace(/^\.?\//, '');
 }
 
 function decodePayloadBytes(payload) {
@@ -110,12 +205,14 @@ function stripCharacterCardMetadata(buffer) {
   return hasIend ? Buffer.concat(chunks) : Buffer.from(buffer);
 }
 
+const PNG_CHARA_KEYWORDS = new Set(['chara', 'ccv3']);
+
 function isCharacterTextChunk(type, data) {
   if (!['tEXt', 'zTXt', 'iTXt'].includes(type)) return false;
   const separator = data.indexOf(0);
   if (separator < 0) return false;
   const encoding = type === 'iTXt' ? 'utf8' : 'latin1';
-  return data.subarray(0, separator).toString(encoding).toLowerCase() === 'chara';
+  return PNG_CHARA_KEYWORDS.has(data.subarray(0, separator).toString(encoding).toLowerCase());
 }
 
 function readPngCharacterText(buffer) {
@@ -129,7 +226,7 @@ function readPngCharacterText(buffer) {
     const type = buffer.subarray(offset + 4, offset + 8).toString('ascii');
     const data = buffer.subarray(offset + 8, offset + 8 + length);
     const text = readPngTextChunk(type, data);
-    if (text && text.keyword.toLowerCase() === 'chara') return text.value;
+    if (text && PNG_CHARA_KEYWORDS.has(text.keyword.toLowerCase())) return text.value;
     offset += 12 + length;
   }
 
@@ -183,8 +280,17 @@ function normalizeImportedCard(rawCard) {
   const sourceSpec = stringValue(rawCard?.spec) || 'tavern_card_v1';
   const usesDataEnvelope = sourceSpec === 'yaml-character-card' || /^chara_card_v\d+$/i.test(sourceSpec);
   const data = usesDataEnvelope && isPlainObject(rawCard?.data) ? rawCard.data : rawCard || {};
+  const baseExtensions = isPlainObject(data.extensions) ? data.extensions : {};
+  // 保留世界书书级元数据（token_budget/recursive_scanning/scan_depth）。
+  // SillyTavern V2 规范：character_book.token_budget 限制世界书注入的总 token，
+  // 若不在导入时保留，后续裁剪逻辑无法读到卡片作者声明的预算。
+  const worldBookMeta = extractCharacterBookMeta(data.character_book);
+  const localMetadata = worldBookMeta
+    ? { ...(isPlainObject(baseExtensions.local_roleplay_agent) ? baseExtensions.local_roleplay_agent : {}), worldBook: worldBookMeta }
+    : (isPlainObject(baseExtensions.local_roleplay_agent) ? baseExtensions.local_roleplay_agent : {});
   const characterCard = {
     name: stringValue(data.name),
+    nickname: stringValue(data.nickname),
     role: stringValue(data.role),
     description: stringValue(data.description),
     personality: stringValue(data.personality),
@@ -192,13 +298,19 @@ function normalizeImportedCard(rawCard) {
     firstMessage: stringValue(data.first_mes || data.firstMessage),
     exampleDialog: normalizeExampleDialog(data.mes_example || data.exampleDialog),
     creatorNotes: stringValue(data.creator_notes),
+    creatorNotesMultilingual: normalizeStringRecord(data.creator_notes_multilingual),
     systemPrompt: stringValue(data.system_prompt),
     postHistoryInstructions: stringValue(data.post_history_instructions),
     alternateGreetings: normalizeStringArray(data.alternate_greetings),
+    groupOnlyGreetings: normalizeStringArray(data.group_only_greetings),
     tags: normalizeStringArray(data.tags),
     creator: stringValue(data.creator),
     characterVersion: stringValue(data.character_version),
-    extensions: isPlainObject(data.extensions) ? data.extensions : {},
+    source: normalizeStringArray(data.source),
+    assets: normalizeAssets(data.assets),
+    creationDate: normalizeTimestamp(data.creation_date),
+    modificationDate: normalizeTimestamp(data.modification_date),
+    extensions: { ...baseExtensions, local_roleplay_agent: localMetadata },
     sourceSpec,
     raw: rawCard,
     enabled: true
@@ -208,6 +320,22 @@ function normalizeImportedCard(rawCard) {
     characterCard,
     worldBook: normalizeCharacterBook(data.character_book, sourceSpec)
   };
+}
+
+function extractCharacterBookMeta(book) {
+  if (!isPlainObject(book)) return null;
+  const extensions = isPlainObject(book.extensions) ? book.extensions : {};
+  const tokenBudgetRaw = Number(book.token_budget ?? extensions.token_budget);
+  const tokenBudget = Number.isFinite(tokenBudgetRaw) && tokenBudgetRaw > 0 ? Math.floor(tokenBudgetRaw) : null;
+  const recursiveScanning = book.recursive_scanning === true || extensions.recursive_scanning === true;
+  const scanDepthRaw = Number(book.scan_depth ?? extensions.scan_depth);
+  const scanDepth = Number.isFinite(scanDepthRaw) && scanDepthRaw >= 0 ? Math.floor(scanDepthRaw) : null;
+  if (tokenBudget === null && !recursiveScanning && scanDepth === null) return null;
+  const meta = {};
+  if (tokenBudget !== null) meta.tokenBudget = tokenBudget;
+  if (recursiveScanning) meta.recursiveScanning = true;
+  if (scanDepth !== null) meta.scanDepth = scanDepth;
+  return meta;
 }
 
 function parseYamlLikeCharacterCard(text) {
@@ -383,6 +511,52 @@ function normalizeStringArray(value) {
   if (Array.isArray(value)) return value.map((item) => stringValue(item)).filter(Boolean);
   const text = stringValue(value);
   return text ? [text] : [];
+}
+
+function normalizeStringRecord(value) {
+  if (!isPlainObject(value)) return {};
+  const result = {};
+  for (const [key, val] of Object.entries(value)) {
+    const text = stringValue(val);
+    if (text) result[String(key)] = text;
+  }
+  return result;
+}
+
+// V3 spec assets 数组：{ type, name, ext, uri }。
+// uri 白名单：仅 http(s) 外链与同源相对路径；data:/javascript:/file: 等危险协议在导入层拒绝，
+// 展示层（cardAssets.js）二次校验并统一走 proxy-image 代理。
+const MAX_CARD_ASSETS = 50;
+
+function isSafeAssetUri(uri) {
+  if (/^(https?:)?\/\//i.test(uri)) return true; // http(s) 外链
+  if (uri.startsWith('/')) return !uri.startsWith('//'); // 同源绝对路径（排除协议相对 //）
+  return /^[a-z][a-z0-9+.-]*:/i.test(uri) === false; // 无协议的相对路径
+}
+
+function normalizeAssets(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, MAX_CARD_ASSETS)
+    .map((item) => {
+      if (!isPlainObject(item)) return null;
+      const uri = stringValue(item.uri);
+      const name = stringValue(item.name);
+      if (!uri || !name || !isSafeAssetUri(uri)) return null;
+      return {
+        type: stringValue(item.type) || 'unknown',
+        name,
+        ext: stringValue(item.ext) || '',
+        uri
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeTimestamp(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return Math.floor(num);
 }
 
 function extractScalar(text, keys) {

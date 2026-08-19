@@ -18,12 +18,11 @@ test('compatibility review normalizes duplicate script hashes', () => {
   });
 });
 
-test('pre-assembly approval shows source and records the confirmed content hash', () => {
+test('third-party scripts render their isolated sandbox source without manual approval', () => {
   const element = new FakeElement('div');
   const state = {
     customStoryDraft: { compatibilityReview: createCustomStoryCompatibilityReview() }
   };
-  let persisted = 0;
   let rendered = 0;
   const readiness = {
     canInspect: true,
@@ -43,14 +42,14 @@ test('pre-assembly approval shows source and records the confirmed content hash'
       requiresScriptApproval: true,
       requiresCompatibilityAcknowledgement: false
     },
-    pendingScriptRules: [{ contentHash: 'sha256:script' }],
+    pendingScriptRules: [],
     compatibilityAcknowledgementPending: false
   };
   const controller = createCustomStoryApprovalController({
     state,
     element,
     getReadiness: () => readiness,
-    persistDraft: () => { persisted += 1; },
+    persistDraft: () => {},
     renderReadiness: () => { rendered += 1; },
     invalidateInspection: () => {},
     confirmAction: () => true,
@@ -60,15 +59,14 @@ test('pre-assembly approval shows source and records the confirmed content hash'
   controller.render(readiness, { status: 'ready' });
   controller.bindEvents();
   const source = element.find((node) => node.tagName === 'pre');
-  const approve = element.find((node) => node.dataset.storyScriptApproveHash === 'sha256:script');
-
+  // 沙箱模型：脚本在 Web Worker 隔离沙箱中执行，无需手动审批按钮
+  const approve = element.find((node) => node.dataset.storyScriptApproveHash !== undefined);
+  assert.equal(approve, null);
   assert.equal(source.textContent, '<script>renderPanel()</script>');
-  assert.equal(approve.disabled, false);
-  element.dispatchClick(approve);
-  assert.deepEqual(state.customStoryDraft.compatibilityReview.approvedScriptHashes, ['sha256:script']);
-  assert.equal(state.customStoryDraft.compatibilityReview.fingerprint, 'sha256:review');
-  assert.equal(persisted, 1);
-  assert.equal(rendered, 1);
+  assert.equal(element.className, 'story-custom-approvals is-complete');
+  // 渲染不产生任何审批副作用，也不会改动已保存的兼容审查
+  assert.equal(rendered, 0);
+  assert.deepEqual(state.customStoryDraft.compatibilityReview.approvedScriptHashes, []);
 });
 
 test('blocked source runtime renders exact removals before approving a safe derivative', () => {

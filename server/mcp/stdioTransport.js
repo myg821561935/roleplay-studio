@@ -31,9 +31,8 @@ export class StdioMcpClient {
         this.process.stdout.on('data', (data) => this.handleData(data));
         this.process.on('error', (err) => reject(err));
         this.process.on('exit', (code) => {
-          if (code !== 0 && code !== null) {
-            this.lastError = `MCP server exited with code ${code}`;
-          }
+          this.lastError = `MCP server exited with code ${code}`;
+          this.rejectAllPending(new Error(this.lastError));
         });
         // 初始化握手
         this.sendRequest({
@@ -130,13 +129,20 @@ export class StdioMcpClient {
     });
   }
 
+  rejectAllPending(error) {
+    if (this.pendingRequest) {
+      this.pendingRequest.reject(error);
+      this.pendingRequest = null;
+    }
+    this.requestQueue.forEach((item) => item.reject(error));
+    this.requestQueue = [];
+  }
+
   close() {
     if (this.process) {
       try { this.process.kill(); } catch {}
       this.process = null;
     }
-    this.requestQueue.forEach((item) => item.reject(new Error('Transport closed')));
-    this.requestQueue = [];
-    this.pendingRequest = null;
+    this.rejectAllPending(new Error('Transport closed'));
   }
 }

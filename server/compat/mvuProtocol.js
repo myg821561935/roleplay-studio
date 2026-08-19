@@ -101,7 +101,7 @@ export function stripMvuPatchBlocks(text) {
   return result;
 }
 
-export function applyMvuPatchEnvelope(current, envelope) {
+export function applyMvuPatchEnvelope(current, envelope, { recoverRevisionConflict = false } = {}) {
   const normalized = normalizeMvuPatchEnvelope(envelope);
   try {
     const state = applyMvuPatch(current, normalized.operations, {
@@ -109,7 +109,16 @@ export function applyMvuPatchEnvelope(current, envelope) {
     });
     return { state, envelope: normalized };
   } catch (error) {
-    throw toMvuProtocolError(error);
+    // 乐观锁冲突恢复：模型输出补丁时读到的是旧基线，但补丁内容（本轮实际发生的变化）仍然有效。
+    // 以当前最新状态为基线重放一次，并把信封修订号对齐到当前状态，保证补丁不因基线过期而丢失。
+    const protocolError = toMvuProtocolError(error);
+    const isConflict = protocolError?.code === 'MVU_REVISION_CONFLICT';
+    if (!recoverRevisionConflict || !isConflict) throw protocolError;
+    const recovered = applyMvuPatch(current, normalized.operations, {});
+    return {
+      state: recovered,
+      envelope: { ...normalized, expectedRevision: recovered.revision - 1, revisionRecovered: true }
+    };
   }
 }
 
@@ -122,6 +131,7 @@ export function buildMvuPatchPrompt({ memory } = {}) {
     `当前 MVU 修订号：${state.revision}。`,
     '仅当本回合已经造成会影响轻前端面板的稳定变量变化时，在全部正文与世界动作协议之后追加一个且仅一个 ```lra-mvu-patch JSON 块；没有变化时不要输出。',
     '允许操作只有 set、increment、delete。路径使用点号，例如 relationships.shen.trust。不要输出 JavaScript、EJS、斜杠命令、HTML 或网络请求。',
+    '变量作用域：默认写入会话级（chat）变量。跨会话持久的全局变量必须加 global. 前缀，例如 global.reputation。chat. 前缀可省略。',
     '补丁是隐藏控制数据，不得在正文、对白或状态说明中解释。只记录已经发生的变化，不预测结果，不重复写入未变化的值。',
     `当前可见状态：\n${JSON.stringify(values, null, 2)}`,
     '格式示例：',
@@ -131,7 +141,8 @@ export function buildMvuPatchPrompt({ memory } = {}) {
       expectedRevision: state.revision,
       summary: '本回合轻前端变量变化',
       operations: [
-        { op: 'increment', path: 'relationships.shen.trust', value: 1 }
+        { op: 'increment', path: 'relationships.shen.trust', value: 1 },
+        { op: 'set', path: 'global.reputation', value: '名动江南' }
       ]
     }),
     '```'

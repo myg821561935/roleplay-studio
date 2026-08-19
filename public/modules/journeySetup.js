@@ -240,7 +240,51 @@ export function createJourneySetupController({
       worldbookList.append(item);
     }
     worldbookBand.append(worldbookHeading, worldbookList);
-    dossierPane.append(dossierHeading, dossierGrid, worldbookBand);
+
+    const rawCard = state.config?.characterCard || {};
+    const cardGreetings = Array.isArray(tpl.alternateGreetings) && tpl.alternateGreetings.length
+      ? tpl.alternateGreetings
+      : (Array.isArray(rawCard.alternateGreetings) && rawCard.alternateGreetings.length
+          ? rawCard.alternateGreetings
+          : (Array.isArray(rawCard.alternate_greetings) ? rawCard.alternate_greetings : []));
+    const allGreetings = [
+      tpl.first_mes || rawCard.firstMessage || rawCard.first_mes || '',
+      ...cardGreetings
+    ].filter(Boolean);
+    let selectedGreetingText = allGreetings[0] || '';
+
+    if (allGreetings.length > 1) {
+      const greetingsBand = documentObject.createElement('section');
+      greetingsBand.className = 'epic-dossier-greetings';
+      const gHead = documentObject.createElement('header');
+      const gTitle = documentObject.createElement('h2');
+      gTitle.textContent = '备选开场切入点';
+      const gCount = documentObject.createElement('span');
+      gCount.textContent = `共 ${allGreetings.length} 幕可选`;
+      gHead.append(gTitle, gCount);
+      const gGrid = documentObject.createElement('div');
+      gGrid.className = 'epic-greetings-grid';
+      allGreetings.forEach((greeting, gIndex) => {
+        const gCard = documentObject.createElement('button');
+        gCard.type = 'button';
+        gCard.className = `epic-greeting-card${gIndex === 0 ? ' is-selected' : ''}`;
+        const b = documentObject.createElement('strong');
+        b.textContent = gIndex === 0 ? '默认主开场' : `切入分支 ${gIndex}`;
+        const p = documentObject.createElement('p');
+        p.textContent = greeting.slice(0, 150) + (greeting.length > 150 ? '…' : '');
+        gCard.append(b, p);
+        gCard.addEventListener('click', () => {
+          selectedGreetingText = greeting;
+          gGrid.querySelectorAll('.epic-greeting-card').forEach((c) => c.classList.remove('is-selected'));
+          gCard.classList.add('is-selected');
+        });
+        gGrid.append(gCard);
+      });
+      greetingsBand.append(gHead, gGrid);
+      dossierPane.append(dossierHeading, dossierGrid, worldbookBand, greetingsBand);
+    } else {
+      dossierPane.append(dossierHeading, dossierGrid, worldbookBand);
+    }
 
     const protagonistPane = paneByKey.get('protagonist');
     const protagonistHeading = documentObject.createElement('div');
@@ -440,6 +484,7 @@ export function createJourneySetupController({
         const value = input.value.trim();
         if (value) formData[key] = value;
       });
+      if (selectedGreetingText) formData.selectedGreeting = selectedGreetingText;
       return formData;
     }
 

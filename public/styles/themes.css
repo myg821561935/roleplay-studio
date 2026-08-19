@@ -1,233 +1,368 @@
+/* ══════════════════════════════════════════════════════════════════════════════
+   Antigravity Roleplay Agent · 全新 6 套沉浸式叙事特色主题系统 (Thematic Palettes)
+   专为网文角色扮演、修仙仙侠、武侠志异、东方玄幻、现代都市、赛博异能深度打造
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ════════════════════════════════════════════════
+   1. 古卷陈笺 · 泛黄书香（暖调护眼 / 武侠志异 / 民俗怪谈）
+   ════════════════════════════════════════════════ */
 :root[data-theme="eye-care"] {
-  color-scheme: dark;
-  --bg: #171c19;
-  --bg-soft: #1d2420;
-  --panel: #222925;
-  --panel-raised: #2a332d;
-  --panel-deep: #141916;
-  --line: #3a463e;
-  --line-strong: #718070;
-  --text: #d2d8cf;
-  --muted: #a8b0a6;
-  --subtle: #869187;
-  --gold: #c2ad7f;
-  --gold-deep: #847557;
-  --teal: #8fb3a5;
-  --blue: #91a7ad;
-  --accent: #9db8a1;
-  --danger: #c98c7e;
-  --ok: #91b292;
-  --shadow: 0 18px 42px rgba(5, 10, 7, 0.24);
-  --reading-surface: rgba(28, 35, 30, 0.9);
-  --reading-assistant: rgba(34, 40, 34, 0.92);
-  --reading-user: rgba(31, 43, 39, 0.92);
-  --reading-border: rgba(164, 180, 164, 0.19);
-  --reading-content: #cbd1c7;
-  --reading-strong: #d8c9a7;
-  --reading-emphasis: #b9c8c2;
-  --reading-composer: rgba(27, 34, 29, 0.9);
-  --reading-header: rgba(26, 33, 28, 0.84);
-  --reading-stage-effect: linear-gradient(180deg, rgba(24, 31, 26, 0.12), rgba(18, 24, 20, 0.28));
-  --reading-radius: 12px;
-  --reading-role-shadow: none;
-  --reading-app-shell:
-    linear-gradient(145deg, rgba(139, 169, 145, 0.07), transparent 340px),
-    linear-gradient(180deg, rgba(192, 177, 133, 0.045), transparent 280px),
-    #171c19;
+  color-scheme: light;
+  --bg: #f5eedf;
+  --bg-soft: #ebe1cf;
+  --panel: #fcf8f2;
+  --panel-raised: #ffffff;
+  --panel-deep: #f2e9dc;
+  --paper: #fcf8f2;
+  --paper-soft: rgba(184, 68, 53, 0.035);
+
+  --card-bg: rgba(252, 248, 242, 0.96);
+  --card-border: rgba(150, 110, 80, 0.16);
+  --card-shadow: 0 16px 48px rgba(110, 70, 40, 0.12), 0 2px 6px rgba(110, 70, 40, 0.05);
+
+  --text: #34281e;
+  --text-soft: #4a3c30;
+  --muted: #7d6854;
+  --subtle: #a89480;
+
+  --line: rgba(150, 110, 80, 0.18);
+  --line-soft: rgba(150, 110, 80, 0.08);
+  --line-strong: rgba(184, 68, 53, 0.38);
+
+  --gold: #b58038;
+  --teal: #4b8072;
+  --blue: #5d7599;
+
+  --accent: #b84435;
+  --accent-soft: rgba(184, 68, 53, 0.09);
+  --accent-contrast: #ffffff;
+  --character-name: #b84435;
+  --dialogue-bg: rgba(184, 68, 53, 0.035);
+  --dialogue-border: rgba(184, 68, 53, 0.15);
+  --dialogue-line: #b84435;
+  --turn-accent: #b58038;
+  --turn-bg: rgba(181, 128, 56, 0.08);
+  --turn-border: rgba(181, 128, 56, 0.40);
+  --send-bg: linear-gradient(135deg, #c75647, #a4382a);
+  --send-text: #ffffff;
+  --nav-active-bg: rgba(184, 68, 53, 0.09);
+  --nav-active-border: rgba(184, 68, 53, 0.38);
+  --rail-icon: #9e8a76;
+  --rail-icon-hover: #b84435;
+  --tag-bg: rgba(184, 68, 53, 0.06);
+  --tag-border: rgba(184, 68, 53, 0.22);
+  --tag-text: #7d6854;
+  --topbar-bg: rgba(245, 238, 223, 0.85);
+
+  --border: var(--line);
+  --surface: var(--paper-soft);
+  --shadow: 0 12px 36px rgba(110, 70, 40, 0.12);
+  --shadow-soft: 0 4px 16px rgba(110, 70, 40, 0.07);
+  --shadow-paper: 0 8px 40px rgba(110, 70, 40, 0.10);
+  --glow: 0 0 22px rgba(184, 68, 53, 0.20);
 }
 
+/* ════════════════════════════════════════════════
+   2. 玄渊曜金 · 东方玄幻（深邃黑曜 / 璀璨流金 / 神魔仙尊）
+   ════════════════════════════════════════════════ */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #07090b;
-  --bg-soft: #0c0f12;
-  --panel: #101419;
-  --panel-raised: #171c22;
-  --panel-deep: #080b0e;
-  --line: #293038;
-  --line-strong: #635052;
-  --text: #d9dce0;
-  --muted: #a3a8ae;
-  --subtle: #7d858d;
-  --gold: #b99b6a;
-  --gold-deep: #735f40;
-  --teal: #749c94;
-  --blue: #7d91a8;
-  --accent: #ab8587;
-  --danger: #c8736d;
-  --ok: #789b7c;
-  --shadow: 0 26px 64px rgba(0, 0, 0, 0.58);
-  --reading-surface: rgba(8, 11, 14, 0.94);
-  --reading-assistant: rgba(13, 16, 20, 0.95);
-  --reading-user: rgba(12, 21, 21, 0.94);
-  --reading-border: rgba(174, 137, 139, 0.22);
-  --reading-content: #d1d5da;
-  --reading-strong: #cfb484;
-  --reading-emphasis: #aebdc7;
-  --reading-composer: rgba(7, 10, 13, 0.94);
-  --reading-header: rgba(5, 7, 9, 0.9);
-  --reading-stage-effect:
-    radial-gradient(circle at 50% 32%, transparent 0 24%, rgba(2, 3, 4, 0.18) 66%, rgba(1, 2, 3, 0.54) 100%),
-    linear-gradient(180deg, rgba(13, 8, 10, 0.1), rgba(2, 4, 5, 0.38));
-  --reading-radius: 3px 14px 14px 3px;
-  --reading-role-shadow: 0 1px 8px rgba(0, 0, 0, 0.82);
-  --reading-app-shell:
-    radial-gradient(circle at 74% 4%, rgba(92, 45, 49, 0.08), transparent 34%),
-    linear-gradient(160deg, #0b0d10 0%, #050607 68%);
+  --bg: #0b0f17;
+  --bg-soft: #121824;
+  --panel: #141c2b;
+  --panel-raised: #1c273c;
+  --panel-deep: #090d15;
+  --paper: #121a28;
+  --paper-soft: rgba(240, 184, 72, 0.04);
+
+  --card-bg: rgba(18, 26, 40, 0.94);
+  --card-border: rgba(240, 184, 72, 0.16);
+  --card-shadow: 0 24px 72px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);
+
+  --text: #f0e4cf;
+  --text-soft: #ddcfb6;
+  --muted: #9e8e74;
+  --subtle: #6c5f4b;
+
+  --line: rgba(240, 184, 72, 0.18);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(240, 184, 72, 0.48);
+
+  --gold: #f0b848;
+  --teal: #4ecdc4;
+  --blue: #6ca0e8;
+
+  --accent: #f0b848;
+  --accent-soft: rgba(240, 184, 72, 0.14);
+  --accent-contrast: #120d04;
+  --character-name: #f0b848;
+  --dialogue-bg: rgba(240, 184, 72, 0.045);
+  --dialogue-border: rgba(240, 184, 72, 0.18);
+  --dialogue-line: #f0b848;
+  --turn-accent: #f0b848;
+  --turn-bg: rgba(240, 184, 72, 0.08);
+  --turn-border: rgba(240, 184, 72, 0.45);
+  --send-bg: linear-gradient(135deg, #f5c45e, #c98b25);
+  --send-text: #120d04;
+  --nav-active-bg: rgba(240, 184, 72, 0.12);
+  --nav-active-border: rgba(240, 184, 72, 0.48);
+  --rail-icon: #7d6f58;
+  --rail-icon-hover: #f0b848;
+  --tag-bg: rgba(240, 184, 72, 0.08);
+  --tag-border: rgba(240, 184, 72, 0.28);
+  --tag-text: #c4b08a;
+  --topbar-bg: rgba(11, 15, 23, 0.85);
+
+  --border: var(--line);
+  --surface: var(--paper-soft);
+  --shadow: 0 20px 56px rgba(0, 0, 0, 0.60);
+  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --shadow-paper: 0 14px 60px rgba(0, 0, 0, 0.55);
+  --glow: 0 0 32px rgba(240, 184, 72, 0.28);
 }
 
-:root[data-theme="bright"] {
-  color-scheme: light;
-  --bg: #e7ecee;
-  --bg-soft: #eef2f3;
-  --panel: #f5f7f7;
-  --panel-raised: #ffffff;
-  --panel-deep: #dfe6e8;
-  --line: #c5ced2;
-  --line-strong: #7f98a3;
-  --text: #263035;
-  --muted: #5f6d73;
-  --subtle: #78878e;
-  --gold: #8f6b31;
-  --gold-deep: #6d5126;
-  --teal: #3e7775;
-  --blue: #517a9e;
-  --accent: #597f97;
-  --danger: #a84f48;
-  --ok: #4e7957;
-  --shadow: 0 18px 44px rgba(42, 57, 63, 0.18);
-  --reading-surface: rgba(244, 247, 247, 0.94);
-  --reading-assistant: rgba(249, 248, 244, 0.95);
-  --reading-user: rgba(232, 243, 242, 0.95);
-  --reading-border: rgba(69, 91, 101, 0.24);
-  --reading-content: #2c3539;
-  --reading-strong: #75572c;
-  --reading-emphasis: #476377;
-  --reading-composer: rgba(246, 248, 248, 0.95);
-  --reading-header: rgba(240, 244, 245, 0.9);
-  --reading-stage-effect: linear-gradient(180deg, rgba(233, 240, 241, 0.02), rgba(27, 39, 43, 0.16));
-  --reading-radius: 12px;
-  --reading-role-shadow: none;
-  --reading-app-shell:
-    linear-gradient(145deg, rgba(84, 128, 148, 0.1), transparent 360px),
-    linear-gradient(180deg, #edf1f2 0%, #e3e9eb 100%);
-}
-
+/* ════════════════════════════════════════════════
+   3. 玉华云岫 · 仙侠青白（羊脂白玉 / 翡翠青瓷 / 师尊修仙）
+   ════════════════════════════════════════════════ */
 :root[data-theme="soft"] {
-  color-scheme: dark;
-  --bg: #1b161b;
-  --bg-soft: #241d23;
-  --panel: #2a2228;
-  --panel-raised: #352a32;
-  --panel-deep: #171217;
-  --line: #4b3b46;
-  --line-strong: #9b7488;
-  --text: #eadfe5;
-  --muted: #c4b1bb;
-  --subtle: #a18c97;
-  --gold: #d3b593;
-  --gold-deep: #92715b;
-  --teal: #9fbeb9;
-  --blue: #aaa9c9;
-  --accent: #d0a3b8;
-  --danger: #d48686;
-  --ok: #9db99d;
-  --shadow: 0 20px 52px rgba(21, 10, 18, 0.34);
-  --reading-surface: rgba(42, 33, 40, 0.9);
-  --reading-assistant: rgba(50, 38, 47, 0.93);
-  --reading-user: rgba(39, 48, 49, 0.92);
-  --reading-border: rgba(220, 174, 195, 0.24);
-  --reading-content: #e5dbe0;
-  --reading-strong: #efd0b2;
-  --reading-emphasis: #cbc5df;
-  --reading-composer: rgba(45, 34, 42, 0.91);
-  --reading-header: rgba(45, 34, 42, 0.84);
-  --reading-stage-effect: linear-gradient(135deg, rgba(88, 52, 71, 0.12), rgba(35, 55, 57, 0.18));
-  --reading-radius: 22px;
-  --reading-role-shadow: none;
-  --reading-app-shell:
-    radial-gradient(circle at 12% 0%, rgba(210, 154, 181, 0.11), transparent 32%),
-    radial-gradient(circle at 92% 12%, rgba(145, 177, 181, 0.08), transparent 30%),
-    #1b161b;
+  color-scheme: light;
+  --bg: #edf3f0;
+  --bg-soft: #e2ece8;
+  --panel: #f7faf8;
+  --panel-raised: #ffffff;
+  --panel-deep: #ebf2ef;
+  --paper: #f7faf8;
+  --paper-soft: rgba(45, 122, 110, 0.035);
+
+  --card-bg: rgba(247, 250, 248, 0.96);
+  --card-border: rgba(45, 122, 110, 0.14);
+  --card-shadow: 0 16px 52px rgba(35, 90, 80, 0.12), 0 2px 6px rgba(35, 90, 80, 0.04);
+
+  --text: #1d332d;
+  --text-soft: #2d4740;
+  --muted: #52756d;
+  --subtle: #84a69e;
+
+  --line: rgba(45, 122, 110, 0.16);
+  --line-soft: rgba(45, 122, 110, 0.07);
+  --line-strong: rgba(45, 122, 110, 0.38);
+
+  --gold: #c29245;
+  --teal: #2d7a6e;
+  --blue: #4d7a96;
+
+  --accent: #2d7a6e;
+  --accent-soft: rgba(45, 122, 110, 0.10);
+  --accent-contrast: #ffffff;
+  --character-name: #2d7a6e;
+  --dialogue-bg: rgba(45, 122, 110, 0.035);
+  --dialogue-border: rgba(45, 122, 110, 0.14);
+  --dialogue-line: #2d7a6e;
+  --turn-accent: #c29245;
+  --turn-bg: rgba(194, 146, 69, 0.08);
+  --turn-border: rgba(194, 146, 69, 0.42);
+  --send-bg: linear-gradient(135deg, #3ea091, #256a60);
+  --send-text: #ffffff;
+  --nav-active-bg: rgba(45, 122, 110, 0.10);
+  --nav-active-border: rgba(45, 122, 110, 0.38);
+  --rail-icon: #7a9c94;
+  --rail-icon-hover: #2d7a6e;
+  --tag-bg: rgba(45, 122, 110, 0.07);
+  --tag-border: rgba(45, 122, 110, 0.24);
+  --tag-text: #45665f;
+  --topbar-bg: rgba(237, 243, 240, 0.85);
+
+  --border: var(--line);
+  --surface: var(--paper-soft);
+  --shadow: 0 12px 36px rgba(35, 90, 80, 0.10);
+  --shadow-soft: 0 4px 16px rgba(35, 90, 80, 0.06);
+  --shadow-paper: 0 8px 42px rgba(35, 90, 80, 0.09);
+  --glow: 0 0 24px rgba(45, 122, 110, 0.22);
 }
 
-:root[data-theme="modern"] {
-  color-scheme: dark;
-  --bg: #11151a;
-  --bg-soft: #171c22;
-  --panel: #1c2229;
-  --panel-raised: #252c34;
-  --panel-deep: #0e1216;
-  --line: #36404a;
-  --line-strong: #5e7d98;
-  --text: #e0e5ea;
-  --muted: #abb5bf;
-  --subtle: #84919c;
-  --gold: #c7a66d;
-  --gold-deep: #816b48;
-  --teal: #79b9b2;
-  --blue: #83a9cc;
-  --accent: #83a9cc;
-  --danger: #d17f75;
-  --ok: #88b593;
-  --shadow: 0 20px 52px rgba(2, 7, 12, 0.38);
-  --reading-surface: rgba(20, 26, 32, 0.91);
-  --reading-assistant: rgba(25, 31, 38, 0.94);
-  --reading-user: rgba(20, 38, 42, 0.93);
-  --reading-border: rgba(133, 166, 194, 0.22);
-  --reading-content: #dce3e9;
-  --reading-strong: #e2c58f;
-  --reading-emphasis: #bdd0df;
-  --reading-composer: rgba(17, 22, 28, 0.92);
-  --reading-header: rgba(18, 23, 29, 0.86);
-  --reading-stage-effect: linear-gradient(180deg, rgba(14, 25, 34, 0.08), rgba(10, 16, 22, 0.28));
-  --reading-radius: 10px;
-  --reading-role-shadow: none;
-  --reading-app-shell:
-    linear-gradient(145deg, rgba(74, 118, 155, 0.09), transparent 360px),
-    linear-gradient(180deg, #13181e 0%, #0f1317 100%);
-}
-
+/* ════════════════════════════════════════════════
+   4. 幻夜霓虹 · 赛博异能（午夜深蓝黑 / 电光冰青 / 异能潜行）
+   ════════════════════════════════════════════════ */
 :root[data-theme="cyber"] {
   color-scheme: dark;
-  --bg: #060a10;
-  --bg-soft: #0a1019;
-  --panel: #0d1520;
-  --panel-raised: #111e2a;
-  --panel-deep: #05080d;
-  --line: #24404e;
-  --line-strong: #317f8d;
-  --text: #d3e3e6;
-  --muted: #91afb4;
-  --subtle: #6b8991;
-  --gold: #d1ae62;
-  --gold-deep: #7f693b;
-  --teal: #55c5c4;
-  --blue: #5d9fd2;
-  --accent: #55c5c4;
-  --danger: #d66f93;
-  --ok: #6ebd91;
-  --shadow: 0 22px 58px rgba(0, 4, 9, 0.56);
-  --reading-surface: rgba(5, 12, 19, 0.94);
-  --reading-assistant: rgba(7, 16, 24, 0.95);
-  --reading-user: rgba(7, 25, 29, 0.94);
-  --reading-border: rgba(78, 196, 197, 0.26);
-  --reading-content: #c8dde0;
-  --reading-strong: #e0bd70;
-  --reading-emphasis: #a8c5db;
-  --reading-composer: rgba(5, 13, 20, 0.95);
-  --reading-header: rgba(4, 10, 16, 0.91);
-  --reading-stage-effect:
-    repeating-linear-gradient(180deg, rgba(70, 205, 202, 0.025) 0 1px, transparent 1px 4px),
-    linear-gradient(120deg, rgba(0, 194, 201, 0.07), transparent 45%, rgba(196, 54, 124, 0.06));
-  --reading-radius: 2px;
-  --reading-role-shadow: 0 0 10px rgba(55, 184, 185, 0.16);
-  --reading-app-shell:
-    linear-gradient(rgba(65, 199, 199, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(65, 199, 199, 0.025) 1px, transparent 1px),
-    radial-gradient(circle at 86% 0%, rgba(195, 52, 125, 0.1), transparent 30%),
-    #060a10;
+  --bg: #090d16;
+  --bg-soft: #0f1524;
+  --panel: #131b2e;
+  --panel-raised: #1b2640;
+  --panel-deep: #060910;
+  --paper: #111728;
+  --paper-soft: rgba(0, 229, 255, 0.04);
+
+  --card-bg: rgba(17, 24, 42, 0.94);
+  --card-border: rgba(0, 229, 255, 0.22);
+  --card-shadow: 0 0 36px rgba(0, 229, 255, 0.10), 0 24px 68px rgba(0, 0, 0, 0.70);
+
+  --text: #e2ecff;
+  --text-soft: #c8d8f8;
+  --muted: #7a8eb8;
+  --subtle: #4e5e82;
+
+  --line: rgba(0, 229, 255, 0.18);
+  --line-soft: rgba(0, 229, 255, 0.06);
+  --line-strong: rgba(0, 229, 255, 0.48);
+
+  --gold: #ffd15c;
+  --teal: #00e5ff;
+  --blue: #4dabf7;
+
+  --accent: #00e5ff;
+  --accent-soft: rgba(0, 229, 255, 0.12);
+  --accent-contrast: #070a12;
+  --character-name: #00e5ff;
+  --dialogue-bg: rgba(0, 229, 255, 0.045);
+  --dialogue-border: rgba(0, 229, 255, 0.20);
+  --dialogue-line: #00e5ff;
+  --turn-accent: #00e5ff;
+  --turn-bg: rgba(0, 229, 255, 0.08);
+  --turn-border: rgba(0, 229, 255, 0.55);
+  --send-bg: linear-gradient(135deg, #00e5ff, #a855f7);
+  --send-text: #070a12;
+  --nav-active-bg: rgba(0, 229, 255, 0.12);
+  --nav-active-border: rgba(0, 229, 255, 0.55);
+  --rail-icon: #6478a2;
+  --rail-icon-hover: #00e5ff;
+  --tag-bg: rgba(0, 229, 255, 0.08);
+  --tag-border: rgba(0, 229, 255, 0.28);
+  --tag-text: #8ea4d2;
+  --cyber-glow: 0 0 14px rgba(0, 229, 255, 0.5), 0 0 28px rgba(0, 229, 255, 0.2);
+  --topbar-bg: rgba(9, 13, 22, 0.85);
+
+  --border: var(--line);
+  --surface: var(--paper-soft);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.65);
+  --shadow-soft: 0 8px 28px rgba(0, 229, 255, 0.10);
+  --shadow-paper: 0 14px 64px rgba(0, 0, 0, 0.60);
+  --glow: 0 0 36px rgba(0, 229, 255, 0.32), 0 0 64px rgba(168, 85, 247, 0.15);
 }
 
-:root[data-theme="cyber"] .app-shell {
-  background-size: 32px 32px, 32px 32px, auto, auto;
+/* ════════════════════════════════════════════════
+   5. 冷砚极简 · 现代都市（明净冷砚 / 深空科技 / 都市日常）
+   ════════════════════════════════════════════════ */
+:root[data-theme="modern"] {
+  color-scheme: light;
+  --bg: #eef1f5;
+  --bg-soft: #e3e7ee;
+  --panel: #f8fafc;
+  --panel-raised: #ffffff;
+  --panel-deep: #edf1f7;
+  --paper: #f8fafc;
+  --paper-soft: rgba(43, 92, 196, 0.03);
+
+  --card-bg: rgba(248, 250, 252, 0.96);
+  --card-border: rgba(30, 50, 80, 0.10);
+  --card-shadow: 0 14px 44px rgba(30, 50, 80, 0.09), 0 2px 4px rgba(30, 50, 80, 0.03);
+
+  --text: #1a222e;
+  --text-soft: #2c384a;
+  --muted: #5e6f87;
+  --subtle: #8e9eb5;
+
+  --line: rgba(30, 50, 80, 0.11);
+  --line-soft: rgba(30, 50, 80, 0.04);
+  --line-strong: rgba(43, 92, 196, 0.30);
+
+  --gold: #d48b28;
+  --teal: #269387;
+  --blue: #2b5cc4;
+
+  --accent: #2b5cc4;
+  --accent-soft: rgba(43, 92, 196, 0.08);
+  --accent-contrast: #ffffff;
+  --character-name: #2b5cc4;
+  --dialogue-bg: rgba(43, 92, 196, 0.035);
+  --dialogue-border: rgba(43, 92, 196, 0.12);
+  --dialogue-line: #2b5cc4;
+  --turn-accent: #269387;
+  --turn-bg: rgba(38, 147, 135, 0.07);
+  --turn-border: rgba(38, 147, 135, 0.35);
+  --send-bg: linear-gradient(135deg, #3d72e2, #214ba8);
+  --send-text: #ffffff;
+  --nav-active-bg: rgba(43, 92, 196, 0.08);
+  --nav-active-border: rgba(43, 92, 196, 0.32);
+  --rail-icon: #7d8da4;
+  --rail-icon-hover: #2b5cc4;
+  --tag-bg: rgba(43, 92, 196, 0.05);
+  --tag-border: rgba(43, 92, 196, 0.18);
+  --tag-text: #506178;
+  --topbar-bg: rgba(238, 241, 245, 0.85);
+
+  --shadow: 0 10px 28px rgba(30, 50, 80, 0.08);
+  --shadow-soft: 0 4px 12px rgba(30, 50, 80, 0.04);
+  --shadow-paper: 0 6px 32px rgba(30, 50, 80, 0.07);
+  --glow: 0 0 18px rgba(43, 92, 196, 0.16);
 }
+
+/* ════════════════════════════════════════════════
+   6. 霁月流光 · 清雅纯白（清透皎洁 / 素雅明净 / 极简阅读）
+   ════════════════════════════════════════════════ */
+:root[data-theme="bright"] {
+  color-scheme: light;
+  --bg: #f4f6f9;
+  --bg-soft: #e9ecf2;
+  --panel: #ffffff;
+  --panel-raised: #ffffff;
+  --panel-deep: #f6f8fb;
+  --paper: #ffffff;
+  --paper-soft: rgba(0, 0, 0, 0.02);
+
+  --card-bg: rgba(255, 255, 255, 0.97);
+  --card-border: rgba(0, 0, 0, 0.09);
+  --card-shadow: 0 16px 48px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.03);
+
+  --text: #14171f;
+  --text-soft: #232733;
+  --muted: #5e6678;
+  --subtle: #929bb0;
+
+  --line: rgba(0, 0, 0, 0.09);
+  --line-soft: rgba(0, 0, 0, 0.03);
+  --line-strong: rgba(59, 108, 176, 0.28);
+
+  --gold: #c98834;
+  --teal: #3aa88c;
+  --blue: #3b6cb0;
+
+  --accent: #3b6cb0;
+  --accent-soft: rgba(59, 108, 176, 0.08);
+  --accent-contrast: #ffffff;
+  --character-name: #3b6cb0;
+  --dialogue-bg: rgba(59, 108, 176, 0.035);
+  --dialogue-border: rgba(59, 108, 176, 0.12);
+  --dialogue-line: #3b6cb0;
+  --turn-accent: #3aa88c;
+  --turn-bg: rgba(58, 168, 140, 0.07);
+  --turn-border: rgba(58, 168, 140, 0.35);
+  --send-bg: linear-gradient(135deg, #4d82cb, #2d5691);
+  --send-text: #ffffff;
+  --nav-active-bg: rgba(59, 108, 176, 0.08);
+  --nav-active-border: rgba(59, 108, 176, 0.32);
+  --rail-icon: #7e879a;
+  --rail-icon-hover: #3b6cb0;
+  --tag-bg: rgba(0, 0, 0, 0.03);
+  --tag-border: rgba(0, 0, 0, 0.12);
+  --tag-text: #5e6678;
+  --topbar-bg: rgba(244, 246, 249, 0.85);
+
+  --shadow: 0 12px 32px rgba(0, 0, 0, 0.07);
+  --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.04);
+  --shadow-paper: 0 8px 36px rgba(0, 0, 0, 0.06);
+  --glow: 0 0 18px rgba(59, 108, 176, 0.16);
+}
+
+/* ── 赛博主题霓虹动效 ── */
+:root[data-theme="cyber"] .send-button {
+  box-shadow: 0 0 16px rgba(0, 229, 255, 0.45), 0 0 32px rgba(168, 85, 247, 0.22);
+}
+
+:root[data-theme="cyber"] .recommended-actions {
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.14);
+}
+
+/* ── 向下兼容：旧主题别名 ── */
+:root[data-theme="wuxia-scroll"] { --bg: #f5eedf; }
+:root[data-theme="xianxia-scroll"] { --bg: #edf3f0; }

@@ -1,12 +1,13 @@
 import { renderSafeMarkdown } from './markdown.js';
-import { createChatController } from './modules/chat.js';
+import { createChatController, isProviderConfigured } from './modules/chat.js';
 import {
   createInspectorController,
   createInspectorTabSelectSync,
   createWorldbookController
 } from './modules/inspector.js';
 import { createMcpController } from './modules/mcp.js';
-import { createVoiceController } from './modules/voice.js';
+import { createReaderChromeController } from './modules/readerChromeController.js';
+import { createVoiceController, createVoiceDictationController, createMessagePlaybackController } from './modules/voice.js';
 import { createAssetCenterController } from './modules/assetCenter.js';
 import { createAuthoringController } from './modules/authoring.js';
 import { extractRoleplayPresentation, splitCharacterStatus } from './modules/roleplayResponse.js';
@@ -81,6 +82,7 @@ import { createUsageInspectorController } from './modules/usageInspector.js';
 import { createMemoryInspectorController } from './modules/memoryInspector.js';
 import { createWorldbookWorkspaceController } from './modules/worldbookWorkspace.js';
 import { createPresetWorkspaceController } from './modules/presetWorkspace.js';
+import { createPromptStudioController } from './modules/promptStudio.js';
 import { createPromptTemplateCenterController } from './modules/promptTemplateCenter.js';
 import { createPersonaWorkspaceController } from './modules/personaWorkspace.js';
 import { createAuthorNoteWorkspaceController } from './modules/authorNoteWorkspace.js';
@@ -92,6 +94,7 @@ import { createAppEventsController } from './modules/appEvents.js';
 import { createDomElements } from './modules/domElements.js';
 import { createVectorMemoryController } from './modules/vectorMemory.js';
 import { createMacroTemplatesController } from './modules/macroTemplates.js';
+import { createTimelineController } from './modules/timeline.js';
 import { createSessionHealthController } from './modules/sessionHealth.js';
 import { createGroupMembersController } from './modules/groupMembers.js';
 import { createCharacterCardController } from './modules/characterCard.js';
@@ -110,6 +113,7 @@ import {
   parseJsonFromTextarea,
   setStatus
 } from './modules/uiPrimitives.js';
+import { createDisplayPreferencesController } from './modules/displayPreferences.js';
 
 const {
   canRandomizeSetupField,
@@ -182,6 +186,7 @@ const state = {
   simulationPublicSnapshot: null,
   simulationBusy: false,
   chatStreaming: false,
+  chatStreamPhase: '',
   conversationActionPending: false,
   pendingQuickReply: null
 };
@@ -217,11 +222,13 @@ const sessionStateCoordinator = createSessionStateCoordinator({
     worldbookEditor: renderWorldbookEditor,
     worldbookEntries: renderWorldbookEntries,
     macroTemplates: renderMacroTemplates,
+    timeline: () => timelineController.loadTimeline(),
     characterCardEditor: () => setCharacterCardEditor(
       state.config.characterCard || createCharacterCardTemplate()
     ),
     promptEditor: renderPromptEditor,
     promptTemplates: () => promptTemplateCenterController.render(),
+    promptStudio: () => promptStudioController.render(),
     persona: renderPersona,
     quickReplies: renderQuickReplies,
     characterPresetFavorites: renderCharacterPresetFavorites,
@@ -253,6 +260,7 @@ const {
 const sessionController = createSessionController({
   els,
   apiRequest,
+  storage: localStorage,
   getCurrentSessionId: () => currentSessionId,
   setCurrentSessionId: (sessionId) => {
     currentSessionId = sessionId;
@@ -263,12 +271,15 @@ const sessionController = createSessionController({
   humanizeApiError
 });
 const {
+  deleteCurrentSession,
   exportCurrentSession,
   handleImportSessionFile,
   handleNewSessionSubmit,
   openNewSessionDialog,
   renderSessionSelect
 } = sessionController;
+
+
 const inspectorController = createInspectorController({
   panel: els.inspectorPanel,
   tabSelect: els.inspectorTabSelect,
@@ -356,12 +367,11 @@ const presetWorkspaceController = createPresetWorkspaceController({
   promptAction: (message, defaultValue) => prompt(message, defaultValue),
   documentObject: document
 });
-const {
-  bindEvents: bindPresetWorkspaceEvents,
-  renderPromptEditor,
-  renderPromptPresetFavorites,
-  setPromptDraft
-} = presetWorkspaceController;
+const { bindEvents: bindPresetWorkspaceEvents, renderPromptEditor, renderPromptPresetFavorites, setPromptDraft } = presetWorkspaceController;
+const promptStudioController = createPromptStudioController({
+  state, els, apiRequest, getCurrentSessionId: () => currentSessionId, getPreviewContent: () => els.chatInput?.value || '',
+  setStatus, humanizeApiError, promptAction: prompt, onIntegrityChange: () => renderSessionSettings(), documentObject: document
+});
 const promptTemplateCenterController = createPromptTemplateCenterController({
   state,
   els,
@@ -397,6 +407,7 @@ let customStoryBuilderController;
 let packCompatibilityManager;
 let storyOpeningController;
 let journeyDraftController;
+let openStoryLauncherFn = null;
 let journeySetupController;
 const voiceController = createVoiceController({
   state,
@@ -405,6 +416,23 @@ const voiceController = createVoiceController({
   escapeHtmlText,
   humanizeApiError,
   insertIntoChat: (text) => composerController?.insertText(text)
+});
+// 聊天输入区语音听写：录音→停止→自动转写→插入输入框
+const voiceDictationController = createVoiceDictationController({
+  els,
+  state,
+  setStatus,
+  insertIntoChat: (text) => composerController?.insertText(text)
+});
+// 消息级 TTS 朗读：朗读可见正文，同一时刻仅一条音频
+const messagePlaybackController = createMessagePlaybackController({
+  els,
+  setStatus,
+  resolveMessageSpeechText: (message) => {
+    if (!message || message.role === 'user') return String(message?.content || '');
+    const presentation = extractRoleplayPresentation(message.content);
+    return presentation?.content || String(message.content || '');
+  }
 });
 const vectorMemoryController = createVectorMemoryController({
   state,
@@ -644,6 +672,7 @@ const openingWorkflowController = createOpeningWorkflowController({
   mergeSession,
   setStatus,
   openProviderSettings,
+  openStoryLauncher: () => openStoryLauncherFn?.(),
   backgroundUrlsMatch,
   documentObject: document
 });
@@ -700,12 +729,20 @@ const immersiveSidebarController = createImmersiveSidebarController({
   extractRoleplayPresentation,
   createCharacterPortraitImage,
   getCharacterPortraitUrl,
+  openCharacterManagement: () => {
+    activateWorkMode('settings', { activateDefaultTab: false });
+    activateTab('character');
+    const groupSection = els.groupMembersList?.closest?.('details');
+    if (groupSection) groupSection.open = true;
+    scrollInspectorIntoViewOnNarrowScreens();
+  },
   truncateText,
   documentObject: document
 });
 const {
   bindEvents: bindImmersiveSidebarEvents,
-  renderImmersiveSidebar
+  renderImmersiveSidebar,
+  selectImmersiveSidebarTab
 } = immersiveSidebarController;
 let resourceImportController;
 let assetCenterController;
@@ -851,7 +888,11 @@ const {
 
 packCompatibilityManager = createPackCompatibilityManager({
   apiRequest,
-  onRefresh: () => resourceWorkbenchController.loadResourceLibrary({ announce: false }),
+  onRefresh: async () => {
+    await resourceWorkbenchController.loadResourceLibrary({ announce: false });
+    renderStoryCatalogFilters();
+    renderStoryPackGrid();
+  },
   onOpenScriptReview: (preview) => customStoryBuilderController.openCompatibilityUpgradeReview(preview),
   confirmAction: (message) => window.confirm(message),
   humanizeError: humanizeApiError
@@ -876,6 +917,7 @@ const {
   openStoryLauncher,
   renderStoryLauncher
 } = storyOpeningController;
+openStoryLauncherFn = openStoryLauncher;
 journeyDraftController = createJourneyDraftController({
   state,
   chatInput: els.chatInput,
@@ -986,7 +1028,8 @@ const assetLibraryController = createAssetLibraryController({
   activateTab,
   activateResourceView,
   renderResourcePackBuilder,
-  downloadJsonFile
+  downloadJsonFile,
+  quickLaunchCharacterStory: (...args) => customStoryBuilderController.quickLaunchCharacterStory(...args)
 });
 const {
   deleteAssetFromCenter,
@@ -1001,7 +1044,8 @@ const {
   saveAssetBatchMetadata,
   saveAssetContent,
   saveAssetMetadata,
-  useAssetFromCenter
+  useAssetFromCenter,
+  quickLaunchFromCenter
 } = assetLibraryController;
 const heavyFrontendRuntimeController = createHeavyFrontendRuntimeController({
   root: els.heavyFrontendManager,
@@ -1023,6 +1067,7 @@ assetCenterController = createAssetCenterController({
     ? heavyFrontendRuntimeController.open({ promptImport: true })
     : openAssetImportPicker(kind),
   onUseAsset: useAssetFromCenter,
+  onQuickLaunch: quickLaunchFromCenter,
   onOpenComposer: openAssetComposer,
   onReevaluateAsset: reevaluateAssetFromCenter,
   onLoadRevisions: loadAssetRevisions,
@@ -1066,6 +1111,8 @@ const messagePresentationController = createMessagePresentationController({
   formatTokenCount,
   getLightFrontendContext,
   renderMessageContent: (...args) => scriptGovernanceController.renderMessageContent(...args),
+  canSpeakMessages: () => isProviderConfigured(state.config?.providers),
+  isMessageSpeaking: (messageId) => messagePlaybackController.isSpeaking(messageId),
   documentObject: document
 });
 const {
@@ -1098,18 +1145,37 @@ messageActionsController = createMessageActionsController({
   humanizeApiError,
   decodeImmersiveAction,
   onRecommendedAction: useRecommendedAction,
+  onForkTimeline: (message) => timelineController.forkFromMessageDialog(message),
+  onSpeakMessage: (message) => {
+    // 朗读后重渲染消息列表，让按钮切换为「停止朗读」态
+    Promise.resolve(messagePlaybackController.toggleMessage(message)).then(renderMessages);
+  },
   promptUser: (message, initialValue) => window.prompt(message, initialValue)
 });
 const {
   bindEvents: bindMessageActionEvents,
   syncActionState: syncMessageActionState
 } = messageActionsController;
+const timelineController = createTimelineController({
+  state,
+  els,
+  apiRequest,
+  getCurrentSessionId: () => currentSessionId,
+  replaceSession: updateSession,
+  renderMessages,
+  refreshInspector: renderInspector,
+  setStatus,
+  promptUser: (message, initialValue) => window.prompt(message, initialValue),
+  confirmUser: (message) => window.confirm(message)
+});
 composerController = createComposerController({
   state,
   els,
   onSend: () => conversationStreamController?.sendMessage(),
   onContinue: () => conversationStreamController?.continueLastMessage(),
   onRewrite: rewriteChatInput,
+  onStopGeneration: () => conversationStreamController?.stopGeneration(),
+  onVoiceDictation: () => voiceDictationController.toggle(),
   onToggleAuthorNote: toggleAuthorNotePanel,
   onToggleBackground: toggleBackgroundPanel,
   onOpenTab: (tab) => {
@@ -1179,6 +1245,7 @@ const appEventsController = createAppEventsController({
     sessionHealth: () => sessionHealthController.bindEvents(),
     worldbookWorkspace: bindWorldbookWorkspaceEvents,
     presetWorkspace: bindPresetWorkspaceEvents,
+    promptStudio: () => promptStudioController.bindEvents(),
     promptTemplateCenter: bindPromptTemplateCenterEvents,
     personaWorkspace: bindPersonaWorkspaceEvents,
     authorNoteWorkspace: bindAuthorNoteWorkspaceEvents,
@@ -1192,7 +1259,8 @@ const appEventsController = createAppEventsController({
     composer: bindComposerEvents,
     conversationActions: bindConversationActionEvents,
     characterCard: bindCharacterCardEvents,
-    groupMembers: bindGroupMembersEvents
+    groupMembers: bindGroupMembersEvents,
+    timeline: () => timelineController.bindEvents()
   },
   actions: {
     openAssetCenter,
@@ -1223,6 +1291,7 @@ const appEventsController = createAppEventsController({
       currentSessionId = sessionId;
     },
     exportCurrentSession,
+    deleteCurrentSession,
     handleImportSessionFile,
     handleNewSessionSubmit
   }
@@ -1264,6 +1333,7 @@ appStateController = createAppStateController({
   setStatus,
   renderProviderPresetOptions,
   renderProviderModelOptions,
+  onSessionChanged: (context) => composerController?.handleSessionChanged(context),
   bindEvents: () => appEventsController.bindEvents(),
   activateInitialWorkspace: () => activateWorkMode(loadWorkMode(), { persist: false }),
   loadImportSources,
@@ -1271,7 +1341,28 @@ appStateController = createAppStateController({
   startUsagePolling
 });
 
+const readerChromeController = createReaderChromeController({
+  state,
+  els,
+  getCurrentSessionId: () => currentSessionId,
+  getSessionDisplayTitle,
+  getAppliedContentPackId,
+  getContentPackTitle,
+  activateWorkMode,
+  openImmersiveSidebarTab: selectImmersiveSidebarTab,
+  setWorkspacePanelExpanded,
+  activateTab,
+  scrollInspectorIntoViewOnNarrowScreens
+});
+
+const displayPreferencesController = createDisplayPreferencesController({
+  els,
+  documentObject: document,
+  storage: localStorage
+});
+
 document.addEventListener('DOMContentLoaded', () => {
+  displayPreferencesController.init();
   appStateController.initialize();
 });
 
@@ -1279,7 +1370,12 @@ function renderMessages() {
   chatController.renderMessages();
   syncComposerState();
   syncMessageActionState();
+  readerChromeController.syncReaderChrome();
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  readerChromeController.bindReaderRail();
+});
 
 const protagonistGenerator = createProtagonistGenerator({
   createCharacterCardTemplate,

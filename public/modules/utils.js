@@ -39,6 +39,16 @@ export function formatTokenCount(value) {
 
 export function humanizeApiError(error) {
   if (error.code === 'NO_ACTIVE_PROVIDER') return '未配置可用 Provider';
+  if (error.code === 'CANNOT_DELETE_MAIN_SESSION') return '默认会话不可删除';
+  if (error.code === 'FORK_MESSAGE_NOT_FOUND') return '找不到要分支的消息';
+  if (error.code === 'BRANCH_NOT_FOUND') return '分支不存在';
+  if (error.code === 'CANNOT_DELETE_ROOT_BRANCH') return '主线分支不可删除';
+  if (error.code === 'CANNOT_DELETE_ACTIVE_BRANCH') return '不能删除当前活跃分支，请先切换到其他分支';
+  if (error.code === 'BRANCH_HAS_CHILDREN') return '该分支下还有子分支，请先删除子分支';
+  if (error.code === 'MISSING_MESSAGE_ID') return '缺少消息标识';
+  if (error.code === 'MISSING_BRANCH_LABEL') return '分支名不能为空';
+  if (error.code === 'INVALID_BRANCH_ID') return '无效的分支标识';
+  if (error.code === 'SESSION_NOT_FOUND') return '会话不存在';
   if (error.code === 'EMPTY_REWRITE_TEXT') return '请先输入要润色的内容';
   if (error.code === 'PROVIDER_ERROR') return 'Provider 调用失败';
   if (error.code === 'PROVIDER_QUOTA_EXHAUSTED') return 'Provider 额度不足，请充值或切换 Provider';

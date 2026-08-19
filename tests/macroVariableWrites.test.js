@@ -64,31 +64,31 @@ test('parseMacroVariableWrites ignores non-macro text', () => {
 });
 
 test('applyMvuPatch append op extends arrays', () => {
-  const current = { enabled: true, values: { variables: { items: ['sword'] } }, revision: 0 };
+  const current = { enabled: true, values: { chat: { variables: { items: ['sword'] } }, global: {} }, revision: 0 };
   const result = applyMvuPatch(current, [{ op: 'append', path: 'variables.items', value: ['shield'] }]);
-  assert.deepEqual(result.values.variables.items, ['sword', 'shield']);
+  assert.deepEqual(result.values.chat.variables.items, ['sword', 'shield']);
 });
 
 test('applyMvuPatch append op concatenates strings', () => {
-  const current = { enabled: true, values: { variables: { log: 'start' } }, revision: 0 };
+  const current = { enabled: true, values: { chat: { variables: { log: 'start' } }, global: {} }, revision: 0 };
   const result = applyMvuPatch(current, [{ op: 'append', path: 'variables.log', value: ' end' }]);
-  assert.equal(result.values.variables.log, 'start end');
+  assert.equal(result.values.chat.variables.log, 'start end');
 });
 
 test('applyMvuPatch append op adds numbers', () => {
-  const current = { enabled: true, values: { variables: { score: 10 } }, revision: 0 };
+  const current = { enabled: true, values: { chat: { variables: { score: 10 } }, global: {} }, revision: 0 };
   const result = applyMvuPatch(current, [{ op: 'append', path: 'variables.score', value: 5 }]);
-  assert.equal(result.values.variables.score, 15);
+  assert.equal(result.values.chat.variables.score, 15);
 });
 
 test('applyMvuPatch append op creates new path when missing', () => {
-  const current = { enabled: true, values: {}, revision: 0 };
+  const current = { enabled: true, values: { chat: {}, global: {} }, revision: 0 };
   const result = applyMvuPatch(current, [{ op: 'append', path: 'variables.newKey', value: 'first' }]);
-  assert.equal(result.values.variables.newKey, 'first');
+  assert.equal(result.values.chat.variables.newKey, 'first');
 });
 
 test('MVU patch allows stat_data path prefix', () => {
-  const current = { enabled: true, values: {}, revision: 0 };
+  const current = { enabled: true, values: { chat: {}, global: {} }, revision: 0 };
   const result = applyMvuPatch(current, [{ op: 'set', path: 'stat_data.系统.城镇', value: '白鹿原' }]);
-  assert.equal(result.values.stat_data.系统.城镇, '白鹿原');
+  assert.equal(result.values.chat.stat_data.系统.城镇, '白鹿原');
 });

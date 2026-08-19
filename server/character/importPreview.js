@@ -140,12 +140,14 @@ function hasCharacterCardSignal(imported) {
   const card = imported?.characterCard || {};
   return Boolean(
     card.sourceSpec === 'chara_card_v2'
+    || card.sourceSpec === 'chara_card_v3'
     || card.name
     || card.description
     || card.personality
     || card.scenario
     || card.firstMessage
     || card.systemPrompt
+    || (Array.isArray(card.assets) && card.assets.length > 0)
   );
 }
 
@@ -195,6 +197,8 @@ function buildCharacterCardPreview(importData, payload) {
       portraitHeight: portrait?.height || 0,
       declaredContentPacks,
       declaredGenre: collectDeclaredGenre(card),
+      spec: String(card.sourceSpec || ''),
+      assetCount: Array.isArray(card.assets) ? card.assets.length : 0,
       selfContained: Boolean(worldBook.length && (card.systemPrompt || card.postHistoryInstructions || card.scenario)),
       willReplaceCharacterCard: true,
       worldBookMode: 'append-dedupe'

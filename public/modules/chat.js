@@ -56,6 +56,54 @@ export function createProviderOnboardingBanner({ onConfigure } = {}) {
   return banner;
 }
 
+export function createQuickStartGuide({ onOpenLibrary, onConfigure } = {}) {
+  const guide = document.createElement('div');
+  guide.className = 'quick-start-guide';
+
+  const heading = document.createElement('h3');
+  heading.className = 'quick-start-heading';
+  heading.textContent = '快速上手';
+  guide.append(heading);
+
+  const steps = [
+    { num: 1, label: '配置接口', hint: '连接一个 AI 模型 Provider', action: onConfigure, actionLabel: '去配置' },
+    { num: 2, label: '选择剧本', hint: '从书架中挑选一个题材剧本', action: onOpenLibrary, actionLabel: '打开书架' },
+    { num: 3, label: '开始故事', hint: '剧本选定后，按提示开局', action: null, actionLabel: '' }
+  ];
+
+  for (const step of steps) {
+    const item = document.createElement('div');
+    item.className = 'quick-start-step';
+
+    const badge = document.createElement('span');
+    badge.className = 'quick-start-badge';
+    badge.textContent = String(step.num);
+
+    const body = document.createElement('div');
+    body.className = 'quick-start-body';
+    const label = document.createElement('strong');
+    label.textContent = step.label;
+    const hint = document.createElement('span');
+    hint.textContent = step.hint;
+    body.append(label, hint);
+
+    item.append(badge, body);
+
+    if (step.action) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'quick-start-action ghost-button compact';
+      btn.textContent = step.actionLabel;
+      btn.addEventListener('click', () => step.action?.());
+      item.append(btn);
+    }
+
+    guide.append(item);
+  }
+
+  return guide;
+}
+
 export function createChatController(deps) {
   const {
     state,
@@ -70,7 +118,8 @@ export function createChatController(deps) {
     renderOpeningWorkflow,
     startGuidedJourney,
     createMessageNode,
-    openProviderSettings
+    openProviderSettings,
+    openStoryLauncher
   } = deps;
   let autoFollowLatest = true;
 
@@ -133,6 +182,13 @@ export function createChatController(deps) {
 
       if (!isProviderConfigured(state.config?.providers)) {
         empty.append(createProviderOnboardingBanner({ onConfigure: openProviderSettings }));
+      }
+
+      if (!messages.length && !state.pendingJourneyDraft) {
+        empty.append(createQuickStartGuide({
+          onOpenLibrary: openStoryLauncher,
+          onConfigure: openProviderSettings
+        }));
       }
 
       if (tpl) {

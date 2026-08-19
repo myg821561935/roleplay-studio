@@ -4,7 +4,9 @@ const MESSAGE_ACTION_SELECTOR = [
   '[data-toggle-visibility]',
   '[data-swipe-prev]',
   '[data-swipe-next]',
-  '[data-toggle-bookmark]'
+  '[data-toggle-bookmark]',
+  '[data-fork-timeline]',
+  '[data-speak-message]'
 ].join(', ');
 
 export function getSwipeTargetIndex(message, delta) {
@@ -28,6 +30,8 @@ export function createMessageActionsController({
   humanizeApiError = (error) => error?.message || String(error),
   decodeImmersiveAction = (value) => value,
   onRecommendedAction = () => {},
+  onSpeakMessage = () => {},
+  onForkTimeline = () => {},
   promptUser = (message, initialValue) => globalThis.window?.prompt?.(message, initialValue)
 } = {}) {
   let actionPending = false;
@@ -194,7 +198,23 @@ export function createMessageActionsController({
     });
   }
 
+  // 从该消息处创建时间线分支：实际流程由 timeline 控制器接管（含命名与切换确认）
+  function forkTimelineAt(messageId) {
+    if (!findMessage(messageId)) return null;
+    if (isBusy()) {
+      reportBusy();
+      return null;
+    }
+    return onForkTimeline(findMessage(messageId));
+  }
+
   function handleMessageClick(event) {
+    const customActionSubmit = event.target?.closest?.('[data-custom-action-submit]');
+    if (customActionSubmit) {
+      submitCustomAction(customActionSubmit);
+      return;
+    }
+
     const immersiveOption = event.target?.closest?.('[data-immersive-option-action]');
     if (immersiveOption) {
       if (isBusy()) reportBusy();
@@ -218,7 +238,11 @@ export function createMessageActionsController({
       ['[data-toggle-visibility]', 'toggleVisibility', toggleMessageVisibility],
       ['[data-swipe-prev]', 'swipePrev', (id) => switchMessageSwipe(id, -1)],
       ['[data-swipe-next]', 'swipeNext', (id) => switchMessageSwipe(id, 1)],
-      ['[data-toggle-bookmark]', 'toggleBookmark', toggleMessageBookmark]
+      ['[data-toggle-bookmark]', 'toggleBookmark', toggleMessageBookmark],
+      // 从此消息处创建时间线分支
+      ['[data-fork-timeline]', 'forkTimeline', forkTimelineAt],
+      // 朗读是本地播放操作：不占 actionPending、不阻断流式生成
+      ['[data-speak-message]', 'speakMessage', (id) => onSpeakMessage(findMessage(id))]
     ];
     for (const [selector, datasetKey, handler] of routes) {
       const control = event.target?.closest?.(selector);
@@ -228,10 +252,38 @@ export function createMessageActionsController({
     }
   }
 
+  function submitCustomAction(control) {
+    if (isBusy()) {
+      reportBusy();
+      return false;
+    }
+    const row = control?.closest?.('[data-custom-action-row]');
+    const input = row?.querySelector?.('[data-custom-action-input]');
+    const text = String(input?.value || '').trim();
+    if (!text) {
+      setStatus(els.sessionStatus, '请先写下你自己的回答或行动', 'error');
+      input?.focus?.();
+      return false;
+    }
+    onRecommendedAction(text, row || control, {
+      source: 'custom-input',
+      preserveText: true
+    });
+    return true;
+  }
+
+  function handleMessageKeydown(event) {
+    const input = event.target?.closest?.('[data-custom-action-input]');
+    if (!input || event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+    event.preventDefault?.();
+    submitCustomAction(input);
+  }
+
   function bindEvents() {
     if (eventsBound) return;
     eventsBound = true;
     els.messages?.addEventListener('click', handleMessageClick);
+    els.messages?.addEventListener('keydown', handleMessageKeydown);
     syncActionState();
   }
 
@@ -239,12 +291,23 @@ export function createMessageActionsController({
     bindEvents,
     editMessage,
     findMessage,
+    forkTimelineAt,
     handleMessageClick,
+    handleMessageKeydown,
     isBusy,
     regenerateMessage,
     switchMessageSwipe,
     syncActionState,
+    submitCustomAction,
     toggleMessageBookmark,
     toggleMessageVisibility
+  };
+}
+
+// 朗读路由处理（导出便于测试）：按 ID 查找消息并回调，busy 态不阻断本地播放
+export function resolveSpeakAction({ findMessage, onSpeakMessage }) {
+  return (messageId) => {
+    const message = findMessage(messageId);
+    if (message) onSpeakMessage(message);
   };
 }

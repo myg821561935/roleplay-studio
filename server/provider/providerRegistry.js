@@ -4,31 +4,31 @@ import { callOpenAICompatible, streamOpenAICompatible } from './openaiCompatible
 
 export function buildProviderClient() {
   return {
-    complete: ({ provider, messages, fetchImpl, tools }) => callProvider({ provider, messages, fetchImpl, tools }),
-    stream: ({ provider, messages, onToken, fetchImpl }) => streamProvider({ provider, messages, onToken, fetchImpl })
+    complete: ({ provider, messages, fetchImpl, tools, signal }) => callProvider({ provider, messages, fetchImpl, tools, signal }),
+    stream: ({ provider, messages, onToken, fetchImpl, signal }) => streamProvider({ provider, messages, onToken, fetchImpl, signal })
   };
 }
 
-async function callProvider({ provider, messages, fetchImpl = fetch, tools = null }) {
+async function callProvider({ provider, messages, fetchImpl = fetch, tools = null, signal = null }) {
   const kind = providerKind(provider);
-  if (kind === 'anthropic') return callAnthropic({ provider, messages, fetchImpl });
-  if (kind === 'gemini') return callGemini({ provider, messages, fetchImpl });
-  return callOpenAICompatible({ provider, messages, fetchImpl, tools });
+  if (kind === 'anthropic') return callAnthropic({ provider, messages, fetchImpl, signal });
+  if (kind === 'gemini') return callGemini({ provider, messages, fetchImpl, signal });
+  return callOpenAICompatible({ provider, messages, fetchImpl, tools, signal });
 }
 
-async function streamProvider({ provider, messages, onToken, fetchImpl = fetch }) {
+async function streamProvider({ provider, messages, onToken, fetchImpl = fetch, signal = null }) {
   const kind = providerKind(provider);
   if (kind === 'anthropic') {
-    return streamAnthropic({ provider, messages, onToken, fetchImpl });
+    return streamAnthropic({ provider, messages, onToken, fetchImpl, signal });
   }
   if (kind === 'gemini') {
-    return streamGemini({ provider, messages, onToken, fetchImpl });
+    return streamGemini({ provider, messages, onToken, fetchImpl, signal });
   }
   if (kind === 'openai-compatible') {
-    return streamOpenAICompatible({ provider, messages, onToken, fetchImpl });
+    return streamOpenAICompatible({ provider, messages, onToken, fetchImpl, signal });
   }
 
-  const result = await callProvider({ provider, messages, fetchImpl });
+  const result = await callProvider({ provider, messages, fetchImpl, signal });
   for (const token of chunkText(result.content)) {
     await onToken?.(token);
   }

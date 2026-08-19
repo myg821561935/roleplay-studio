@@ -117,6 +117,44 @@ test('structured world systems use static entry bodies when generic titles hide 
   assert.ok(systems.cultivation.scales.includes('契约深度'));
 });
 
+test('character profiles and runtime protocols do not pollute semantic world systems', () => {
+  const systems = compilePlayableWorldBook([{
+    id: 'character-diling',
+    title: '地伶_基础信息',
+    content: '地伶是绝世仙宗弟子，持有灵石，身具风灵根并修炼醉仙步。'
+  }, {
+    id: 'mvu-rules',
+    title: '[mvu_update]变量更新规则',
+    content: '当前时间和地点必须在每次事件推进后更新。'
+  }, {
+    id: 'faction-law',
+    title: '宗门势力结构',
+    content: '绝世仙宗与外宗围绕灵田和执事席位展开博弈。'
+  }, {
+    id: 'cultivation-law',
+    title: '修行体系',
+    content: '灵根决定功法契合度，破境会产生可追踪的反噬。'
+  }]).worldSystems;
+
+  assert.deepEqual(systems.population.profiles.map((record) => record.sourceEntryId), ['character-diling']);
+  assert.deepEqual(systems.factions.entities.map((record) => record.sourceEntryId), ['faction-law']);
+  assert.deepEqual(systems.cultivation.rules.map((record) => record.sourceEntryId), ['cultivation-law']);
+  assert.equal(systems.topology.nodes.length, 0);
+  assert.equal(systems.calendar.rules.length, 0);
+  assert.equal(systems.economy.rules.length, 0);
+  assert.equal(systems.source.mappedCount, 3);
+});
+
+test('structured world systems extract canonical currency names instead of surrounding prose', () => {
+  const systems = compilePlayableWorldBook([{
+    id: 'economy-prose',
+    title: '经济规则',
+    content: '她双耳悬挂细长银饰，即使只差一颗碎灵石，也会顺手留下低阶丹药或灵石。'
+  }]).worldSystems;
+
+  assert.deepEqual(systems.economy.currencies, ['灵石']);
+});
+
 test('world book token budgets never exceed their declared total', () => {
   const result = budgetWorldBookEntries([{
     id: 'large-entry',

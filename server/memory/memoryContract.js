@@ -94,6 +94,7 @@ export function createTurnEpisode({
   const speaker = sanitizeMemoryText(assistantMessage?.speaker, 80);
   const entities = collectKnownEntities(session, `${userIntent}\n${narrative}`);
   const branchKey = `${assistantId}:${normalizeInteger(assistantMessage?.activeSwipeIndex, 0)}`;
+  const excluded = userMessage?.excluded || assistantMessage?.excluded || assistantMessage?.contextExcluded;
   return normalizeMemoryItem({
     id: `episode:${assistantId}`,
     kind: MEMORY_KINDS.EPISODE,
@@ -105,7 +106,13 @@ export function createTurnEpisode({
     visibility: userMessage?.hiddenFromChat || assistantMessage?.hiddenFromChat ? 'director' : 'player',
     confidence: 1,
     importance: estimateImportance({ userMessage, assistantMessage }),
-    status: userMessage?.excluded || assistantMessage?.excluded ? 'superseded' : 'confirmed',
+    status: excluded ? 'superseded' : 'confirmed',
+    authority: assistantMessage?.turnFrame?.validation?.status === 'accepted'
+      ? 'accepted-turn-frame'
+      : 'model-narrative',
+    sourceKind: assistantMessage?.turnFrame?.validation?.status === 'accepted'
+      ? 'structured-turn'
+      : 'unstructured-turn',
     validFromTurn: Math.max(0, Number(session?.messages?.length || 0) - 1),
     validToTurn: null,
     branchKey,
@@ -283,21 +290,27 @@ export function selectEpisodicMemories(memoryState, {
   query = '',
   excludeMessageIds = [],
   limit = 6,
-  view = 'player'
+  view = 'player',
+  activeScene = null,
+  relatedEntities = []
 } = {}) {
   const state = normalizeMemoryState(memoryState);
   const excluded = new Set(excludeMessageIds.map(cleanId).filter(Boolean));
   const queryTerms = tokenize(query);
+  const entityBoost = buildEntityBoost(relatedEntities);
   const director = view === 'director';
-  return state.episodes
+  const candidates = state.episodes
     .filter((episode) => episode.status === 'confirmed')
     .filter((episode) => director || episode.visibility === 'player')
     .filter((episode) => !episode.sourceMessageIds.some((id) => excluded.has(id)))
     .map((episode, index) => ({
       ...episode,
       retrievalScore: scoreEpisode(episode, queryTerms, index, state.episodes.length)
+        + scoreEntityBoost(episode, entityBoost)
     }))
-    .filter((episode) => !queryTerms.size || episode.retrievalScore > 0)
+    .filter((episode) => !queryTerms.size || episode.retrievalScore > 0);
+  const sceneAnchored = constrainEpisodesToActiveScene(candidates, activeScene);
+  return sceneAnchored
     .sort((left, right) => (
       right.retrievalScore - left.retrievalScore
       || right.importance - left.importance
@@ -306,15 +319,34 @@ export function selectEpisodicMemories(memoryState, {
     .slice(0, clampInteger(limit, 1, 20, 6));
 }
 
+function constrainEpisodesToActiveScene(episodes, activeScene) {
+  const location = String(activeScene?.location || '').trim();
+  if (!location) return episodes;
+  const matches = episodes.filter((episode) => episodeMatchesSceneLocation(episode, location));
+  // 有明确的当前地点但历史片段没有同场景证据时，宁可不召回，
+  // 也不能把同名人物的旧场景重新写进当前剧情。
+  return matches;
+}
+
+function episodeMatchesSceneLocation(episode, location) {
+  const source = [episode?.title, episode?.summary, episode?.scene]
+    .filter(Boolean)
+    .join('\n')
+    .normalize('NFKC');
+  return source.includes(location.normalize('NFKC'));
+}
+
 export function selectHierarchicalSummaries(memoryState, {
   query = '',
   excludeMessageIds = [],
   view = 'player',
-  limits = {}
+  limits = {},
+  relatedEntities = []
 } = {}) {
   const state = normalizeMemoryState(memoryState);
   const excluded = new Set(excludeMessageIds.map(cleanId).filter(Boolean));
   const queryTerms = tokenize(query);
+  const entityBoost = buildEntityBoost(relatedEntities);
   const director = view === 'director';
   const requestedLimits = {
     [MEMORY_SUMMARY_LEVELS.ARC]: clampInteger(limits.arc, 0, 4, 1),
@@ -332,6 +364,7 @@ export function selectHierarchicalSummaries(memoryState, {
     .map((item, index) => ({
       ...item,
       retrievalScore: scoreSummary(item, queryTerms, index, items.length)
+        + scoreEntityBoost(item, entityBoost)
     }))
     .sort((left, right) => (
       right.retrievalScore - left.retrievalScore
@@ -430,6 +463,8 @@ function normalizeMemoryItem(value) {
     confidence: clampNumber(source.confidence, 0, 1, 1),
     importance: clampNumber(source.importance, 0, 1, 0.5),
     status: normalizeStatus(source.status),
+    authority: sanitizeMemoryText(source.authority, 80),
+    sourceKind: sanitizeMemoryText(source.sourceKind, 80),
     validFromTurn: normalizeInteger(source.validFromTurn, 0),
     validToTurn: source.validToTurn === null || source.validToTurn === undefined
       ? null
@@ -506,6 +541,43 @@ function estimateImportance({ userMessage, assistantMessage }) {
   if (assistantMessage?.roleplayPanels?.relationshipStatus) score += 0.1;
   if (/死亡|受伤|承诺|背叛|秘密|真相|任务|决定|加入|离开|关系|信任|敌对/.test(text)) score += 0.15;
   return Math.min(1, score);
+}
+
+function buildEntityBoost(relatedEntities) {
+  const terms = [];
+  (Array.isArray(relatedEntities) ? relatedEntities : []).forEach((entity) => {
+    if (!entity) return;
+    if (typeof entity === 'string') {
+      const name = entity.trim();
+      if (name) terms.push(name);
+      return;
+    }
+    if (entity.name) terms.push(String(entity.name).trim());
+    if (Array.isArray(entity.aliases)) {
+      entity.aliases.forEach((alias) => {
+        if (alias) terms.push(String(alias).trim());
+      });
+    }
+  });
+  return [...new Set(terms.filter(Boolean))].slice(0, 30);
+}
+
+function scoreEntityBoost(item, entityTerms) {
+  if (!entityTerms.length) return 0;
+  const source = [
+    item?.title,
+    item?.summary,
+    item?.userIntent,
+    item?.scene,
+    ...(Array.isArray(item?.entities) ? item.entities : []),
+    ...(Array.isArray(item?.tags) ? item.tags : [])
+  ].filter(Boolean).join('\n').normalize('NFKC');
+
+  let boost = 0;
+  entityTerms.forEach((term) => {
+    if (term.length >= 2 && source.includes(term)) boost += 8;
+  });
+  return boost;
 }
 
 function scoreEpisode(episode, queryTerms, index, total) {

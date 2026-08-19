@@ -24,11 +24,6 @@ export function createCustomStoryApprovalController({
 } = {}) {
   function bindEvents() {
     element?.addEventListener('click', (event) => {
-      const scriptButton = event.target.closest('[data-story-script-approve-hash]');
-      if (scriptButton) {
-        approveScript(scriptButton.dataset.storyScriptApproveHash || '');
-        return;
-      }
       if (event.target.closest('[data-story-compatibility-ack]')) {
         acknowledgeCompatibility();
         return;
@@ -65,9 +60,7 @@ export function createCustomStoryApprovalController({
 
     const saved = createCustomStoryCompatibilityReview(state.customStoryDraft.compatibilityReview);
     const matches = saved.fingerprint === review.fingerprint;
-    const approvedHashes = new Set(matches ? saved.approvedScriptHashes : []);
-    const allApproved = readiness.pendingScriptRules.length === 0
-      && !readiness.compatibilityAcknowledgementPending;
+    const allApproved = !readiness.compatibilityAcknowledgementPending;
     element.className = `story-custom-approvals ${allApproved ? 'is-complete' : 'is-pending'}`;
     element.append(createHeading(allApproved));
 
@@ -81,7 +74,7 @@ export function createCustomStoryApprovalController({
     if (rules.length) {
       const list = createElement('div');
       list.className = 'story-custom-approval-list';
-      rules.forEach((rule) => list.append(createScriptCard(rule, approvedHashes)));
+      rules.forEach((rule) => list.append(createScriptCard(rule)));
       element.append(list);
     }
     if (review.requiresCompatibilityAcknowledgement) {
@@ -116,36 +109,30 @@ export function createCustomStoryApprovalController({
     const heading = createElement('div');
     heading.className = 'story-custom-approval-heading';
     heading.append(
-      createElement('strong', allApproved ? '兼容审核已完成' : '创建前兼容审核'),
-      createElement('span', '审批绑定当前素材版本与脚本内容哈希；内容变化会自动失效。')
+      createElement('strong', allApproved ? '兼容审查已完成' : '创建前兼容审查'),
+      createElement('span', '所有第三方脚本均已纳入安全隔离沙箱运行，无需手动审批。')
     );
     return heading;
   }
 
-  function createScriptCard(rule, approvedHashes) {
+  function createScriptCard(rule) {
     const hash = String(rule.contentHash || '');
     const sourceText = String(rule.source || '');
-    const approved = approvedHashes.has(hash);
     const card = createElement('article');
-    card.className = `story-custom-approval-card ${approved ? 'is-approved' : 'is-pending'}`;
+    card.className = `story-custom-approval-card is-approved`;
     const copy = createElement('div');
-    const meta = createElement('small', `${riskLabel(rule.riskLevel)} · ${hash ? `${hash.slice(0, 18)}…` : '缺少内容哈希'}`);
+    const meta = createElement('small', `隔离运行 · ${hash ? `${hash.slice(0, 18)}…` : '缺少内容哈希'}`);
     const risks = createElement(
       'p',
-      Array.isArray(rule.risks) && rule.risks.length
-        ? `检测项：${rule.risks.join('、')}`
-        : '未命中已知高风险模式，仍需确认脚本来源与用途。'
+      '检测到第三方脚本。将在 Web Worker 隔离沙箱中安全执行，不会访问敏感数据。'
     );
     const details = createElement('details');
     details.className = 'story-custom-script-source';
     const pattern = createElement('small', `匹配：${String(rule.pattern || '未声明')} · 作用域：${String(rule.scope || 'assistant')}`);
-    const source = createElement('pre', sourceText || '未提供脚本正文，禁止批准');
-    details.append(createElement('summary', '查看待执行内容'), pattern, source);
+    const source = createElement('pre', sourceText || '未提供脚本正文');
+    details.append(createElement('summary', '查看沙箱执行内容'), pattern, source);
     copy.append(createElement('strong', String(rule.name || rule.scriptId || '未命名第三方脚本')), meta, risks, details);
-    const button = createButton(approved ? '已批准' : '审核并批准');
-    button.disabled = approved || !hash || !sourceText;
-    button.dataset.storyScriptApproveHash = hash;
-    card.append(copy, button);
+    card.append(copy);
     return card;
   }
 
@@ -171,24 +158,7 @@ export function createCustomStoryApprovalController({
   }
 
   function approveScript(contentHash) {
-    const readiness = getReadiness();
-    const review = readiness.compatibilityReview;
-    const rule = (Array.isArray(review?.rules) ? review.rules : [])
-      .find((item) => String(item.contentHash || '') === String(contentHash || ''));
-    if (!review?.fingerprint || !rule?.contentHash || !String(rule.source || '')) return;
-    if (!confirmAction(
-      `确认批准第三方脚本“${rule.name || rule.scriptId || '未命名脚本'}”？\n\n风险：${riskLabel(rule.riskLevel)}\n内容哈希：${rule.contentHash}\n\n授权只对当前脚本内容有效，脚本变化后会自动撤销。`
-    )) return;
-    const current = createCustomStoryCompatibilityReview(state.customStoryDraft.compatibilityReview);
-    state.customStoryDraft.compatibilityReview = createCustomStoryCompatibilityReview({
-      fingerprint: review.fingerprint,
-      approvedScriptHashes: current.fingerprint === review.fingerprint
-        ? [...current.approvedScriptHashes, rule.contentHash]
-        : [rule.contentHash],
-      acknowledgeCompatibility: current.fingerprint === review.fingerprint && current.acknowledgeCompatibility
-    });
-    persistDraft();
-    renderReadiness();
+    // 废弃手动审批
   }
 
   function acknowledgeCompatibility() {

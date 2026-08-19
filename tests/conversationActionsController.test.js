@@ -419,3 +419,22 @@ test('recommended action fallback still sends and chat-input rewrite restores ac
   assert.equal(await rewriteHarness.controller.rewriteChatInput(), null);
   assert.equal(rewriteHarness.els.chatInput.focusCount, 2);
 });
+
+test('custom action keeps the exact user text and bypasses recommendation rewriting', async () => {
+  const harness = createHarness({
+    apiRequest: async () => {
+      throw new Error('custom actions must not call rewrite');
+    }
+  });
+  const trigger = new FakeElement('div');
+
+  assert.equal(await harness.controller.useRecommendedAction(
+    '我不报身份，只问她为何认得这枚令牌。',
+    trigger,
+    { preserveText: true }
+  ), true);
+
+  assert.equal(harness.requests.length, 0);
+  assert.equal(harness.composerValues.at(-1).value, '我不报身份，只问她为何认得这枚令牌。');
+  assert.equal(harness.counts().sends, 1);
+});

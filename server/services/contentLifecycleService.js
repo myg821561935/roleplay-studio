@@ -42,10 +42,14 @@ export class ContentLifecycleService {
     });
   }
 
-  async deleteProject(projectId, { confirmDetach = false } = {}) {
+  async deleteProject(projectId, {
+    confirmDetach = false,
+    confirmDelete = false,
+    deleteSessions = false
+  } = {}) {
     const impact = await this.inspectProjectDeletion(projectId);
     if (!impact) return null;
-    requireConfirmation(impact, confirmDetach);
+    requireConfirmation(impact, deleteSessions ? confirmDelete : confirmDetach);
     const backup = await this.backupService.createBackup({
       reason: `before-story-project-delete:${impact.target.id}`,
       includePaths: lifecycleBackupPaths({
@@ -53,19 +57,30 @@ export class ContentLifecycleService {
         sessionIds: impact.sessions.map((session) => session.id)
       })
     });
-    const detachedAt = this.now().toISOString();
-    for (const summary of impact.sessions) {
-      const session = await this.sessionService.getSession(summary.id);
-      await this.sessionService.saveSession(detachSessionFromProject(session, impact.target, detachedAt));
+    const detachedSessionIds = [];
+    const deletedSessionIds = [];
+    if (deleteSessions) {
+      for (const summary of impact.sessions) {
+        const deleted = await this.sessionService.deleteSession(summary.id);
+        if (deleted) deletedSessionIds.push(summary.id);
+      }
+    } else {
+      const detachedAt = this.now().toISOString();
+      for (const summary of impact.sessions) {
+        const session = await this.sessionService.getSession(summary.id);
+        await this.sessionService.saveSession(detachSessionFromProject(session, impact.target, detachedAt));
+        detachedSessionIds.push(summary.id);
+      }
     }
     const removed = await this.storyProjectService.deleteProject(impact.target.id);
     if (!removed) throw lifecycleError('STORY_PROJECT_NOT_FOUND');
     return {
       ok: true,
       backup,
-      detachedSessionIds: impact.sessions.map((session) => session.id),
+      detachedSessionIds,
+      deletedSessionIds,
       missingSessionIds: impact.missingSessionIds,
-      preservedSessionIds: impact.sessions.map((session) => session.id)
+      preservedSessionIds: deleteSessions ? [] : detachedSessionIds
     };
   }
 

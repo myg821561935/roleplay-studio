@@ -10,97 +10,21 @@ import {
   createCustomStoryCompatibilityReview
 } from './customStoryCompatibilityReview.js';
 import {
+  getCustomStoryInteractionReview,
+  renderCustomStoryConflictSummary
+} from './customStoryConflictSummary.js';
+import {
   createCompatibilityUpgradeAssemblySignature,
   runCompatibilityUpgradeReview
 } from './customStoryCompatibilityUpgrade.js';
 import { createWorldBookRuntimeBudgetRow, formatWorldBookResourceMeta, summarizeWorldBookRuntimeBudget } from './worldBookRuntimeBudget.js';
 import { createWorldBookTagMappingController } from './worldBookTagMapping.js';
+import { CUSTOM_BASELINE_TEMPLATES } from './customStoryBaselineTemplates.js';
+export { CUSTOM_BASELINE_TEMPLATES } from './customStoryBaselineTemplates.js';
 export { createCompatibilityUpgradeAssemblySignature } from './customStoryCompatibilityUpgrade.js';
 export const CUSTOM_STORY_DRAFT_KEY = 'localRoleplayCustomStoryDraft';
 export const CUSTOM_STORY_BASE_PACK_ID = '__original__';
 export const CUSTOM_STORY_STEPS = ['baseline', 'character', 'worldbook', 'prompt', 'review'];
-export const CUSTOM_BASELINE_TEMPLATES = {
-  blank: {
-    label: '纯原创空白',
-    genre: '',
-    premise: '',
-    proseStyle: '',
-    hardRules: '',
-    visualPackId: 'neutral'
-  },
-  wuxia: {
-    label: '古典武侠',
-    genre: '低魔武侠 · 架空王朝',
-    premise: '朝廷、地方豪强与江湖门派彼此制衡。武学能改变个人命运，却不能脱离军阵、钱粮、身份与人情网络。故事围绕旧案、门派利益和乱世选择展开。',
-    proseStyle: '重人物立场与对白潜台词；武斗讲究环境、招式代价和胜负后果，日常场景保留市井风物与礼法细节。',
-    hardRules: '不得出现飞升、无限复活和随意摧城的个人伟力；公开身份、路引、钱粮、伤势与政治后果必须持续有效。',
-    visualPackId: 'neutral'
-  },
-  xuanhuan: {
-    label: '东方玄幻',
-    genre: '东方玄幻 · 宗门与王朝',
-    premise: '力量体系、宗门资源和王朝秩序共同塑造世界。机缘必须伴随代价，境界差距真实存在，但联盟、阵法、地势和制度仍能改变强弱关系。',
-    proseStyle: '宏大场景服务于人物抉择；升级过程强调资源、师承与因果，不以连续奇遇替代剧情推进。',
-    hardRules: '境界不可无因跳跃；法宝与功法必须有来源、条件和上限；支线不能长期取代主线矛盾。',
-    visualPackId: 'neutral'
-  },
-  xianxia: {
-    label: '仙侠修真',
-    genre: '仙侠修真 · 因果与道统',
-    premise: '仙门、世族、散修与凡俗政权共同存在。修行依赖灵脉、传承、资源与心性，道统延续和因果债务比短期胜负更重要。',
-    proseStyle: '节制空泛玄语，以修行日常、宗门制度、资源交换和人物心性承载仙意。',
-    hardRules: '修为、寿元、灵根和功法相互约束；因果与承诺必须兑现；秘境和天材地宝不能成为无限供给。',
-    visualPackId: 'neutral'
-  },
-  folklore: {
-    label: '民俗灵异',
-    genre: '中式民俗灵异 · 调查叙事',
-    premise: '异常依附于地方习俗、旧案与人际关系。线索可验证，禁忌有来源，鬼神规则稳定但不向角色完整公开。',
-    proseStyle: '以日常细节积累不安，减少直接解释；调查依靠证词、物证、时间线和地方知识推进。',
-    hardRules: '异常不能随剧情方便改变规则；每项超自然结论需要线索支撑；谜团、危险与人物关系必须保持因果闭环。',
-    visualPackId: 'neutral'
-  },
-  history: {
-    label: '历史演义',
-    genre: '历史演义 · 制度与生存',
-    premise: '政令、财政、军队、交通与地方社会构成叙事骨架。人物可以改变局部历史，但必须面对信息延迟、组织成本和时代观念。',
-    proseStyle: '对白符合身份与时代，战争落到钱粮、军纪和地理，权谋通过制度流程与利益交换展开。',
-    hardRules: '禁止现代知识无成本碾压时代；官职、礼法、交通和生产力边界持续有效；重大改变必须经历组织过程。',
-    visualPackId: 'neutral'
-  },
-  suspense: {
-    label: '都市悬疑',
-    genre: '现代都市 · 犯罪悬疑',
-    premise: '案件发生在利益密集的现代城市，证据链、社会关系和机构程序共同限制调查。每个秘密都应对应持有人、动机与暴露代价。',
-    proseStyle: '近距离视角、短场景与克制对白；用行动和物证传递信息，避免旁白提前揭底。',
-    hardRules: '推理结论必须可回溯到已出现线索；技术与机构能力符合现实；反派不能靠作者临时添加能力脱身。',
-    visualPackId: 'neutral'
-  },
-  apocalypse: {
-    label: '末日生存',
-    genre: '近未来末日 · 聚落生存',
-    premise: '灾变后的资源、疾病、交通和群体信任决定生存。外部探索可以出现，但聚落治理、人员关系与长期供给始终是主轴。',
-    proseStyle: '重物资清单、路线风险和群体决策，以有限信息制造压力，不把每个场景都写成连续战斗。',
-    hardRules: '食物、药品、弹药与伤势不可自动恢复；地图与时间连续；新威胁不能无限升级以抹去既有建设成果。',
-    visualPackId: 'neutral'
-  },
-  scifi: {
-    label: '科幻星际',
-    genre: '科幻星际 · 舰队与殖民地',
-    premise: '航行时间、能源、通信延迟和政治授权约束星际行动。技术改变社会结构，但不能作为无条件解决一切问题的魔法。',
-    proseStyle: '技术信息服务于人物选择，场景强调尺度、程序与未知环境；关键概念保持术语一致。',
-    hardRules: '先定义推进、通信、能源和人工智能边界；技术突破需要资源与验证；跨星系信息不能无视延迟。',
-    visualPackId: 'neutral'
-  },
-  fantasy: {
-    label: '西方奇幻',
-    genre: '西方奇幻 · 城邦与魔法',
-    premise: '王权、教会、行会与族群共同塑造大陆秩序。魔法来自明确媒介与传统，不同地区拥有相互冲突的历史记忆。',
-    proseStyle: '以旅行、城镇生活和政治谈判展示世界；战斗强调装备、队伍协作与魔法代价。',
-    hardRules: '魔法必须遵循施法条件与代价；复活和预言稀缺且会改变社会秩序；族群文化不能只作为外观标签。',
-    visualPackId: 'neutral'
-  }
-};
 
 export function createCustomBaselineDraft(value = {}) {
   return {
@@ -597,11 +521,25 @@ export function createCustomStoryBuilderController({
       baseInheritanceMode,
       worldBookMergeMode: draft.worldBookMergeMode,
       creationMode: draft.creationMode,
+      roleplayMode: 'dm',
       visualPackId: isOriginal ? baseline.visualPackId : '',
       customBaseline: isOriginal ? baseline : null
     };
     if (includeCompatibilityReview) {
-      request.compatibilityReview = createCustomStoryCompatibilityReview(draft.compatibilityReview);
+      const savedReview = createCustomStoryCompatibilityReview(draft.compatibilityReview);
+      const inspectedReview = state.customStoryComposition?.status === 'ready'
+        ? state.customStoryComposition.report?.compatibilityReview
+        : null;
+      request.compatibilityReview = inspectedReview?.fingerprint
+        ? createCustomStoryCompatibilityReview({
+            fingerprint: inspectedReview.fingerprint,
+            approvedScriptHashes: (Array.isArray(inspectedReview.rules) ? inspectedReview.rules : [])
+              .map((rule) => String(rule?.contentHash || ''))
+              .filter(Boolean),
+            acknowledgeCompatibility: savedReview.fingerprint === inspectedReview.fingerprint
+              && savedReview.acknowledgeCompatibility
+          })
+        : savedReview;
     }
     return request;
   }
@@ -848,6 +786,10 @@ export function createCustomStoryBuilderController({
     const compatibilityReview = composition.status === 'ready'
       ? composition.report?.compatibilityReview || null
       : null;
+    const interactionReview = getCustomStoryInteractionReview(compatibilityReview);
+    const interactionConflicts = Array.isArray(interactionReview.conflicts)
+      ? interactionReview.conflicts
+      : [];
     const savedCompatibilityReview = createCustomStoryCompatibilityReview(draft.compatibilityReview);
     const reviewFingerprintMatches = Boolean(
       compatibilityReview?.fingerprint
@@ -859,9 +801,7 @@ export function createCustomStoryBuilderController({
     const compatibilityRules = Array.isArray(compatibilityReview?.rules)
       ? compatibilityReview.rules
       : [];
-    const pendingScriptRules = compatibilityReview?.requiresScriptApproval
-      ? compatibilityRules.filter((rule) => !approvedScriptHashes.has(String(rule.contentHash || '')))
-      : [];
+    const pendingScriptRules = []; // 沙箱执行，无需审批
     const compatibilityAcknowledgementPending = Boolean(
       compatibilityReview?.requiresCompatibilityAcknowledgement
       && !(reviewFingerprintMatches && savedCompatibilityReview.acknowledgeCompatibility)
@@ -907,7 +847,8 @@ export function createCustomStoryBuilderController({
       || resourceMatching.low > 0
       || runtimeCompatibility.missing > 0
       || runtimeCompatibility.review > 0
-      || runtimeCompatibility.degraded > 0;
+      || runtimeCompatibility.degraded > 0
+      || interactionConflicts.length > 0;
     const effectiveBaseWorldBookCount = isOriginal ? originalWorldBookCount : baseWorldBookCount;
     const effectiveBasePromptCount = isOriginal ? originalPromptCount : basePromptCount;
     const baseInheritanceMode = buildCustomPackRequest({ includeCompatibilityReview: false }).baseInheritanceMode;
@@ -970,6 +911,15 @@ export function createCustomStoryBuilderController({
             : 'review'
       },
       {
+        label: '互动控制权',
+        value: interactionConflicts.length
+          ? `${interactionReview.roleplayModeLabel || '标准 DM 叙事流'} · ${interactionConflicts.length} 项预设冲突`
+          : interactionReview.semantics?.requestsMoreDialogue
+            ? `${interactionReview.roleplayModeLabel || '标准 DM 叙事流'} · 对话增多已保留`
+            : `${interactionReview.roleplayModeLabel || '标准 DM 叙事流'} · 未发现抢话冲突`,
+        tone: interactionConflicts.length ? 'review' : 'ready'
+      },
+      {
         label: '素材匹配',
         value: !character
           ? '选择角色卡后评定世界书与预设'
@@ -993,9 +943,7 @@ export function createCustomStoryBuilderController({
             ? composition.status === 'error'
               ? '兼容预检失败，请重试'
               : '正在执行组装前兼容预检'
-            : pendingScriptRules.length
-              ? `${pendingScriptRules.length} 个第三方脚本必须逐项审批`
-              : compatibilityAcknowledgementPending
+            : compatibilityAcknowledgementPending
                 ? sourceRuntimeBlocked
                   ? `${runtimeCompatibility.missing} 项源运行时能力将被禁用，需确认安全派生版`
                   : '存在安全降级能力，需确认后继续'
@@ -1021,10 +969,10 @@ export function createCustomStoryBuilderController({
     else if (promptSelectionNeedsConfirmation) guidance = `检测到草稿保留的 ${selectedPromptGroups.length} 个 Prompt / 预设。请在第 4 步重新勾选确认，避免把上一角色的规则带入当前剧本。`;
     else if (!inspectionReady && composition.status === 'error') guidance = `组装前兼容预检失败：${composition.error || '未知错误'}。请重试后再创建。`;
     else if (!inspectionReady) guidance = '正在执行组装前兼容预检；创建按钮会在预检完成且审批通过后开放。';
-    else if (pendingScriptRules.length) guidance = `检测到 ${pendingScriptRules.length} 个第三方脚本。请在下方查看风险与内容哈希并逐项批准；未批准脚本不会进入剧本。`;
     else if (compatibilityAcknowledgementPending && sourceRuntimeBlocked) guidance = `原资源依赖 ${runtimeCompatibility.missing} 项当前无法直接运行的扩展能力。可确认创建安全派生版：保留角色、世界书和 Prompt，明确禁用这些能力；若它本身是完整网页，请改走重前端导入。`;
     else if (compatibilityAcknowledgementPending) guidance = '检测到需要安全降级的扩展能力。请确认接受兼容处理后再创建剧本。';
     else if (sourceRuntimeBlocked) guidance = `将创建安全派生版，并记录被禁用的 ${runtimeCompatibility.missing} 项源运行时能力；原社区资源保持只读。`;
+    else if (interactionConflicts.length) guidance = `${interactionConflicts[0].message} 创建后仍可在工作台切换为导演 / 共创流；每轮运行时会按实时模式重新裁决。`;
     else if (missingFields.length) guidance = `角色卡可创建，但缺少：${missingFields.map((item) => item.label || item.field).join('、')}。这些字段将暂由模型与基线补足。`;
     else if (resourceMatching.low) guidance = `已选择 ${resourceMatching.low} 项与当前角色低匹配的世界书或预设。仍可创建，但建议确认题材冲突是否出于你的主动设计。`;
     else if (runtimeCompatibility.review) guidance = `检测到 ${runtimeCompatibility.review} 项脚本能力。脚本默认禁用，完成人工审核、内容哈希绑定和本地审计后才可进入隔离沙箱。`;
@@ -1050,6 +998,8 @@ export function createCustomStoryBuilderController({
       needsReview,
       inspectionReady,
       compatibilityReview,
+      interactionReview,
+      interactionConflicts,
       pendingScriptRules,
       sourceRuntimeBlocked,
       compatibilityAcknowledgementPending,
@@ -1096,8 +1046,8 @@ export function createCustomStoryBuilderController({
       ? (readiness.needsReview ? '可创建 · 建议审阅' : '可以直接创建')
       : inspecting
         ? '正在组装预检'
-        : readiness.pendingScriptRules.length || readiness.compatibilityAcknowledgementPending
-          ? '待兼容审批'
+        : readiness.compatibilityAcknowledgementPending
+          ? '待兼容确认'
           : '暂不可创建';
     els.storyCustomTokenEstimate.textContent = readiness.estimatedTokens
       ? `每轮上限 ${formatTokenCount(readiness.estimatedTokens)} tokens`
@@ -1169,60 +1119,12 @@ export function createCustomStoryBuilderController({
   }
 
   function renderCustomStoryConflicts(readiness = getCustomStoryReadiness()) {
-    if (!els.storyCustomConflicts) return;
-    const composition = state.customStoryComposition;
-    if (composition.status === 'loading') {
-      els.storyCustomConflicts.className = 'story-custom-conflicts is-loading';
-      els.storyCustomConflicts.textContent = '正在比对基线与所选世界书...';
-      return;
-    }
-    if (composition.status === 'error') {
-      els.storyCustomConflicts.className = 'story-custom-conflicts is-error';
-      els.storyCustomConflicts.textContent = `冲突预检暂不可用：${composition.error}`;
-      return;
-    }
-    const report = composition.report;
-    if (!report) {
-      els.storyCustomConflicts.className = 'story-custom-conflicts';
-      els.storyCustomConflicts.textContent = '选择素材后将自动检查同名设定、常驻规则和触发词重叠。';
-      return;
-    }
-    const summary = report.summary || {};
-    const reviewCount = Number(summary.sameTitleConflicts || 0)
-      + Number(summary.constantConflicts || 0)
-      + Number(summary.triggerOverlaps || 0)
-      + Number(summary.promptIdConflicts || 0);
-    els.storyCustomConflicts.className = `story-custom-conflicts ${reviewCount ? 'is-review' : 'is-clean'}`;
-    els.storyCustomConflicts.innerHTML = '';
-    const title = document.createElement('strong');
-    const finalEntries = Number(summary.finalEntries || 0);
-    title.textContent = reviewCount
-      ? `发现 ${reviewCount} 组需留意的设定重叠`
-      : finalEntries > 0
-        ? '世界书合并检查通过'
-        : readiness.baseInheritanceMode === 'genre'
-          ? '当前仅继承题材框架'
-          : '本次没有合并世界书条目';
-    const meta = document.createElement('span');
-    meta.textContent = [
-      `最终 ${finalEntries} 条`,
-      Number(summary.exactDuplicates || 0) ? `去重 ${summary.exactDuplicates}` : '',
-      Number(summary.sameTitleConflicts || 0) ? `同名 ${summary.sameTitleConflicts}` : '',
-      Number(summary.constantConflicts || 0) ? `常驻冲突 ${summary.constantConflicts}` : '',
-      Number(summary.triggerOverlaps || 0) ? `触发重叠 ${summary.triggerOverlaps}` : '',
-      Number(summary.promptIdConflicts || 0) ? `Prompt 重名 ${summary.promptIdConflicts}` : ''
-    ].filter(Boolean).join(' · ');
-    els.storyCustomConflicts.append(title, meta);
-    const samples = Array.isArray(report.conflicts) ? report.conflicts.slice(0, 3) : [];
-    if (samples.length) {
-      const list = document.createElement('ul');
-      samples.forEach((item) => {
-        const row = document.createElement('li');
-        row.textContent = item.message || item.title || '设定重叠';
-        list.append(row);
-      });
-      els.storyCustomConflicts.append(list);
-    }
+    renderCustomStoryConflictSummary({
+      element: els.storyCustomConflicts,
+      composition: state.customStoryComposition,
+      readiness,
+      documentObject: document
+    });
   }
 
   function scheduleCustomStoryInspection(readiness = getCustomStoryReadiness()) {
@@ -1478,12 +1380,43 @@ export function createCustomStoryBuilderController({
     return preview.title || fileTitle || '自定义剧本';
   }
 
+  async function quickLaunchCharacterStory(characterResourceId, { basePackId = CUSTOM_STORY_BASE_PACK_ID } = {}) {
+    const resources = Array.isArray(state.resourceLibrary) ? state.resourceLibrary : [];
+    const character = resources.find((item) => (item.id === characterResourceId || item.raw?.id === characterResourceId) && (item.kind === 'character' || item.raw?.kind === 'character'));
+    const resolvedChar = character?.raw || character;
+    if (!resolvedChar) throw new Error('未找到指定的角色卡');
+
+    const companionWorldBooks = getCompanionWorldBooks(resolvedChar, resources);
+    const card = resolvedChar.payload || {};
+    const charName = resolvedChar.title || card.name || '角色';
+    const title = `${charName}之卷`;
+
+    const prompts = resources.filter(isPromptLibraryResource).slice(0, 3);
+    const preview = {
+      kind: 'character-card',
+      summary: {
+        characterName: charName,
+        declaredGenre: card.genre || (Array.isArray(card.tags) ? card.tags.join(' · ') : '') || '角色专属原创故事'
+      }
+    };
+
+    return await createStoryFromCommittedImport({
+      libraryResources: [resolvedChar, ...companionWorldBooks, ...prompts],
+      preview
+    }, {
+      basePackId,
+      disposition: STORY_IMPORT_MODES.INDEPENDENT,
+      source: { fileName: charName }
+    });
+  }
+
   return {
     bindEvents,
     buildCustomPackRequest,
     closeCustomStoryDialog,
     createCustomStoryFromDraft,
     createStoryFromCommittedImport,
+    quickLaunchCharacterStory,
     getCompanionWorldBooks,
     getCustomStoryReadiness,
     invalidateCustomStoryInspection,

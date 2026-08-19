@@ -1,4 +1,5 @@
 import { escapeHtmlText, humanizeApiError, prettyJson } from './utils.js';
+import { renderSpaceTimeMap } from './simulationSpaceMap.js';
 
 export function formatSimulationDuration(minutes) {
   if (minutes >= 1440 && minutes % 1440 === 0) return `${minutes / 1440} 日`;
@@ -111,7 +112,8 @@ export function createWorldSimulationController({
       simulation: memory.simulation || {},
       events: Array.isArray(memory.eventLedger) ? memory.eventLedger : [],
       narrativeState: memory.narrativeState || {},
-      ruleSystem: memory.ruleSystem || null
+      ruleSystem: memory.ruleSystem || null,
+      cardRuntime: memory.cardRuntime || null
     };
   }
 
@@ -152,6 +154,11 @@ export function createWorldSimulationController({
       ].join('');
     }
 
+    const minimapContainer = els.simulationMinimap || documentObject.getElementById('simulation-minimap');
+    if (minimapContainer) {
+      renderSpaceTimeMap(snapshot, minimapContainer, directorView);
+    }
+
     if (els.simulationActorCount) els.simulationActorCount.textContent = `${actors.length} 人`;
     els.simulationActors.innerHTML = actors.length
       ? actors.map((actor) => renderSimulationActor(actor, { directorView })).join('')
@@ -178,7 +185,8 @@ export function createWorldSimulationController({
       simulation: snapshot.simulation || memory.simulation || {},
       eventLedger: Array.isArray(snapshot.events) ? snapshot.events : (memory.eventLedger || []),
       narrativeState: snapshot.narrativeState || memory.narrativeState || {},
-      ruleSystem: snapshot.ruleSystem || memory.ruleSystem || null
+      ruleSystem: snapshot.ruleSystem || memory.ruleSystem || null,
+      cardRuntime: snapshot.cardRuntime || memory.cardRuntime || null
     };
     state.simulationPublicSnapshot = null;
   }

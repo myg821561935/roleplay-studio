@@ -63,6 +63,7 @@ export function createAppStateController({
   setStatus = () => {},
   renderProviderPresetOptions = () => {},
   renderProviderModelOptions = () => {},
+  onSessionChanged = () => {},
   bindEvents = () => {},
   activateInitialWorkspace = () => {},
   loadImportSources = () => {},
@@ -126,9 +127,24 @@ export function createAppStateController({
     });
   }
 
+  function resetSessionScopedUiState(previousSessionId, nextSessionId) {
+    if (!previousSessionId || previousSessionId === nextSessionId) return false;
+    state.pendingJourneyDraft = null;
+    state.pendingQuickReply = null;
+    state.targetSpeaker = '';
+    state.openingError = '';
+    state.immersiveSidebarTab = '';
+    state.conversationActionPending = false;
+    state.chatStreaming = false;
+    state.chatStreamPhase = '';
+    onSessionChanged({ previousSessionId, nextSessionId });
+    return true;
+  }
+
   async function loadState() {
     const version = ++loadVersion;
     const sessionId = String(getCurrentSessionId() || 'main');
+    const previousSessionId = String(state.session?.id || '');
     pendingLoadCount += 1;
     syncRefreshState();
 
@@ -174,6 +190,7 @@ export function createAppStateController({
       if (!isCurrentLoad(version, sessionId)) return { status: 'stale', sessionId };
 
       Object.assign(state, payload);
+      resetSessionScopedUiState(previousSessionId, String(state.session?.id || sessionId));
       if (prologuePayload) state.prologueTemplate = prologuePayload;
       state.simulationPublicSnapshot = null;
       if (simulationPayload) {

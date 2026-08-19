@@ -35,6 +35,73 @@ test('expandMacros resolves SillyTavern charIfNotGroup without leaking the marke
   }), '');
 });
 
+// ---- SillyTavern prompt manager 占位符映射 ----
+
+const PLACEHOLDER_CONTEXT = {
+  user: '林青阳',
+  characterCard: {
+    name: '沈观澜',
+    description: '玄水阁阁主，佩剑听雨。',
+    personality: '外冷内热，谋定后动。',
+    exampleDialog: ['{{user}}：阁下深夜到访，所为何事？', '沈观澜：*指尖敲了敲案几* 三件事。']
+  },
+  persona: { name: '林青阳', description: '江南剑客，游历四方。', enabled: true },
+  worldBook: [
+    { title: '玄水阁', content: '临水而建的剑阁。', position: 'before_character' },
+    { title: '落雁夜市', content: '城南入夜后的集市。', position: '' }
+  ]
+};
+
+test('prompt manager placeholders map to character card fields in both naming styles', () => {
+  assert.equal(expandMacros('{{charDefinition}}', PLACEHOLDER_CONTEXT), '玄水阁阁主，佩剑听雨。');
+  assert.equal(expandMacros('{{charDescription}}', PLACEHOLDER_CONTEXT), '玄水阁阁主，佩剑听雨。');
+  assert.equal(expandMacros('{{char_description}}', PLACEHOLDER_CONTEXT), '玄水阁阁主，佩剑听雨。');
+  assert.equal(expandMacros('{{charPersonality}}', PLACEHOLDER_CONTEXT), '外冷内热，谋定后动。');
+  assert.equal(expandMacros('{{char_personality}}', PLACEHOLDER_CONTEXT), '外冷内热，谋定后动。');
+});
+
+test('persona description placeholder respects disabled personas', () => {
+  assert.equal(expandMacros('{{personaDescription}}', PLACEHOLDER_CONTEXT), '江南剑客，游历四方。');
+  assert.equal(expandMacros('{{persona_description}}', PLACEHOLDER_CONTEXT), '江南剑客，游历四方。');
+  assert.equal(expandMacros('{{personaDescription}}', {
+    ...PLACEHOLDER_CONTEXT,
+    persona: { ...PLACEHOLDER_CONTEXT.persona, enabled: false }
+  }), '');
+});
+
+test('dialogue examples placeholder joins example dialog entries', () => {
+  const result = expandMacros('{{dialogueExamples}}', PLACEHOLDER_CONTEXT);
+  assert.equal(result, '{{user}}：阁下深夜到访，所为何事？\n沈观澜：*指尖敲了敲案几* 三件事。');
+  assert.equal(expandMacros('{{dialogue_examples}}', PLACEHOLDER_CONTEXT), result);
+});
+
+test('dialogue examples placeholder falls back to raw mes_example strings', () => {
+  const result = expandMacros('{{dialogueExamples}}', {
+    characterCard: { name: '沈观澜', mes_example: '{{user}}：可否借一步说话。' }
+  });
+  assert.equal(result, '{{user}}：可否借一步说话。');
+});
+
+test('world info placeholders split entries by position around the character card', () => {
+  assert.equal(expandMacros('{{worldInfoBefore}}', PLACEHOLDER_CONTEXT), '## 玄水阁\n临水而建的剑阁。');
+  assert.equal(expandMacros('{{world_info_before}}', PLACEHOLDER_CONTEXT), '## 玄水阁\n临水而建的剑阁。');
+  assert.equal(expandMacros('{{worldInfoAfter}}', PLACEHOLDER_CONTEXT), '## 落雁夜市\n城南入夜后的集市。');
+  assert.equal(expandMacros('{{world_info_after}}', PLACEHOLDER_CONTEXT), '## 落雁夜市\n城南入夜后的集市。');
+});
+
+test('world info placeholders render empty when no entries match', () => {
+  assert.equal(expandMacros('{{worldInfoBefore}}', { worldBook: [{ title: '落雁夜市', content: '集市。' }] }), '');
+  assert.equal(expandMacros('{{worldInfoAfter}}', { characterCard: {} }), '');
+});
+
+test('placeholders expand inside preset module content alongside other macros', () => {
+  const result = expandMacros(
+    '角色设定：{{charDefinition}}\n性格：{{charPersonality}}\n人设：{{personaDescription}}',
+    PLACEHOLDER_CONTEXT
+  );
+  assert.equal(result, '角色设定：玄水阁阁主，佩剑听雨。\n性格：外冷内热，谋定后动。\n人设：江南剑客，游历四方。');
+});
+
 test('expandMacros random picks from comma list', () => {
   const results = new Set();
   for (let i = 0; i < 50; i++) {

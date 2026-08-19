@@ -2,8 +2,9 @@ import { buildNarrativeMaintenanceAnchor } from './narrativeControl.js';
 import { sanitizeMemoryText } from '../memory/memoryContract.js';
 
 export function shouldSummarize({ unsummarizedTurnCount, promptTokenEstimate, maxPromptTokens }) {
-  if (Number(unsummarizedTurnCount) >= 4) return true;
-  if (Number(promptTokenEstimate) > Number(maxPromptTokens || 8000) * 0.85) return true;
+  const turns = Number(unsummarizedTurnCount || 0);
+  if (turns >= 4) return true;
+  if (turns >= 3 && Number(promptTokenEstimate) > Number(maxPromptTokens || 8000) * 0.9) return true;
   return false;
 }
 

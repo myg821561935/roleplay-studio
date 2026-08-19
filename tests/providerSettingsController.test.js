@@ -118,7 +118,7 @@ function createProviderConfig() {
   };
 }
 
-function createHarness({ apiRequest = async () => ({}), reloadState = async () => {} } = {}) {
+function createHarness({ apiRequest = async () => ({}), reloadState = async () => {}, providersConfig = null } = {}) {
   const createElement = (name, tagName = 'div') => new FakeElement(name, tagName);
   const els = {
     providerForm: createElement('providerForm', 'form'),
@@ -145,7 +145,7 @@ function createHarness({ apiRequest = async () => ({}), reloadState = async () =
     taskProviderSummary: createElement('taskProviderSummary', 'select'),
     fallbackChainInput: createElement('fallbackChainInput', 'input')
   };
-  const state = { config: { providers: createProviderConfig() } };
+  const state = { config: { providers: providersConfig ?? createProviderConfig() } };
   const requests = [];
   const statuses = [];
   let reloads = 0;
@@ -249,6 +249,18 @@ test('provider form masks only the matching provider secret', () => {
   els.providerId.value = 'brand-new';
   els.providerApiKey.value = 'new-local-secret';
   assert.equal(controller.readProviderForm().apiKey, 'new-local-secret');
+});
+
+test('provider form pre-fills DeepSeek preset on first run to lower configuration barrier', () => {
+  const { controller, els, statuses } = createHarness({ providersConfig: { providers: [] } });
+  controller.renderProviderForm();
+
+  assert.equal(els.providerPreset.value, 'deepseek');
+  assert.equal(els.providerKind.value, 'openai-compatible');
+  assert.equal(els.providerId.value, 'deepseek');
+  assert.equal(els.providerBaseUrl.value, 'https://api.deepseek.com/v1');
+  assert.equal(els.providerApiKey.value, '');
+  assert.match(statuses.at(-1).message, /DeepSeek 模板/);
 });
 
 test('provider routing renderer owns global task selects and fallback display', () => {

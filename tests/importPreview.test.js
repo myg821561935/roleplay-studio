@@ -23,6 +23,30 @@ test('previews Character Card V2 with embedded character book', () => {
   assert.equal(preview.importData.worldBook[0].title, '镇武司暗线');
 });
 
+test('previews Character Card V3 with assets-only signal and spec summary', () => {
+  // 只有 spec 与 assets、没有常规文本字段的最小 V3 卡：hasCharacterCardSignal 应识别为角色卡
+  const preview = previewImportPayload({
+    fileName: 'v3-min.json',
+    mimeType: 'application/json',
+    data: JSON.stringify({
+      spec: 'chara_card_v3',
+      spec_version: '3.0',
+      data: {
+        name: '最小V3卡',
+        assets: [
+          { type: 'image', name: '立绘', ext: 'png', uri: 'https://example.com/p.png' }
+        ]
+      }
+    })
+  });
+
+  assert.equal(preview.kind, 'character-card');
+  assert.equal(preview.summary.spec, 'chara_card_v3');
+  assert.equal(preview.summary.assetCount, 1);
+  assert.equal(preview.summary.characterName, '最小V3卡');
+  assert.equal(preview.importData.characterCard.assets.length, 1);
+});
+
 test('imports SillyTavern world book JSON object entries', () => {
   const entries = importWorldBookFromPayload({
     fileName: 'world.json',

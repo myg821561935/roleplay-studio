@@ -3,6 +3,7 @@ export function inferMimeType(fileName) {
   if (name.endsWith('.png')) return 'image/png';
   if (name.endsWith('.yaml') || name.endsWith('.yml')) return 'text/yaml';
   if (name.endsWith('.txt') || name.endsWith('.md')) return 'text/plain';
+  if (name.endsWith('.charx')) return 'application/zip';
   return 'application/json';
 }
 

@@ -198,6 +198,8 @@ function createHarness(options = {}) {
     storyPackSearch: new FakeElement('input'),
     storyProjectList: new FakeElement(),
     storyProjectCount: new FakeElement(),
+    viewAllStoriesBtn: new FakeElement('button'),
+    viewAllStoriesLabel: new FakeElement('span'),
     storyContinuePanel: new FakeElement(),
     storyContinueTitle: new FakeElement(),
     storyContinueMeta: new FakeElement(),
@@ -222,6 +224,7 @@ function createHarness(options = {}) {
   const selectedSessions = [];
   const visualLinks = [];
   const derivedPacks = [];
+  const reviewedPacks = [];
   const storageValues = new Map();
   let closeCount = 0;
   let loadCount = 0;
@@ -276,6 +279,10 @@ function createHarness(options = {}) {
       renderCount += 1;
     },
     openDerivedStoryBuilder: (packId) => derivedPacks.push(packId),
+    onReviewPackCompatibility: async (pack, options) => {
+      reviewedPacks.push({ pack, options });
+      return { kind: 'review-opened' };
+    },
     setStatus: (element, message, tone) => statuses.push({ element, message, tone }),
     humanizeApiError: (error) => error.message,
     storage: {
@@ -292,6 +299,7 @@ function createHarness(options = {}) {
     controller,
     customPack,
     derivedPacks,
+    reviewedPacks,
     els,
     get closeCount() {
       return closeCount;
@@ -424,7 +432,7 @@ test('story cards distinguish built-in, custom, blocked, and character-stage pac
   assert.equal(blockedAction.textContent, '依赖不完整，暂不可开局');
 });
 
-test('historical custom story cards block new starts and expose the compatibility review action', async () => {
+test('historical custom story cards make compatibility review the visible primary action', async () => {
   const harness = createHarness();
   const legacyPack = {
     ...harness.customPack,
@@ -440,15 +448,51 @@ test('historical custom story cards block new starts and expose the compatibilit
   };
   harness.state.contentPacks.push(legacyPack);
   const card = harness.controller.createStoryPackCard(legacyPack);
-  const start = findNode(card, (node) => node.dataset?.startStoryPack === legacyPack.id);
   const review = findNode(card, (node) => node.dataset?.reviewStoryPackCompatibility === legacyPack.id);
 
-  assert.equal(start.disabled, true);
-  assert.equal(start.textContent, '需要 v2 复审');
+  assert.equal(findNode(card, (node) => node.dataset?.startStoryPack === legacyPack.id), null);
+  assert.equal(review.disabled, false);
   assert.equal(review.textContent, '生成兼容新版');
   assert.equal(await harness.controller.startStoryFromPack(legacyPack.id), null);
   assert.deepEqual(harness.requests, []);
   assert.match(harness.statuses.at(-1).message, /历史包缺少当前契约审计/);
+});
+
+test('script-review cards route their primary action into the compatibility review flow', async () => {
+  const harness = createHarness();
+  const reviewPack = {
+    ...harness.customPack,
+    id: 'custom-script-review',
+    compatibilityAudit: {
+      status: 'script-review-required',
+      label: '脚本待逐项审核',
+      tone: 'review',
+      reason: '必须查看第三方脚本源码，并按当前内容哈希逐项批准。',
+      canStartNewStory: false,
+      action: 'review-scripts'
+    }
+  };
+  harness.state.contentPacks.push(reviewPack);
+  harness.controller.renderStoryPackGrid();
+  harness.controller.bindEvents();
+  const review = findNode(
+    harness.els.storyPackGrid,
+    (node) => node.dataset?.reviewStoryPackCompatibility === reviewPack.id
+  );
+
+  assert.equal(review.disabled, false);
+  assert.equal(review.textContent, '逐项审核后新建对话');
+  harness.els.storyPackGrid.listeners.get('click')[0]({
+    target: {
+      closest: (selector) => (
+        selector === '[data-review-story-pack-compatibility]' ? review : null
+      )
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.reviewedPacks.length, 1);
+  assert.equal(harness.reviewedPacks[0].pack.id, reviewPack.id);
 });
 
 test('continue panel and project shelf render the selected local state', () => {
@@ -462,13 +506,73 @@ test('continue panel and project shelf render the selected local state', () => {
   assert.match(harness.els.storyContinueMeta.textContent, /玄荒行纪 · 4 条消息/);
   assert.equal(harness.els.continueLastStory.dataset.sessionId, 'session-active');
   assert.equal(harness.els.storyProjectCount.textContent, '1');
-  assert.equal(
-    findNode(
-      harness.els.storyProjectList,
-      (node) => node.dataset?.openStoryProject === 'project-1'
-    ).title,
-    '继续故事'
+  const projectItem = findNode(
+    harness.els.storyProjectList,
+    (node) => node.dataset?.openStoryProject === 'project-1'
   );
+  assert.equal(projectItem.title, '继续故事');
+  assert.deepEqual(
+    projectItem.children.map((node) => node.className),
+    ['story-project-thumb', 'story-project-copy', 'story-project-actions']
+  );
+  assert.equal(
+    findNode(projectItem, (node) => node.dataset?.editStoryProject === 'project-1').textContent,
+    '编辑'
+  );
+  assert.equal(
+    findNode(projectItem, (node) => node.dataset?.deleteStoryProject === 'project-1').textContent,
+    '删除'
+  );
+});
+
+test('view-all stories toggles a full project-library view and can return to the catalog', () => {
+  const harness = createHarness();
+  harness.controller.bindEvents();
+  const click = harness.els.viewAllStoriesBtn.listeners.get('click')[0];
+
+  click();
+  assert.equal(harness.els.storyLauncher.classList.contains('is-project-library-view'), true);
+  assert.equal(harness.els.viewAllStoriesBtn.attributes.get('aria-pressed'), 'true');
+  assert.equal(harness.els.viewAllStoriesLabel.textContent, '返回剧本目录');
+  assert.equal(harness.els.storyProjectList.children[0].focused, true);
+
+  click();
+  assert.equal(harness.els.storyLauncher.classList.contains('is-project-library-view'), false);
+  assert.equal(harness.els.viewAllStoriesBtn.attributes.get('aria-pressed'), 'false');
+  assert.equal(harness.els.viewAllStoriesLabel.textContent, '查看全部故事');
+});
+
+test('project delete action remains visible and delegates to the protected deletion flow', async () => {
+  const harness = createHarness({
+    apiRequest: async (path) => (
+      path.endsWith('/deletion-impact')
+        ? { impact: { sessions: [], missingSessionIds: [] } }
+        : { backup: { id: 'backup-project' } }
+    )
+  });
+  harness.controller.renderStoryProjects();
+  harness.controller.bindEvents();
+  const deleteButton = findNode(
+    harness.els.storyProjectList,
+    (node) => node.dataset?.deleteStoryProject === 'project-1'
+  );
+  const click = harness.els.storyProjectList.listeners.get('click')[0];
+
+  click({
+    target: {
+      closest: (selector) => selector === '[data-delete-story-project]' ? deleteButton : null
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(harness.requests, [
+    ['/api/story-projects/project-1/deletion-impact'],
+    ['/api/story-projects/project-1', {
+      method: 'DELETE',
+      body: { confirmDelete: true, deleteSessions: true }
+    }]
+  ]);
+  assert.deepEqual(harness.state.storyProjects, []);
 });
 
 test('project editing uses the exact API contract and replaces the shelf summary', async () => {
@@ -537,7 +641,7 @@ test('custom-pack editing refreshes the authoritative content-pack catalog', asy
   assert.deepEqual(harness.state.contentPacks, [refreshedPack]);
 });
 
-test('deleting shelf projects and custom packs requires confirmation and preserves other state', async () => {
+test('deleting shelf projects removes linked progress after backup while pack removal still detaches', async () => {
   const confirmations = [];
   const harness = createHarness({
     apiRequest: async (path) => {
@@ -559,6 +663,9 @@ test('deleting shelf projects and custom packs requires confirmation and preserv
           }
         };
       }
+      if (path === '/api/story-projects/project-1') {
+        return { backup: { id: 'backup-safe' }, deletedSessionIds: ['session-active'] };
+      }
       return { backup: { id: 'backup-safe' }, detachedProjects: [] };
     },
     confirmAction: (message) => {
@@ -570,7 +677,7 @@ test('deleting shelf projects and custom packs requires confirmation and preserv
   assert.equal(await harness.controller.deleteStoryProject('project-1'), true);
   assert.equal(await harness.controller.deleteStoryPack('custom-pack'), true);
 
-  assert.match(confirmations[0], /1 个会话会先转为独立快照/);
+  assert.match(confirmations[0], /同时删除 1 个运行进度及其消息/);
   assert.match(confirmations[0], /自动创建本地安全备份/);
   assert.match(confirmations[1], /影响范围：1 个故事、1 个会话/);
   assert.match(confirmations[1], /角色卡、世界书原素材和消息都会保留/);
@@ -580,7 +687,7 @@ test('deleting shelf projects and custom packs requires confirmation and preserv
     ['/api/story-projects/project-1/deletion-impact'],
     ['/api/story-projects/project-1', {
       method: 'DELETE',
-      body: { confirmDetach: true }
+      body: { confirmDelete: true, deleteSessions: true }
     }],
     ['/api/resource-library/packs/custom-pack/deletion-impact'],
     ['/api/resource-library/packs/custom-pack', {
@@ -588,6 +695,28 @@ test('deleting shelf projects and custom packs requires confirmation and preserv
       body: { confirmDetach: true }
     }]
   ]);
+});
+
+test('continue card can delete a previously detached running session and falls back safely', async () => {
+  const confirmations = [];
+  const harness = createHarness({
+    apiRequest: async () => ({ deleted: true, id: 'session-active' }),
+    confirmAction: (message) => {
+      confirmations.push(message);
+      return true;
+    }
+  });
+  harness.state.session = { id: 'session-active', settings: {} };
+  harness.controller.renderStoryContinuePanel();
+
+  assert.equal(await harness.controller.deleteContinueStory(), true);
+  assert.match(confirmations[0], /删除当前运行进度/);
+  assert.deepEqual(harness.requests[0], [
+    '/api/sessions/session-active',
+    { method: 'DELETE' }
+  ]);
+  assert.deepEqual(harness.selectedSessions, ['main']);
+  assert.equal(harness.state.sessionSummaries.length, 0);
 });
 
 test('detached story projects keep existing sessions available but cannot create a new volume', async () => {
@@ -603,7 +732,10 @@ test('detached story projects keep existing sessions available but cannot create
   );
   assert.equal(open.disabled, false);
   assert.equal(open.title, '继续已有独立存档');
-  assert.match(harness.els.storyProjectList.children[0].children[0].children[1].textContent, /素材已解绑/);
+  assert.match(
+    findNode(open, (node) => node.className === 'story-project-status').textContent,
+    /素材已解绑/
+  );
 
   project.activeSessionId = '';
   harness.controller.renderStoryProjects();

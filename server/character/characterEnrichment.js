@@ -1,3 +1,5 @@
+import { resolveCharacterContentMode } from './characterContentMode.js';
+
 const ENRICHMENT_VERSION = 2;
 const MAX_FIELD_LENGTH = 800;
 const MAX_EXAMPLES = 4;
@@ -19,7 +21,7 @@ export function enrichCharacterCard(card = {}, { worldBookEntries = [] } = {}) {
   const next = structuredClone(card || {});
   const sources = buildSources(next, worldBookEntries);
   const generatedFields = [];
-  const contentMode = classifyCharacterContentMode(next, worldBookEntries);
+  const contentMode = resolveCharacterContentMode(next, worldBookEntries);
 
   if (contentMode.kind !== 'scenario-container' && !hasText(next.personality)) {
     const personality = extractPersonality(sources);
@@ -84,34 +86,6 @@ export function enrichCharacterCard(card = {}, { worldBookEntries = [] } = {}) {
       sourceKinds,
       behaviorConstraints
     }
-  };
-}
-
-function classifyCharacterContentMode(card, worldBookEntries) {
-  const declared = card?.extensions?.local_roleplay_agent?.contentMode;
-  const declaredKind = typeof declared === 'string' ? declared : declared?.kind;
-  if (declaredKind === 'scenario-container') {
-    return { kind: 'scenario-container', source: 'declared', characterNames: [] };
-  }
-
-  const characterNames = [];
-  for (const entry of Array.isArray(worldBookEntries) ? worldBookEntries : []) {
-    const title = cleanText(entry?.title).slice(0, 120);
-    const match = title.match(/^(.{1,50}?)[_·\s-]+(?:基础信息|二次解释|性格调色盘|人物档案|角色档案|人物设定|角色设定)(?:[_·\s-]|$)/u);
-    const name = String(match?.[1] || '').trim();
-    if (name && !characterNames.includes(name)) characterNames.push(name);
-  }
-  const cardName = cleanText(card?.name);
-  const cardIsNamedCharacter = characterNames.includes(cardName);
-  const genericScenarioName = /(?:世界|剧本|故事|物语|仙宗|宗门|之家|学院|公寓|庄园|录|志|症|模拟器|模组)$/u.test(cardName);
-  const isScenarioContainer = !cardIsNamedCharacter && (
-    characterNames.length >= 3
-    || (characterNames.length >= 2 && genericScenarioName)
-  );
-  return {
-    kind: isScenarioContainer ? 'scenario-container' : 'character',
-    source: isScenarioContainer ? 'worldbook' : 'default',
-    characterNames: characterNames.slice(0, 24)
   };
 }
 

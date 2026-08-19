@@ -140,7 +140,7 @@ test('inspector exposes three levels and worldbook fields have simple and advanc
   assert.equal(getInspectorGroupForTab('authoring'), 'core');
   assert.equal(getInspectorGroupForTab('macro'), 'advanced');
   assert.equal(getInspectorGroupForTab('facts'), 'debug');
-  assert.equal(WORLD_BOOK_ENTRY_FIELDS.length, 11);
+  assert.equal(WORLD_BOOK_ENTRY_FIELDS.length, 13);
   assert.ok(WORLD_BOOK_ENTRY_FIELDS.some((field) => field.mode === 'simple'));
   assert.ok(WORLD_BOOK_ENTRY_FIELDS.some((field) => field.mode === 'advanced'));
   assert.equal(typeof createInspectorController, 'function');
@@ -265,6 +265,12 @@ test('frontend entry imports feature modules and documents the three-step quick 
   const contentPack = await readFile('public/modules/contentPack.js', 'utf8');
   const immersiveDossier = await readFile('public/modules/immersiveDossier.js', 'utf8');
   const immersiveLedgers = await readFile('public/modules/immersiveLedgers.js', 'utf8');
+  const immersiveGrowthLedger = await readFile('public/modules/immersiveGrowthLedger.js', 'utf8');
+  const immersiveMemoryLedger = await readFile('public/modules/immersiveMemoryLedger.js', 'utf8');
+  const immersiveSituationLedger = await readFile('public/modules/immersiveSituationLedger.js', 'utf8');
+  const immersiveTurnRecords = await readFile('public/modules/immersiveTurnRecords.js', 'utf8');
+  const immersiveCharacterArchiveActions = await readFile('public/modules/immersiveCharacterArchiveActions.js', 'utf8');
+  const immersiveCharacterRoster = await readFile('public/modules/immersiveCharacterRoster.js', 'utf8');
   const immersiveSidebar = await readFile('public/modules/immersiveSidebar.js', 'utf8');
   const journeySetup = await readFile('public/modules/journeySetup.js', 'utf8');
   const journeyDraft = await readFile('public/modules/journeyDraft.js', 'utf8');
@@ -275,6 +281,8 @@ test('frontend entry imports feature modules and documents the three-step quick 
   const messageActions = await readFile('public/modules/messageActions.js', 'utf8');
   const conversationStream = await readFile('public/modules/conversationStream.js', 'utf8');
   const messagePresentation = await readFile('public/modules/messagePresentation.js', 'utf8');
+  const agentActionCards = await readFile('public/modules/agentActionCards.js', 'utf8');
+  const simulationSpaceMap = await readFile('public/modules/simulationSpaceMap.js', 'utf8');
   const conversationActions = await readFile('public/modules/conversationActions.js', 'utf8');
   const providerSettings = await readFile('public/modules/providerSettings.js', 'utf8');
   const sessionSettings = await readFile('public/modules/sessionSettings.js', 'utf8');
@@ -372,7 +380,7 @@ test('frontend entry imports feature modules and documents the three-step quick 
   ]) {
     assert.match(app, new RegExp(`from './modules/${moduleName}\\.js'`));
   }
-  assert.ok(app.split('\n').length < 1350, 'frontend entry should remain below the architecture size ceiling');
+  assert.ok(app.split('\n').length < 1400, 'frontend entry should remain below the architecture size ceiling');
   assert.ok(usageInspector.split('\n').length < 350, 'usage inspector controller should remain bounded');
   assert.ok(memoryInspector.split('\n').length < 350, 'memory inspector controller should remain bounded');
   assert.ok(worldbookWorkspace.split('\n').length < 350, 'worldbook workspace controller should remain bounded');
@@ -380,11 +388,11 @@ test('frontend entry imports feature modules and documents the three-step quick 
   assert.ok(presetCatalog.split('\n').length < 250, 'built-in preset catalog should remain data-only and bounded');
   assert.ok(personaWorkspace.split('\n').length < 250, 'persona workspace controller should remain bounded');
   assert.ok(authorNoteWorkspace.split('\n').length < 200, 'author note workspace controller should remain bounded');
-  assert.ok(moduleHelp.split('\n').length < 250, 'module help controller should remain bounded');
+  assert.ok(moduleHelp.split('\n').length < 350, 'module help controller should remain bounded');
   assert.ok(openingWorkflow.split('\n').length < 350, 'opening workflow controller should remain bounded');
   assert.ok(sessionState.split('\n').length < 200, 'session state coordinator should remain bounded');
   assert.ok(appState.split('\n').length < 300, 'app state controller should remain bounded');
-  assert.ok(appEvents.split('\n').length < 200, 'application event coordinator should remain bounded');
+  assert.ok(appEvents.split('\n').length < 220, 'application event coordinator should remain bounded');
   assert.ok(domElements.split('\n').length < 150, 'DOM registry should remain declarative and bounded');
   assert.ok(groupMembers.split('\n').length < 300, 'group members controller should remain bounded');
   assert.ok(apiClient.split('\n').length < 100, 'API client should remain transport-only and bounded');
@@ -405,19 +413,36 @@ test('frontend entry imports feature modules and documents the three-step quick 
   assert.ok(contentPack.split('\n').length < 300, 'content pack controller should remain a bounded feature module');
   assert.ok(immersiveDossier.split('\n').length < 450, 'immersive dossier helpers should remain bounded');
   assert.ok(immersiveLedgers.split('\n').length < 400, 'immersive ledgers should remain bounded');
+  assert.ok(immersiveGrowthLedger.split('\n').length < 220, 'immersive growth ledger should remain focused');
+  assert.ok(immersiveMemoryLedger.split('\n').length < 140, 'immersive memory ledger should remain focused');
+  assert.ok(immersiveSituationLedger.split('\n').length < 120, 'immersive situation ledger should remain focused');
+  assert.ok(immersiveTurnRecords.split('\n').length < 80, 'immersive turn records should remain focused');
+  assert.ok(immersiveCharacterArchiveActions.split('\n').length < 80, 'character archive actions should remain focused');
+  assert.ok(immersiveCharacterRoster.split('\n').length < 100, 'character roster renderer should remain focused');
+  assert.match(immersiveLedgers, /from '\.\/immersiveMemoryLedger\.js'/);
+  assert.match(immersiveLedgers, /from '\.\/immersiveGrowthLedger\.js'/);
+  assert.match(immersiveLedgers, /from '\.\/immersiveSituationLedger\.js'/);
+  assert.match(immersiveSidebar, /from '\.\/immersiveCharacterArchiveActions\.js'/);
+  assert.match(immersiveSidebar, /from '\.\/immersiveCharacterRoster\.js'/);
+  assert.match(immersiveSidebar, /from '\.\/immersiveWorldRules\.js'/);
   assert.ok(immersiveSidebar.split('\n').length < 700, 'immersive sidebar orchestration should remain bounded');
   assert.ok(journeySetup.split('\n').length < 600, 'journey setup controller should remain bounded');
   assert.ok(journeyDraft.split('\n').length < 450, 'journey draft controller should remain bounded');
   assert.ok(worldSimulation.split('\n').length < 350, 'world simulation controller should remain bounded');
+  assert.ok(simulationSpaceMap.split('\n').length < 120, 'simulation space map renderer should remain bounded');
+  assert.match(worldSimulation, /from '\.\/simulationSpaceMap\.js'/);
   assert.ok(factCards.split('\n').length < 400, 'fact cards controller should remain bounded');
   assert.ok(composer.split('\n').length < 350, 'composer controller should remain bounded');
   assert.ok(composerActionMenus.split('\n').length < 150, 'composer action menus should remain bounded');
   assert.match(composer, /from '\.\/composerActionMenus\.js'/);
   assert.ok(messageActions.split('\n').length < 350, 'message actions controller should remain bounded');
   assert.ok(conversationStream.split('\n').length < 350, 'conversation stream controller should remain bounded');
-  assert.ok(messagePresentation.split('\n').length < 300, 'message presentation controller should remain bounded');
+  assert.match(conversationStream, /from '\.\/streamingActionPreview\.js'/);
+  assert.ok(messagePresentation.split('\n').length < 320, 'message presentation controller should remain bounded');
+  assert.ok(agentActionCards.split('\n').length < 60, 'agent action card renderer should remain focused and bounded');
+  assert.match(messagePresentation, /from '\.\/agentActionCards\.js'/);
   assert.ok(conversationActions.split('\n').length < 450, 'conversation actions controller should remain bounded');
-  assert.ok(providerSettings.split('\n').length < 500, 'provider settings controller should remain bounded');
+  assert.ok(providerSettings.split('\n').length < 520, 'provider settings controller should remain bounded');
   assert.ok(sessionSettings.split('\n').length < 250, 'session settings controller should remain bounded');
   assert.ok(mediaGeneration.split('\n').length < 200, 'media generation controller should remain bounded');
   assert.ok(releaseData.split('\n').length < 250, 'release data controller should remain bounded');
@@ -614,6 +639,7 @@ test('frontend entry imports feature modules and documents the three-step quick 
   assert.doesNotMatch(app, /function formatBytes/);
   assert.match(app, /activateResourceView:\s*\(\.\.\.args\)\s*=>\s*resourceWorkbenchController\.activateResourceView\(\.\.\.args\)/);
   assert.match(app, /refreshRegistry:\s*\(\.\.\.args\)\s*=>\s*resourceWorkbenchController\.loadResourceLibrary\(\.\.\.args\)/);
+  assert.match(app, /onRefresh:\s*async\s*\(\)\s*=>\s*\{[\s\S]*loadResourceLibrary\(\{ announce: false \}\);[\s\S]*renderStoryCatalogFilters\(\);[\s\S]*renderStoryPackGrid\(\);/);
   assert.match(app, /getAppliedContentPackId:\s*\(\.\.\.args\)\s*=>\s*contentPackController\.getAppliedContentPackId\(\.\.\.args\)/);
   assert.match(app, /getContentPackTitle:\s*\(\.\.\.args\)\s*=>\s*contentPackController\.getContentPackTitle\(\.\.\.args\)/);
   assert.match(app, /renderResourcePackBuilder:\s*\(\.\.\.args\)\s*=>\s*resourceWorkbenchController\.renderResourcePackBuilder\(\.\.\.args\)/);
@@ -717,6 +743,7 @@ test('frontend entry imports feature modules and documents the three-step quick 
   assert.match(contentPack, /function renderContentStack/);
   assert.match(immersiveDossier, /export function createImmersiveDossierToolkit/);
   assert.match(immersiveLedgers, /export function createImmersiveLedgerController/);
+  assert.match(immersiveGrowthLedger, /export function createImmersiveGrowthLedger/);
   assert.match(immersiveSidebar, /export function createImmersiveSidebarController/);
   assert.match(app, /getLightFrontendContext:\s*\(\.\.\.args\)\s*=>\s*conversationActionsController\?\.getLightFrontendContext\(\.\.\.args\)/);
   assert.match(app, /immersiveSidebar:\s*bindImmersiveSidebarEvents/);

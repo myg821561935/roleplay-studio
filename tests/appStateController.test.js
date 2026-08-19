@@ -91,6 +91,7 @@ function createHarness(overrides = {}) {
     simulation: [],
     startup: [],
     statuses: [],
+    sessionChanges: [],
     themes: [],
     usage: []
   };
@@ -136,6 +137,7 @@ function createHarness(overrides = {}) {
     },
     loadUsageStats: overrides.loadUsageStats || ((...args) => calls.usage.push(args)),
     setStatus: (_element, text, tone) => calls.statuses.push([text, tone]),
+    onSessionChanged: (context) => calls.sessionChanges.push(context),
     renderProviderPresetOptions: () => calls.startup.push('provider-presets'),
     renderProviderModelOptions: (model) => calls.startup.push(`provider-model:${model}`),
     bindEvents: () => calls.startup.push('bind-events'),
@@ -301,6 +303,37 @@ test('visual synchronization clears stale selections and applies explicit fallba
   assert.equal(harness.els.randomProtagonistGenre.value, 'xuanhuan');
   assert.deepEqual(harness.calls.themes, []);
   assert.deepEqual(harness.calls.backgrounds, [['', 'cover']]);
+});
+
+test('switching sessions clears stale story UI state before the new story renders', async () => {
+  const current = { id: 'story-b' };
+  const payloads = createPayloads('story-b');
+  const state = {
+    session: { id: 'story-a', settings: {}, memory: {}, messages: [] },
+    contentPacks: [],
+    pendingJourneyDraft: { title: '上一部剧本的开局稿' },
+    pendingQuickReply: { content: '上一部剧本的快捷回复' },
+    targetSpeaker: '上一部剧本的角色',
+    openingError: '上一部剧本的错误',
+    immersiveSidebarTab: '角色档案',
+    conversationActionPending: true,
+    chatStreaming: true
+  };
+  const harness = createHarness({ current, payloads, state });
+
+  assert.equal((await harness.controller.loadState()).status, 'ready');
+  assert.equal(harness.state.session.id, 'story-b');
+  assert.equal(harness.state.pendingJourneyDraft, null);
+  assert.equal(harness.state.pendingQuickReply, null);
+  assert.equal(harness.state.targetSpeaker, '');
+  assert.equal(harness.state.openingError, '');
+  assert.equal(harness.state.immersiveSidebarTab, '');
+  assert.equal(harness.state.conversationActionPending, false);
+  assert.equal(harness.state.chatStreaming, false);
+  assert.deepEqual(harness.calls.sessionChanges, [{
+    previousSessionId: 'story-a',
+    nextSessionId: 'story-b'
+  }]);
 });
 
 test('startup initialization is idempotent and preserves the required orchestration order', async () => {

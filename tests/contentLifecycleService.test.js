@@ -73,6 +73,54 @@ test('project deletion previews impact, requires confirmation, backs up, and det
   assert.equal(result.backup.id, 'backup-project');
 });
 
+test('project deletion can remove linked running sessions after a recoverable backup', async () => {
+  const events = [];
+  const sessions = new Map([['session-a', {
+    id: 'session-a',
+    title: '第一卷',
+    storyProjectId: 'project-a',
+    messages: [{ id: 'm1', content: '待删除正文' }]
+  }]]);
+  const project = {
+    id: 'project-a',
+    title: '月下旧卷',
+    basePackId: 'pack-a',
+    sessionIds: ['session-a']
+  };
+  const harness = createHarness({ sessions, projects: [project] });
+  harness.backupService.createBackup = async ({ reason }) => {
+    events.push(`backup:${reason}`);
+    return { id: 'backup-project-delete' };
+  };
+  harness.sessionService.deleteSession = async (sessionId) => {
+    events.push(`delete-session:${sessionId}`);
+    const session = sessions.get(sessionId);
+    sessions.delete(sessionId);
+    return session ? { id: sessionId, storyProjectId: session.storyProjectId } : null;
+  };
+  harness.storyProjectService.deleteProject = async (projectId) => {
+    events.push(`delete-project:${projectId}`);
+    return project;
+  };
+
+  const service = new ContentLifecycleService(harness);
+  const result = await service.deleteProject('project-a', {
+    confirmDelete: true,
+    deleteSessions: true
+  });
+
+  assert.deepEqual(events, [
+    'backup:before-story-project-delete:project-a',
+    'delete-session:session-a',
+    'delete-project:project-a'
+  ]);
+  assert.equal(sessions.has('session-a'), false);
+  assert.deepEqual(result.deletedSessionIds, ['session-a']);
+  assert.deepEqual(result.detachedSessionIds, []);
+  assert.deepEqual(result.preservedSessionIds, []);
+  assert.equal(result.backup.id, 'backup-project-delete');
+});
+
 test('pack deletion archives projects and turns affected sessions into self-contained snapshots', async () => {
   const events = [];
   const pack = {
@@ -201,7 +249,12 @@ function createHarness({ sessions = new Map(), projects = [], packs = [] } = {})
     sessionService: {
       listSessions: async () => [...sessions.keys()],
       getSession: async (sessionId) => structuredClone(sessions.get(sessionId)),
-      saveSession: async () => {}
+      saveSession: async () => {},
+      deleteSession: async (sessionId) => {
+        const session = sessions.get(sessionId);
+        sessions.delete(sessionId);
+        return session ? { id: sessionId, storyProjectId: session.storyProjectId || '' } : null;
+      }
     },
     storyProjectService: {
       listProjects: async () => [...projectMap.values()].map((project) => structuredClone(project)),

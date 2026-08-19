@@ -41,7 +41,6 @@ const RUNTIME_RULES = [
     pathPatterns: [/(?:^|\.)(?:stscript|slash_commands?|slashcommands?)(?:\.|$)/i],
     textPatterns: [
       /\bstscript\b/i,
-      /\{\{\s*(?:setvar|addvar|incvar|decvar)::/i,
       /(?:^|\s)\/(?:setvar|getvar|addvar|if|elseif|while|run|trigger)(?:\s|$)/im
     ],
     impact: '卡片包含酒馆脚本命令或变量读写，当前宏引擎不会执行这些命令。',
@@ -316,9 +315,18 @@ function inspectMacros(records) {
 
 function isNativeMacro(body) {
   const lower = String(body || '').trim().toLowerCase();
-  if (['user', 'char', 'time', 'date', 'datetime', 'timestamp', 'message_count', 'word_count', 'last_user_message'].includes(lower)) return true;
-  return ['persona_', 'char_', 'random:', 'roll:', 'get_worldbook:', 'pick:', 'template:', 'getvar::', 'globalvar::']
-    .some((prefix) => lower.startsWith(prefix));
+  if ([
+    'user', 'char', 'model', 'slot', 'scenario', 'original', 'charifnotgroup',
+    'time', 'date', 'datetime', 'timestamp', 'trim',
+    'message_count', 'word_count', 'last_user_message', 'lastusermessage',
+    'last_char_message', 'lastcharmessage', 'lastmessage'
+  ].includes(lower)) return true;
+  return [
+    'persona_', 'char_', 'random:', 'random::', 'roll:', 'roll::', 'get_worldbook:',
+    'pick:', 'pick::', 'template:', 'getvar::', 'globalvar::', 'getglobalvar::',
+    'setvar::', 'addvar::', 'incvar::', 'decvar::', 'setglobalvar::',
+    'eval::', 'if::', 'eq::', 'gt::', 'lt::', 'not::', 'stat::', 'attr::', 'xiaobai_state::'
+  ].some((prefix) => lower.startsWith(prefix));
 }
 
 function summarizeRequirements(requirements) {
@@ -382,6 +390,16 @@ function resolveLightFrontendRule(rule, runtime, evidence, templateReport) {
           : '建议导入后复核变量、快捷回复和显示规则。'
       };
     }
+    const isPromptPresetLayout = evidence.every((e) => /^(?:promptLayout|prompts?|prompt_order)\b/i.test(e));
+    if (isPromptPresetLayout && !adapter) {
+      return {
+        ...rule,
+        status: 'degraded',
+        evidence,
+        impact: '已安全映射 Prompt 排版、语音与声明式宏；原扩展外部脚本和生命周期不会执行。',
+        recommendation: '可在兼容报告中复核变量、快捷回复和显示规则。'
+      };
+    }
   }
   if (rule.id === 'executable-extension') {
     const sandboxTransforms = runtime.regexTransforms.filter((item) => item.requiresSandbox && item.enabled !== false);
@@ -439,6 +457,16 @@ function resolveLightFrontendRule(rule, runtime, evidence, templateReport) {
     };
   }
   if (rule.id === 'stscript') {
+    const hasLoopsOrComplexCommands = evidence.some((item) => /\/(?:while|run|trigger|eval)\b/i.test(item));
+    if (!hasLoopsOrComplexCommands) {
+      return {
+        ...rule,
+        status: 'degraded',
+        evidence,
+        impact: '已将声明式变量读写与宏命令转换为白名单变量操作；高级循环与未受控控制流保持禁用。',
+        recommendation: '可在兼容报告中复核变量、快捷回复和显示规则。'
+      };
+    }
     const stateActions = runtime.quickReplies.filter((item) => item.actionType === 'mvu-patch').length;
     if (stateActions) {
       return {

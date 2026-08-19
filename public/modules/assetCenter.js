@@ -13,6 +13,58 @@ const KIND_LABELS = {
 };
 
 const VIEW_STORAGE_KEY = 'localRoleplayAssetCenterView';
+const PAGE_SIZES = new Set([12, 24, 48]);
+
+const FOLDER_MATCHERS = {
+  favorite: (item) => item.favorite === true,
+  active: (item) => hasCollectionLabel(item, /正在使用|当前使用|active|current/iu),
+  frequent: (item) => hasCollectionLabel(item, /常用资源|常用|frequent/iu),
+  memo: (item) => hasCollectionLabel(item, /灵感备忘|灵感|memo|inspiration/iu)
+};
+
+const GENRE_PATTERNS = [
+  { genre: 'xianxia', label: '仙侠', pattern: /修仙|仙侠|仙途|仙宗|飞升|灵根|金丹|元婴|宗门|道侣|炉鼎|灵气|渡劫|境界|功法|法宝/u },
+  { genre: 'xuanhuan', label: '玄幻', pattern: /玄幻|武道|斗气|魔法|异界|神荒|江湖|武侠/u },
+  { genre: 'lingyi', label: '灵异', pattern: /灵异|恐怖|诡异|怪谈|鬼怪|鬼物|鬼魂|阴阳|禁忌|凶宅|民俗|邪祟|诅咒/u },
+  { genre: 'mingmo', label: '明末', pattern: /明末|崇祯|大明|辽东|密诏|饷银|东林/u },
+  { genre: 'yingxiongzhi', label: '英雄志', pattern: /英雄志|怒苍|正统军|五朝旧账/u },
+  { genre: 'modern', label: '现代', pattern: /现代|都市|校园|职场|悬疑|推理/u }
+];
+
+function inferResourceGenre(item) {
+  const raw = item.raw || {};
+  const explicit = raw.genre
+    || raw.metadata?.genre
+    || item.payload?.genre
+    || item.source?.genre
+    || (item.kind === 'pack' ? raw.memory?.worldState?.flags?.genre : '')
+    || (item.kind === 'pack' ? raw.resourceManifest?.customBaseline?.genre : '')
+    || (item.kind === 'pack' ? raw.visualPackId : '')
+    || '';
+  if (explicit && GENRE_PATTERNS.some((entry) => entry.genre === explicit)) return explicit;
+
+  const weightedFields = [
+    { values: [item.title], weight: 4 },
+    { values: item.tags || [], weight: 3 },
+    { values: item.collections || [], weight: 3 },
+    { values: [item.summary], weight: 1 }
+  ];
+  const scores = new Map();
+  for (const field of weightedFields) {
+    const text = field.values.filter(Boolean).join(' ');
+    if (!text.trim()) continue;
+    for (const { genre, pattern } of GENRE_PATTERNS) {
+      const matches = text.match(new RegExp(pattern.source, 'gu'));
+      if (matches) scores.set(genre, (scores.get(genre) || 0) + matches.length * field.weight);
+    }
+  }
+  if (!scores.size) return '';
+  return [...scores.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function genreLabel(genre) {
+  return GENRE_PATTERNS.find((g) => g.genre === genre)?.label || '';
+}
 
 export function createAssetCenterController({
   root,
@@ -21,6 +73,7 @@ export function createAssetCenterController({
   onRefresh,
   onImport,
   onUseAsset,
+  onQuickLaunch,
   onOpenComposer,
   onReevaluateAsset,
   onLoadRevisions,
@@ -44,11 +97,18 @@ export function createAssetCenterController({
     query: root.querySelector('#asset-center-query'),
     sort: root.querySelector('#asset-center-sort'),
     source: root.querySelector('#asset-center-source'),
+    genre: root.querySelector('#asset-center-genre'),
+    sourceOptions: root.querySelector('#asset-source-checkboxes'),
+    genreOptions: root.querySelector('#asset-genre-pills'),
+    folders: root.querySelector('#asset-favorite-collections'),
     organize: root.querySelector('#asset-center-organize'),
+    sidebarImport: root.querySelector('#asset-sidebar-import-btn'),
     categories: root.querySelector('#asset-center-categories'),
     grid: root.querySelector('#asset-center-grid'),
     detail: root.querySelector('#asset-center-detail'),
     resultCount: root.querySelector('#asset-center-result-count'),
+    pagination: root.querySelector('#asset-center-pagination'),
+    pageSize: root.querySelector('#asset-page-size'),
     status: root.querySelector('#asset-center-status'),
     batchBar: root.querySelector('#asset-center-batch-bar'),
     batchCount: root.querySelector('#asset-batch-count'),
@@ -60,18 +120,28 @@ export function createAssetCenterController({
     batchClear: root.querySelector('#asset-batch-clear'),
     viewButtons: Array.from(root.querySelectorAll('[data-asset-view]')),
     metricAll: root.querySelector('#asset-metric-all'),
+    metricAdapted: root.querySelector('#asset-metric-adapted'),
+    metricPending: root.querySelector('#asset-metric-pending'),
     metricCharacters: root.querySelector('#asset-metric-characters'),
     metricWorldbooks: root.querySelector('#asset-metric-worldbooks'),
-    metricPrompts: root.querySelector('#asset-metric-prompts')
+    metricPrompts: root.querySelector('#asset-metric-prompts'),
+    metricPacks: root.querySelector('#asset-metric-packs')
   };
 
   const localState = {
     kind: 'all',
     query: '',
     source: '',
+    genre: '',
+    folder: '',
     sort: 'updated',
     view: localStorage.getItem(VIEW_STORAGE_KEY) === 'list' ? 'list' : 'grid',
+    page: 1,
+    pageSize: PAGE_SIZES.has(Number(root.querySelector('#asset-page-size')?.value))
+      ? Number(root.querySelector('#asset-page-size')?.value)
+      : 24,
     selectedKey: '',
+    detailOpen: true,
     organizeMode: false,
     selectedKeys: new Set(),
     revisionHistory: new Map(),
@@ -93,15 +163,55 @@ export function createAssetCenterController({
     });
     ui.query?.addEventListener('input', () => {
       localState.query = ui.query.value;
-      render();
+      resetPageAndRender();
     });
     ui.sort?.addEventListener('change', () => {
       localState.sort = ui.sort.value;
-      render();
+      resetPageAndRender();
     });
     ui.source?.addEventListener('change', () => {
       localState.source = ui.source.value;
+      resetPageAndRender();
+    });
+    ui.genre?.addEventListener('change', () => {
+      localState.genre = ui.genre.value;
+      resetPageAndRender();
+    });
+    ui.sourceOptions?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-asset-source]');
+      if (!button) return;
+      localState.source = button.dataset.assetSource || '';
+      resetPageAndRender();
+    });
+    ui.genreOptions?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-asset-genre]');
+      if (!button) return;
+      localState.genre = button.dataset.assetGenre || '';
+      resetPageAndRender();
+    });
+    ui.folders?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-folder]');
+      if (!button) return;
+      const folder = button.dataset.folder || '';
+      localState.folder = localState.folder === folder ? '' : folder;
+      resetPageAndRender();
+    });
+    ui.pageSize?.addEventListener('change', () => {
+      const nextSize = Number(ui.pageSize.value);
+      localState.pageSize = PAGE_SIZES.has(nextSize) ? nextSize : 24;
+      resetPageAndRender();
+    });
+    ui.pagination?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-asset-page]');
+      if (!button || button.disabled) return;
+      localState.page = Math.max(1, Number(button.dataset.assetPage || 1));
       render();
+      ui.grid?.scrollTo?.({ top: 0, behavior: 'smooth' });
+    });
+    ui.sidebarImport?.addEventListener('click', () => {
+      if (!ui.importMenu) return;
+      ui.importMenu.open = true;
+      ui.importMenu.querySelector('[data-asset-import-kind]')?.focus();
     });
     ui.organize?.addEventListener('click', toggleOrganizeMode);
     ui.batchApply?.addEventListener('click', applyBatchMetadata);
@@ -112,7 +222,7 @@ export function createAssetCenterController({
       const button = event.target.closest('[data-asset-kind]');
       if (!button) return;
       localState.kind = button.dataset.assetKind || 'all';
-      render();
+      resetPageAndRender();
     });
     ui.grid?.addEventListener('click', (event) => {
       const card = event.target.closest('[data-asset-key]');
@@ -127,6 +237,7 @@ export function createAssetCenterController({
         return;
       }
       localState.selectedKey = card.dataset.assetKey || '';
+      localState.detailOpen = true;
       render();
     });
     ui.detail?.addEventListener('click', handleDetailClick);
@@ -136,6 +247,11 @@ export function createAssetCenterController({
     root.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') close();
     });
+  }
+
+  function resetPageAndRender() {
+    localState.page = 1;
+    render();
   }
 
   async function open() {
@@ -173,17 +289,27 @@ export function createAssetCenterController({
     localState.selectedKeys = new Set([...localState.selectedKeys].filter((key) => availableResourceKeys.has(key)));
     renderMetrics(catalog);
     renderSources(catalog);
+    renderGenres(catalog);
     renderCategories(catalog);
+    renderFolders(catalog);
     renderViewState();
 
     const filtered = filterAssetCatalog(catalog, localState);
-    if (!filtered.some((item) => item.key === localState.selectedKey)) {
-      localState.selectedKey = filtered[0]?.key || '';
+    const pageData = paginateAssetCatalog(filtered, localState.page, localState.pageSize);
+    localState.page = pageData.page;
+    if (!pageData.items.some((item) => item.key === localState.selectedKey)) {
+      localState.selectedKey = pageData.items[0]?.key || '';
     }
-    renderGrid(filtered);
-    renderDetail(filtered.find((item) => item.key === localState.selectedKey));
+    renderGrid(pageData.items);
+    renderDetail(localState.detailOpen
+      ? pageData.items.find((item) => item.key === localState.selectedKey)
+      : undefined);
+    renderPagination(pageData);
     renderBatchState();
-    if (ui.resultCount) ui.resultCount.textContent = `${filtered.length} 项`;
+    if (ui.resultCount) {
+      const first = filtered.length ? pageData.start + 1 : 0;
+      ui.resultCount.textContent = `第 ${first}–${pageData.end} 项 · 共 ${filtered.length} 项`;
+    }
   }
 
   function getCatalog() {
@@ -191,11 +317,17 @@ export function createAssetCenterController({
   }
 
   function renderMetrics(catalog) {
-    const count = (kind) => catalog.filter((item) => item.kind === kind).length;
-    if (ui.metricAll) ui.metricAll.textContent = catalog.length;
-    if (ui.metricCharacters) ui.metricCharacters.textContent = count('character');
-    if (ui.metricWorldbooks) ui.metricWorldbooks.textContent = count('worldbook');
-    if (ui.metricPrompts) ui.metricPrompts.textContent = count('prompt');
+    const total = catalog.length;
+    const goodCount = catalog.filter((item) => !item.securityReviewRequired && Number(item.score || 0) >= 80).length;
+    const reviewCount = catalog.filter((item) => item.securityReviewRequired || Number(item.score || 0) < 80).length;
+
+    if (ui.metricAll) ui.metricAll.textContent = String(total);
+    if (ui.metricAdapted) ui.metricAdapted.textContent = String(goodCount);
+    if (ui.metricPending) ui.metricPending.textContent = String(reviewCount);
+    if (ui.metricCharacters) ui.metricCharacters.textContent = String(catalog.filter((item) => item.kind === 'character').length);
+    if (ui.metricWorldbooks) ui.metricWorldbooks.textContent = String(catalog.filter((item) => item.kind === 'worldbook').length);
+    if (ui.metricPrompts) ui.metricPrompts.textContent = String(catalog.filter((item) => item.kind === 'prompt').length);
+    if (ui.metricPacks) ui.metricPacks.textContent = String(catalog.filter((item) => item.kind === 'pack').length);
   }
 
   function renderSources(catalog) {
@@ -207,6 +339,93 @@ export function createAssetCenterController({
     sources.forEach((source) => ui.source.append(createOption(source, source)));
     localState.source = sources.includes(current) ? current : '';
     ui.source.value = localState.source;
+    if (ui.sourceOptions) {
+      ui.sourceOptions.replaceChildren(
+        createFilterButton('全部来源', '', localState.source, 'asset-source-option', 'assetSource'),
+        ...sources.map((source) => createFilterButton(
+          `${source}（${catalog.filter((item) => item.sourceLabel === source).length}）`,
+          source,
+          localState.source,
+          'asset-source-option',
+          'assetSource'
+        ))
+      );
+    }
+  }
+
+  function renderGenres(catalog) {
+    if (!ui.genre) return;
+    const current = localState.genre;
+    const genreCounts = new Map();
+    catalog.forEach((item) => {
+      if (!item.genre) return;
+      genreCounts.set(item.genre, (genreCounts.get(item.genre) || 0) + 1);
+    });
+    const genres = GENRE_PATTERNS
+      .filter((g) => genreCounts.has(g.genre))
+      .sort((a, b) => (genreCounts.get(b.genre) || 0) - (genreCounts.get(a.genre) || 0));
+    ui.genre.innerHTML = '';
+    ui.genre.append(createOption('', '全部题材'));
+    genres.forEach((g) => ui.genre.append(createOption(g.genre, `${g.label}（${genreCounts.get(g.genre)}）`)));
+    localState.genre = genreCounts.has(current) ? current : '';
+    ui.genre.value = localState.genre;
+    if (ui.genreOptions) {
+      ui.genreOptions.replaceChildren(
+        createFilterButton('全部', '', localState.genre, 'asset-genre-pill', 'assetGenre'),
+        ...genres.map((genre) => createFilterButton(
+          `${genre.label} ${genreCounts.get(genre.genre)}`,
+          genre.genre,
+          localState.genre,
+          'asset-genre-pill',
+          'assetGenre'
+        ))
+      );
+    }
+  }
+
+  function renderFolders(catalog) {
+    if (!ui.folders) return;
+    ui.folders.querySelectorAll('[data-folder]').forEach((button) => {
+      const folder = button.dataset.folder || '';
+      const matcher = FOLDER_MATCHERS[folder];
+      const count = typeof matcher === 'function' ? catalog.filter(matcher).length : 0;
+      button.classList.toggle('active', localState.folder === folder);
+      button.setAttribute('aria-pressed', String(localState.folder === folder));
+      const badge = button.querySelector('.folder-count');
+      if (badge) badge.textContent = String(count);
+    });
+  }
+
+  function renderPagination({ page, totalPages }) {
+    if (!ui.pagination) return;
+    ui.pagination.replaceChildren();
+    if (totalPages <= 1) return;
+    const controls = document.createElement('div');
+    controls.className = 'pagination-controls';
+    controls.append(createPageButton('‹', page - 1, page === 1, false));
+    paginationWindow(page, totalPages).forEach((value) => {
+      if (value === '…') {
+        const ellipsis = document.createElement('span');
+        ellipsis.className = 'page-ellipsis';
+        ellipsis.textContent = value;
+        controls.append(ellipsis);
+        return;
+      }
+      controls.append(createPageButton(String(value), value, false, value === page));
+    });
+    controls.append(createPageButton('›', page + 1, page === totalPages, false));
+    ui.pagination.append(controls);
+  }
+
+  function createPageButton(label, page, disabled, active) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `page-btn${active ? ' active' : ''}`;
+    button.dataset.assetPage = String(page);
+    button.disabled = disabled;
+    button.textContent = label;
+    if (active) button.setAttribute('aria-current', 'page');
+    return button;
   }
 
   function renderCategories(catalog) {
@@ -234,16 +453,16 @@ export function createAssetCenterController({
     if (!ui.grid) return;
     ui.grid.innerHTML = '';
     if (!items.length) {
-      const empty = document.createElement('div');
-      empty.className = 'asset-center-empty';
-      empty.innerHTML = '<strong>没有匹配的素材</strong><span>调整筛选条件，或导入新的角色卡、世界书与预设。</span>';
-      ui.grid.append(empty);
+      ui.grid.innerHTML = '<div class="asset-center-empty">当前筛选下没有匹配的叙事资产。</div>';
       return;
     }
-    items.forEach((item) => ui.grid.append(createAssetCard(item, item.key === localState.selectedKey, {
+
+    const fragment = document.createDocumentFragment();
+    items.forEach((item) => fragment.append(createAssetCard(item, item.key === localState.selectedKey, {
       organizeMode: localState.organizeMode,
       batchSelected: localState.selectedKeys.has(item.key)
     })));
+    ui.grid.append(fragment);
   }
 
   function renderDetail(item) {
@@ -254,39 +473,99 @@ export function createAssetCenterController({
       return;
     }
 
+    // 抽屉顶栏关闭按钮
+    const topRow = document.createElement('div');
+    topRow.className = 'asset-detail-top-row';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'asset-detail-close-btn';
+    closeBtn.innerHTML = '✕ 关闭';
+    closeBtn.onclick = () => {
+      localState.detailOpen = false;
+      render();
+    };
+    topRow.append(closeBtn);
+    ui.detail.append(topRow);
+
+    // 头部卡片 (大图 + 标题 + 星标 + 原生适配 + 简介)
     const header = document.createElement('header');
     header.className = 'asset-detail-header';
+
+    const visual = createDetailVisual(item);
+    const infoBox = document.createElement('div');
+    infoBox.className = 'asset-detail-header-info';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'asset-detail-title-row';
+    const title = document.createElement('h3');
+    title.className = 'asset-detail-title';
+    title.textContent = item.title;
+
+    const favBtn = document.createElement('button');
+    favBtn.type = 'button';
+    favBtn.className = `asset-detail-fav-btn ${item.favorite ? 'is-fav' : ''}`;
+    favBtn.dataset.assetAction = 'favorite';
+    favBtn.innerHTML = item.favorite ? '★' : '☆';
+    favBtn.title = item.favorite ? '取消收藏' : '收藏';
+
+    titleRow.append(title, favBtn);
+
+    const badgeRow = document.createElement('div');
+    badgeRow.className = 'asset-detail-badge-row';
     const kind = document.createElement('span');
     kind.className = `asset-kind-badge asset-kind-${item.kind}`;
     kind.textContent = KIND_LABELS[item.kind] || '素材';
-    const title = document.createElement('h3');
-    title.textContent = item.title;
-    const summary = document.createElement('p');
-    summary.textContent = item.summary || '未提供摘要';
-    header.append(kind, title, summary);
 
-    const visual = createDetailVisual(item);
-    const metrics = createMetricsPanel(item);
-    const source = createSourcePanel(item);
-    const characterProfile = item.kind === 'character' ? createCharacterProfilePanel(item) : null;
-    const contentManager = item.kind === 'worldbook'
+    const fit = getAssetFit(item);
+    const nativeBadge = document.createElement('span');
+    nativeBadge.className = `asset-native-badge is-${fit.tone}`;
+    nativeBadge.textContent = `● ${fit.label}`;
+
+    badgeRow.append(kind, nativeBadge);
+
+    const summary = document.createElement('p');
+    summary.className = 'asset-detail-summary';
+    summary.textContent = item.summary || `${KIND_LABELS[item.kind] || '素材'}尚未整理摘要，可在馆藏资料中补充。`;
+
+    infoBox.append(titleRow, badgeRow, summary);
+
+    const heroWrap = document.createElement('div');
+    heroWrap.className = 'asset-detail-hero-wrap';
+    if (visual) heroWrap.append(visual);
+    heroWrap.append(infoBox);
+    header.append(heroWrap);
+
+    const catalog = getCatalog();
+    const typeManagement = item.kind === 'worldbook'
       ? createWorldbookManagementPanel(item)
       : item.kind === 'prompt'
         ? createPromptManagementPanel(item)
         : null;
-    const revisions = item.kind === 'pack'
-      ? null
-      : createRevisionHistoryPanel(
-        item,
-        localState.revisionHistory.get(item.id),
-        localState.revisionLoading.has(item.id)
-      );
-    const sameTitleVersions = item.versionCount > 1 ? createVersionPanel(item, getCatalog()) : null;
-    const evaluation = createEvaluationPanel(item);
-    const preview = createPreviewPanel(item);
-    const editor = item.kind === 'pack' ? null : createMetadataEditor(item);
+    const versionFamily = item.kind !== 'pack' && item.versionCount > 1
+      ? createVersionPanel(item, catalog)
+      : null;
+    const revisionHistory = item.kind !== 'pack'
+      ? createRevisionHistoryPanel(
+          item,
+          localState.revisionHistory.get(item.id),
+          localState.revisionLoading.has(item.id)
+        )
+      : null;
+    const metadataEditor = item.kind !== 'pack' ? createMetadataEditor(item) : null;
     const actions = createDetailActions(item);
-    [header, visual, metrics, characterProfile, contentManager, source, revisions, sameTitleVersions, evaluation, preview, editor, actions]
+
+    [
+      header,
+      createEvaluationPanel(item),
+      createMetricsPanel(item),
+      createPreviewPanel(item),
+      typeManagement,
+      versionFamily,
+      revisionHistory,
+      createSourcePanel(item),
+      metadataEditor,
+      actions
+    ]
       .filter(Boolean)
       .forEach((node) => ui.detail.append(node));
   }
@@ -329,6 +608,11 @@ export function createAssetCenterController({
       return;
     }
 
+    if (action === 'quick-launch') {
+      close();
+      onQuickLaunch?.(item);
+      return;
+    }
     if (action === 'use') {
       close();
       onUseAsset?.(item);
@@ -601,6 +885,7 @@ export function buildAssetCatalog(resources = [], packs = []) {
     item.companionWorldbookCount = item.kind === 'character'
       ? batch.filter((entry) => entry.kind === 'worldbook').length
       : 0;
+    item.genre = inferResourceGenre(item);
   });
   return catalog;
 }
@@ -609,9 +894,13 @@ export function filterAssetCatalog(catalog = [], filters = {}) {
   const kind = String(filters.kind || 'all');
   const needle = String(filters.query || '').trim().toLowerCase();
   const source = String(filters.source || '');
+  const genre = String(filters.genre || '');
+  const folder = String(filters.folder || '');
   const filtered = catalog.filter((item) => {
     if (kind !== 'all' && item.kind !== kind) return false;
     if (source && item.sourceLabel !== source) return false;
+    if (genre && item.genre !== genre) return false;
+    if (folder && FOLDER_MATCHERS[folder] && !FOLDER_MATCHERS[folder](item)) return false;
     if (!needle) return true;
     return [item.title, item.summary, item.sourceLabel, item.author, ...(item.tags || []), ...(item.collections || [])]
       .some((value) => String(value || '').toLowerCase().includes(needle));
@@ -625,6 +914,51 @@ export function filterAssetCatalog(catalog = [], filters = {}) {
     if (filters.sort === 'versions') return right.versionCount - left.versionCount || localeSort(left.title, right.title);
     return String(right.updatedAt || '').localeCompare(String(left.updatedAt || ''));
   });
+}
+
+export function paginateAssetCatalog(items = [], requestedPage = 1, requestedPageSize = 24) {
+  const pageSize = PAGE_SIZES.has(Number(requestedPageSize)) ? Number(requestedPageSize) : 24;
+  const totalItems = Array.isArray(items) ? items.length : 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const page = Math.min(totalPages, Math.max(1, Number(requestedPage) || 1));
+  const start = (page - 1) * pageSize;
+  const end = Math.min(totalItems, start + pageSize);
+  return {
+    items: (Array.isArray(items) ? items : []).slice(start, end),
+    page,
+    pageSize,
+    start,
+    end,
+    totalItems,
+    totalPages
+  };
+}
+
+function paginationWindow(page, totalPages) {
+  if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  const values = new Set([1, totalPages, page - 1, page, page + 1]);
+  const pages = [...values].filter((value) => value >= 1 && value <= totalPages).sort((a, b) => a - b);
+  const result = [];
+  pages.forEach((value, index) => {
+    if (index && value - pages[index - 1] > 1) result.push('…');
+    result.push(value);
+  });
+  return result;
+}
+
+function hasCollectionLabel(item, pattern) {
+  return (Array.isArray(item?.collections) ? item.collections : [])
+    .some((collection) => pattern.test(String(collection || '')));
+}
+
+function createFilterButton(label, value, current, className, datasetKey) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `${className}${value === current ? ' active' : ''}`;
+  button.dataset[datasetKey] = value;
+  button.setAttribute('aria-pressed', String(value === current));
+  button.textContent = label;
+  return button;
 }
 
 function normalizeCatalogResource(resource = {}) {
@@ -657,8 +991,8 @@ function normalizeCatalogResource(resource = {}) {
 }
 
 function normalizeCatalogPack(pack = {}) {
-  const worldBookCount = Number(pack.worldBookCount ?? pack.stats?.worldBookCount ?? pack.resourceManifest?.composition?.totalEntries ?? 0);
-  const characterCount = Number(pack.characterCount ?? pack.stats?.characterCount ?? (pack.characterCard ? 1 : 0));
+  const worldBookCount = Number(pack.counts?.worldBook ?? pack.worldBookCount ?? pack.stats?.worldBookCount ?? pack.resourceManifest?.composition?.totalEntries ?? 0);
+  const characterCount = Number(pack.counts?.characterPresets ?? pack.characterCount ?? pack.stats?.characterCount ?? (pack.characterCard ? 1 : 0));
   return {
     key: `pack:${pack.id}`,
     id: pack.id,
@@ -697,6 +1031,7 @@ function createAssetCard(item, selected, { organizeMode = false, batchSelected =
     ? `${batchSelected ? '取消选择' : '选择'} ${item.title}`
     : `查看 ${item.title}`);
 
+  // 1. 顶部大封面插画
   const cover = document.createElement('div');
   cover.className = 'asset-card-cover';
   const portrait = getPortraitUrl(item);
@@ -707,77 +1042,66 @@ function createAssetCard(item, selected, { organizeMode = false, batchSelected =
     image.loading = 'lazy';
     cover.append(image);
   } else {
+    const coverArt = document.createElement('div');
+    coverArt.className = 'asset-card-cover-art-bg';
     const monogram = document.createElement('span');
     monogram.textContent = item.kind === 'worldbook' ? '书' : item.kind === 'prompt' ? '令' : item.kind === 'pack' ? '卷' : String(item.title || '角').slice(0, 1);
-    cover.append(monogram);
+    coverArt.append(monogram);
+    cover.append(coverArt);
   }
+
+  // 左上角类型徽章
   const coverBadge = document.createElement('span');
   coverBadge.className = 'asset-card-kind';
   coverBadge.textContent = KIND_LABELS[item.kind] || '素材';
   cover.append(coverBadge);
-  if (item.favorite) {
-    const favorite = document.createElement('span');
-    favorite.className = 'asset-card-favorite';
-    favorite.textContent = '★';
-    favorite.title = '已收藏';
-    cover.append(favorite);
-  }
-  if (organizeMode && item.kind !== 'pack') {
-    const check = document.createElement('span');
-    check.className = 'asset-card-check';
-    check.textContent = batchSelected ? '✓' : '';
-    check.setAttribute('aria-hidden', 'true');
-    cover.append(check);
-  }
 
+  // 右上角状态标 (选中对勾或三点)
+  const cornerMark = document.createElement('div');
+  cornerMark.className = 'asset-card-corner-mark';
+  if (selected) {
+    cornerMark.innerHTML = '<span class="corner-check-badge">✓</span>';
+  } else {
+    cornerMark.innerHTML = '<span class="corner-more-dots">···</span>';
+  }
+  cover.append(cornerMark);
+
+  // 2. 卡片底部信息
   const body = document.createElement('div');
   body.className = 'asset-card-body';
+
   const heading = document.createElement('div');
   heading.className = 'asset-card-heading';
   const title = document.createElement('strong');
+  title.className = 'asset-card-title';
   title.textContent = item.title;
-  const score = document.createElement('span');
-  score.className = scoreClass(item.score);
-  score.textContent = `${item.score}分`;
-  heading.append(title, score);
-  const summary = document.createElement('p');
-  summary.textContent = item.summary || '未提供摘要';
-  const metrics = document.createElement('div');
-  metrics.className = 'asset-card-metrics';
-  getMetricLabels(item).forEach((label) => {
-    const metric = document.createElement('span');
-    metric.textContent = label;
-    metrics.append(metric);
-  });
-  const meta = document.createElement('small');
-  meta.textContent = [item.sourceLabel, item.author, item.format].filter(Boolean).join(' · ');
-  if (item.versionCount > 1) {
-    const versionBadge = document.createElement('span');
-    versionBadge.className = 'asset-card-version';
-    versionBadge.textContent = `${item.versionCount} 个同名素材`;
-    metrics.append(versionBadge);
-  }
-  if (item.revisionCount > 1) {
-    const revisionBadge = document.createElement('span');
-    revisionBadge.className = 'asset-card-version';
-    revisionBadge.textContent = `修订 ${item.revisionCount}`;
-    metrics.append(revisionBadge);
-  }
-  if (item.securityReviewRequired) {
-    const reviewBadge = document.createElement('span');
-    reviewBadge.className = 'asset-card-version is-review';
-    reviewBadge.textContent = '脚本待复核';
-    metrics.append(reviewBadge);
-  }
-  if (item.kind === 'pack') {
-    const audit = getPackCompatibilityAudit(item.raw);
-    const auditBadge = document.createElement('span');
-    auditBadge.className = `asset-card-version compatibility is-${audit.tone}`;
-    auditBadge.textContent = audit.label;
-    auditBadge.title = audit.reason;
-    metrics.append(auditBadge);
-  }
-  body.append(heading, summary, metrics, meta);
+  heading.append(title);
+
+  // 适配状态行：只展示真实评定，不把未知素材伪装成 100% 原生适配。
+  const fit = getAssetFit(item);
+  const nativeRow = document.createElement('div');
+  nativeRow.className = `asset-card-native-row is-${fit.tone}`;
+  const nativeDot = document.createElement('span');
+  nativeDot.className = 'native-dot';
+  nativeDot.textContent = '●';
+  nativeRow.append(nativeDot, document.createTextNode(` ${fit.label}`));
+
+  // 来源与版本
+  const metaSource = document.createElement('div');
+  metaSource.className = 'asset-card-meta-line';
+  metaSource.textContent = `来源：${item.sourceLabel || '本地导入'}`;
+
+  const metaVersion = document.createElement('div');
+  metaVersion.className = 'asset-card-meta-line';
+  metaVersion.textContent = `版本：${item.source?.version || item.payload?.manifest?.version || '未记录'}`;
+
+  // 标签
+  const metaTags = document.createElement('div');
+  metaTags.className = 'asset-card-meta-line asset-card-tags';
+  const tagList = item.tags && item.tags.length ? item.tags : [];
+  metaTags.textContent = tagList.length ? `标签：${tagList.slice(0, 3).join(' · ')}` : '标签：未整理';
+
+  body.append(heading, nativeRow, metaSource, metaVersion, metaTags);
   card.append(cover, body);
   return card;
 }
@@ -1047,30 +1371,7 @@ function openPromptResourceEditor(item, onDone) {
   queueMicrotask(() => inputs.title.focus());
 }
 
-function createCharacterProfilePanel(item) {
-  const section = createDetailSection('角色档案');
-  section.classList.add('asset-character-profile');
-  const list = document.createElement('dl');
-  list.className = 'asset-character-profile-grid';
-  const payload = item.payload || {};
-  const rows = [
-    ['身份定位', firstText(payload.role, payload.description, '未记录')],
-    ['人格核心', firstText(payload.personality, '未记录')],
-    ['当前场景', firstText(payload.scenario, '未记录')],
-    ['开场数量', String(payload.alternateGreetings?.length || (payload.firstMessage ? 1 : 0))],
-    ['随卡世界书', `${item.companionWorldbookCount || 0} 份`],
-    ['卡片规范', firstText(payload.sourceSpec, item.format, '未记录')]
-  ];
-  rows.forEach(([label, value]) => {
-    const dt = document.createElement('dt');
-    dt.textContent = label;
-    const dd = document.createElement('dd');
-    dd.textContent = truncate(value, 180);
-    list.append(dt, dd);
-  });
-  section.append(list);
-  return section;
-}
+
 
 function createRevisionHistoryPanel(item, history, loading = false) {
   const section = createDetailSection(`版本记录 · ${item.revisionCount || 1}`);
@@ -1160,7 +1461,8 @@ function createEvaluationPanel(item) {
   const score = document.createElement('div');
   score.className = 'asset-evaluation-score';
   const scoreValue = document.createElement('strong');
-  scoreValue.textContent = Number(diagnostics.score || item.score || 0);
+  const assessedScore = Number(diagnostics.score || item.score || 0);
+  scoreValue.textContent = assessedScore > 0 ? String(assessedScore) : '—';
   const scoreGrade = document.createElement('span');
   const audit = item.kind === 'pack' ? getPackCompatibilityAudit(item.raw) : null;
   scoreGrade.textContent = audit?.label || diagnostics.grade || '未评定';
@@ -1275,20 +1577,20 @@ function createMetadataEditor(item) {
 function createDetailActions(item) {
   const footer = document.createElement('footer');
   footer.className = 'asset-detail-actions';
-  if (item.kind !== 'pack') {
-    footer.append(createActionButton(item.favorite ? '取消收藏' : '收藏', 'favorite', 'asset-secondary-button'));
-    footer.append(createActionButton('重新评估', 'reevaluate', 'asset-secondary-button'));
-  }
-  if (item.kind === 'pack') {
-    const audit = getPackCompatibilityAudit(item.raw);
-    const actionLabel = compatibilityActionLabel(audit);
-    if (actionLabel) {
-      footer.append(createActionButton(actionLabel, 'compatibility', `asset-secondary-button compatibility is-${audit.tone}`));
-    }
-  }
-  footer.append(createActionButton(item.kind === 'prompt' ? '打开剧本工坊' : item.kind === 'pack' ? '在书架查看' : '用于新剧本', 'use', 'asset-primary-button'));
-  footer.append(createActionButton('高级拼装', 'compose', 'asset-secondary-button'));
-  footer.append(createActionButton('移除', 'delete', 'asset-danger-button'));
+
+  // 1. 快捷启航 (主按钮，深墨绿)
+  const quickBtn = createActionButton('🧭 快捷启航', 'quick-launch', 'asset-bottom-primary-btn');
+  quickBtn.title = '一键由此素材进入创作对话';
+
+  // 2. 用于新剧本 (次按钮)
+  const useBtn = createActionButton('📖 用于新剧本', 'use', 'asset-bottom-secondary-btn');
+  useBtn.title = '创建包含此素材的新故事';
+
+  // 3. 高级拼装 (辅助按钮)
+  const composeBtn = createActionButton('🧩 高级拼装', 'compose', 'asset-bottom-secondary-btn');
+  composeBtn.title = '在剧本工坊中混合搭配多个素材';
+
+  footer.append(quickBtn, useBtn, composeBtn);
   return footer;
 }
 
@@ -1347,7 +1649,7 @@ function getMetricEntries(item) {
   }
   if (item.kind === 'character') {
     return [
-      ['评分', String(item.score)],
+      ['评分', item.score > 0 ? String(item.score) : '未评定'],
       ['标签', String(item.tags.length)],
       ['开场', String(item.payload.alternateGreetings?.length || (item.payload.firstMessage ? 1 : 0))],
       ['Token', formatTokenCount(item.estimatedTokens)]
@@ -1357,20 +1659,22 @@ function getMetricEntries(item) {
     return [
       ['世界书', String(stats.entryCount || 0)],
       ['角色', String(stats.characterCount || 0)],
-      ['版本', item.source?.version || item.payload.manifest?.version || '1.0.0'],
-      ['状态', item.diagnostics?.grade || '可用']
+      ['版本', item.source?.version || item.payload.manifest?.version || '未记录'],
+      ['状态', item.diagnostics?.grade || '未评定']
     ];
   }
   return [
-    ['评分', String(item.score)],
+    ['评分', item.score > 0 ? String(item.score) : '未评定'],
     ['Token', formatTokenCount(item.estimatedTokens)],
     ['标签', String(item.tags.length)],
-    ['状态', item.diagnostics?.grade || '可用']
+    ['状态', item.diagnostics?.grade || '未评定']
   ];
 }
 
 function getMetricLabels(item) {
-  return getMetricEntries(item).slice(0, 3).map(([label, value]) => `${value} ${label}`);
+  const labels = getMetricEntries(item).slice(0, 3).map(([label, value]) => `${value} ${label}`);
+  if (item.genre) labels.push(genreLabel(item.genre));
+  return labels;
 }
 
 function getPortraitUrl(item) {
@@ -1382,6 +1686,21 @@ function scoreClass(score) {
   if (score >= 85) return 'asset-score is-good';
   if (score >= 65) return 'asset-score is-usable';
   return 'asset-score is-warning';
+}
+
+function getAssetFit(item) {
+  if (item.kind === 'pack' && item.compatibilityAudit) {
+    return {
+      label: item.compatibilityAudit.label || '兼容状态未记录',
+      tone: item.compatibilityAudit.tone || 'unknown'
+    };
+  }
+  if (item.securityReviewRequired) return { label: '待安全审查', tone: 'review' };
+  const score = Number(item.score || 0);
+  if (score >= 90) return { label: `高度适配 ${score}%`, tone: 'excellent' };
+  if (score >= 80) return { label: `适配 ${score}%`, tone: 'good' };
+  if (score > 0) return { label: `需检查 ${score}%`, tone: 'review' };
+  return { label: '尚未评定', tone: 'unknown' };
 }
 
 function splitLabels(value) {

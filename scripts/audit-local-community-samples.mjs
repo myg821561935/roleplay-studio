@@ -17,7 +17,10 @@ const VALID_CONTENT_TIERS = new Set(['sfw', 'nsfw', 'general']);
 const VALID_FRONTEND_TIERS = new Set(['text', 'light', 'heavy', 'not-applicable']);
 const VALID_STATUSES = new Set(['ready', 'candidate', 'pending', 'not-applicable']);
 
-export async function auditLocalCommunitySamples(manifestPath = DEFAULT_MANIFEST_PATH) {
+export async function auditLocalCommunitySamples(
+  manifestPath = DEFAULT_MANIFEST_PATH,
+  { requireComplete = false } = {}
+) {
   const absoluteManifestPath = path.resolve(manifestPath);
   const manifest = JSON.parse(stripBom(await readFile(absoluteManifestPath, 'utf8')));
   validateManifest(manifest);
@@ -31,6 +34,7 @@ export async function auditLocalCommunitySamples(manifestPath = DEFAULT_MANIFEST
         contentTier: sample.contentTier,
         frontendTier: sample.frontendTier,
         status: sample.status,
+        matrixSlot: sample.matrixSlot !== false,
         note: String(sample.note || '')
       });
       continue;
@@ -40,12 +44,18 @@ export async function auditLocalCommunitySamples(manifestPath = DEFAULT_MANIFEST
   }
 
   const failures = results.filter((item) => item.status === 'failed');
+  const incomplete = results.filter((item) => (
+    item.matrixSlot !== false && ['candidate', 'pending'].includes(item.status)
+  ));
   return {
     manifestPath: absoluteManifestPath,
     schemaVersion: manifest.schemaVersion,
     results,
     summary: summarizeResults(results),
-    ok: failures.length === 0
+    requireComplete,
+    complete: incomplete.length === 0,
+    incomplete: incomplete.map((item) => item.id),
+    ok: failures.length === 0 && (!requireComplete || incomplete.length === 0)
   };
 }
 
@@ -255,11 +265,16 @@ function printReport(report) {
     `汇总：${value.passed} 通过，${value.failed} 失败，${value.candidate} 候选，`
     + `${value.pending} 待补，${value.notApplicable} 不适用`
   );
+  if (report.requireComplete && !report.complete) {
+    console.log(`签发阻断：${report.incomplete.length} 个必填样例尚未就绪（${report.incomplete.join('、')}）`);
+  }
 }
 
 async function main() {
-  const manifestPath = process.argv[2] || DEFAULT_MANIFEST_PATH;
-  const report = await auditLocalCommunitySamples(manifestPath);
+  const args = process.argv.slice(2);
+  const requireComplete = args.includes('--require-complete');
+  const manifestPath = args.find((item) => !item.startsWith('--')) || DEFAULT_MANIFEST_PATH;
+  const report = await auditLocalCommunitySamples(manifestPath, { requireComplete });
   printReport(report);
   if (!report.ok) process.exitCode = 1;
 }

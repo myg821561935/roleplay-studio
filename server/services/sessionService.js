@@ -6,7 +6,10 @@ import { DEFAULT_AGENT_PROFILE_ID, normalizeAgentProfileId } from '../authoring/
 import { materializeSessionOwnedConfig } from '../config/sessionScopedConfig.js';
 import { normalizeResponseLengthMode } from '../agent/responseContract.js';
 import { normalizeRoleplayMode } from '../agent/roleplayMode.js';
+import { normalizeActivationStrategy } from '../agent/groupSpeakerSelector.js';
 import { createDegradedKnowledgeGraphState } from '../knowledgeGraph/knowledgeGraphService.js';
+import { GlobalMvuStore } from '../memory/globalMvuStore.js';
+import { ensureEventLog, appendSessionEvents } from '../agent/sessionEventLog.js';
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -14,20 +17,37 @@ export class SessionService {
   constructor(store, { knowledgeGraphService = null } = {}) {
     this.store = store;
     this.knowledgeGraphService = knowledgeGraphService;
+    this.globalMvuStore = new GlobalMvuStore(store);
   }
 
   async getSession(sessionId = 'main', { hydrateKnowledgeGraph = true } = {}) {
     const id = validateSessionId(sessionId);
     const session = await this.store.read(sessionPath(id), createSession(id));
     const enriched = enrichSessionNarrativeState(session);
+    // 读同步：把跨会话 global 根合并进会话（落盘值优先，接收其他会话的更新）
+    await this.globalMvuStore.mergeIntoSession(enriched);
+    // 影子事件日志：迁移旧会话 + 挂载基线快照（messages 仍是唯一事实源）
+    ensureEventLog(enriched);
     return hydrateKnowledgeGraph ? this.hydrateKnowledgeGraph(enriched) : enriched;
   }
 
   async saveSession(session) {
     const id = validateSessionId(session?.id);
+    // 事件日志随 spread 一起进入 next（基线即日志，不依赖对象身份）
+    ensureEventLog(session);
     const next = await this.hydrateKnowledgeGraph({ ...session, id });
     Object.assign(session, next);
+    // 影子事件日志：diff 基线生成事件追加（在会话锁保护区内调用）
+    appendSessionEvents(next);
+    // 同步回调用方持有的引用，保证同一会话对象多次 save 时增量事件持续积累
+    session.eventLog = next.eventLog;
     await this.store.write(sessionPath(id), next);
+    // 写传播：把会话内 global 根落盘（会话快照优先）；失败不阻塞会话保存
+    try {
+      await this.globalMvuStore.persistFromSession(next);
+    } catch (error) {
+      next.globalMvuError = String(error?.message || 'GLOBAL_MVU_PERSIST_FAILED');
+    }
     return next;
   }
 
@@ -65,6 +85,15 @@ export class SessionService {
     } catch (error) {
       return createDegradedKnowledgeGraphState(session, error);
     }
+  }
+
+  async deleteSession(sessionId) {
+    const id = validateSessionId(sessionId);
+    if (id === 'main') throw new Error('CANNOT_DELETE_MAIN_SESSION');
+    const session = await this.store.read(sessionPath(id), null);
+    if (!session) return null;
+    await this.store.remove(sessionPath(id));
+    return { id, storyProjectId: cleanSessionReference(session.storyProjectId) || '' };
   }
 }
 
@@ -119,6 +148,8 @@ function enrichSessionNarrativeState(session) {
   next.settings.activeAgentProfileId = normalizeAgentProfileId(next.settings.activeAgentProfileId);
   next.settings.roleplayMode = normalizeRoleplayMode(next.settings.roleplayMode);
   next.settings.responseLength = normalizeResponseLengthMode(next.settings.responseLength);
+  // 群聊发言者策略（p2-03b）：非法值回落 talkativeness（与选择器内核默认一致）
+  next.settings.groupSpeakerStrategy = normalizeActivationStrategy(next.settings.groupSpeakerStrategy);
   const memory = next.memory && typeof next.memory === 'object' ? next.memory : createDefaultMemory();
   const packId = String(
     memory.narrativeState?.lockedGenre

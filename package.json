@@ -17,9 +17,10 @@
     "test": "node --test tests/*.test.js",
     "test:compatibility": "node --test tests/tavernCompatibility.test.js tests/communityDependencyScanner.test.js tests/customStoryBuilder.test.js tests/customStoryCompatibilityReview.test.js tests/resourceLibraryService.test.js tests/scriptGovernance.test.js tests/heavyFrontendRuntime.test.js",
     "samples:audit": "node scripts/audit-local-community-samples.mjs",
+    "samples:audit:complete": "node scripts/audit-local-community-samples.mjs --require-complete",
     "repository:check": "node scripts/check-public-repository.mjs",
     "release:check": "npm test && npm run repository:check && node scripts/release-check.mjs",
-    "release:check:local": "npm run release:check && npm run samples:audit"
+    "release:check:local": "npm run release:check && npm run samples:audit:complete"
   },
   "engines": {
     "node": ">=22.13"

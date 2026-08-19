@@ -1,3 +1,9 @@
+import { buildGraphContextForActivation } from '../memory/graphGuidedRetrieval.js';
+import {
+  collectWorldBookCharacterNames,
+  resolveCharacterContentMode
+} from '../character/characterContentMode.js';
+
 import { estimateTokens } from './token.js';
 import { buildResponseContractPrompt, normalizeResponseLengthMode } from './responseContract.js';
 import { normalizeFactCards } from './factCards.js';
@@ -7,14 +13,31 @@ import {
 } from './worldBookActivator.js';
 import { expandMacros } from './macroEngine.js';
 import { buildNarrativeControlPrompt, resolveNarrativeContext } from './narrativeControl.js';
+import { buildPsychologicalProgressionPrompt } from './psychologicalProgression.js';
 import { buildRoleplayModePrompt, normalizeRoleplayMode } from './roleplayMode.js';
+import {
+  buildCompactCastIndex,
+  buildInteractionControlPrompt
+} from './interactionContract.js';
 import { buildActionProtocolPrompt } from '../simulation/actionProtocol.js';
 import { renderSimulationPrompt } from '../simulation/npcSimulation.js';
+import { renderCardRuntimePrompt } from './cardRuntime.js';
 import { buildAgentProfilePrompt, normalizeAgentProfileId } from '../authoring/agentProfiles.js';
 import { renderAuthoringLedgerPrompt } from '../authoring/authoringLedger.js';
+import { buildNarrativeEnsemblePrompt } from './narrativeEnsemble.js';
+import {
+  buildSceneAffordanceSnapshot,
+  renderSceneAffordancePrompt
+} from './sceneAffordancePlanner.js';
 import { buildMvuPatchPrompt } from '../compat/mvuProtocol.js';
 import { applyPromptTransforms } from '../compat/lightFrontendRuntime.js';
 import { applyConditionalDirectives } from '../compat/conditionalDirective.js';
+import {
+  filterNarrativeContextMessages,
+  renderNarrativeHardFactsPrompt,
+  renderNarrativeRepairPrompt,
+  resolveCanonicalPlayerName
+} from '../memory/narrativeRepair.js';
 import {
   budgetWorldBookEntries,
   compareWorldBookBudgetPriority,
@@ -59,11 +82,16 @@ export function assemblePrompt({
   const conditionalResult = applyConditionalDirectives(playableWorldBook.entries, memory?.lightFrontendState || {});
   const safeWorldBook = conditionalResult.entries;
   const characterContentMode = resolveCharacterContentMode(characterCard, safeWorldBook);
-  const safeMessages = Array.isArray(messages) ? messages : [];
+  const safeMessages = filterNarrativeContextMessages(messages, memory);
+  const promptUserName = resolvePromptUserName(persona, memory);
+  const promptCharacterName = resolvePromptCharacterName(characterCard, memory, characterContentMode);
   const recentPairs = Number(options.recentPairs ?? 8);
   const maxInjectedCards = Number(options.maxInjectedCards ?? 15);
   const maxRecursionDepth = Number(options.maxRecursionDepth ?? 1);
   const memoryCards = normalizeFactCards(Array.isArray(memory?.memoryCards) ? memory.memoryCards : []);
+  const staticGraphTerms = buildWorldBookActivationTerms(memory, targetSpeaker);
+  const queryGraphTerms = buildGraphContextForActivation(memoryContext?.graphExpansion);
+  const worldBookActivationTerms = [staticGraphTerms, queryGraphTerms].filter(Boolean).join('\n');
   const worldBookActivation = activateWorldBookEntries({
     worldBook: safeWorldBook,
     memoryCards,
@@ -77,13 +105,14 @@ export function assemblePrompt({
     includeNames: options.worldBookIncludeNames !== false,
     caseSensitive: options.worldBookCaseSensitive === true,
     matchWholeWords: options.worldBookMatchWholeWords === true,
-    userName: persona?.enabled ? (persona.name || '用户') : '用户',
-    characterName: characterCard?.name || 'assistant',
+    userName: promptUserName,
+    characterName: promptCharacterName,
     generationType: activationContext.generationType,
     characterCard,
     persona,
     groupMembers,
     targetSpeaker,
+    additionalScanText: worldBookActivationTerms,
     seed: activationContext.seed ?? options.worldBookActivationSeed ?? ''
   });
   const activeCards = worldBookActivation.entries;
@@ -93,7 +122,12 @@ export function assemblePrompt({
     .filter((card) => card.constant === true)
     .sort(compareWorldBookBudgetPriority);
   const triggeredCards = activeCards.filter((card) => card.constant !== true);
-  const requestedWorldBookTokens = Number(options.maxWorldBookTokens ?? 6000);
+  // 用户显式配置优先；否则回退到角色卡 character_book.token_budget（SillyTavern V2 规范），
+  // 让卡片作者声明的世界书预算生效；最后才使用系统默认 6000。
+  const cardWorldBookBudget = resolveCardWorldBookTokenBudget(characterCard);
+  const requestedWorldBookTokens = Number(
+    options.maxWorldBookTokens ?? cardWorldBookBudget ?? 6000
+  );
   const totalWorldBookCap = maxPromptTokens ? Math.max(600, Math.floor(maxPromptTokens * 0.3)) : null;
   const configuredWorldBookTokens = Number.isFinite(requestedWorldBookTokens) && requestedWorldBookTokens > 0
     ? Math.floor(requestedWorldBookTokens)
@@ -101,10 +135,49 @@ export function assemblePrompt({
   const maxWorldBookTokens = totalWorldBookCap
     ? Math.min(configuredWorldBookTokens, totalWorldBookCap)
     : configuredWorldBookTokens;
-  const constantBudget = budgetWorldBookEntries(constantCards, {
-    maxTokens: Math.max(1, Math.floor(maxWorldBookTokens * 0.4)),
-    maxEntryTokens: Number(options.maxConstantWorldBookEntryTokens ?? Math.max(240, Math.floor(maxWorldBookTokens * 0.23)))
+  const coreConstantCards = constantCards.filter(isCoreWorldBookAnchor);
+  const supplementalConstantCards = constantCards.filter((card) => !isCoreWorldBookAnchor(card));
+  const constantEntryTokens = Number(
+    options.maxConstantWorldBookEntryTokens ?? Math.max(240, Math.floor(maxWorldBookTokens * 0.23))
+  );
+  const triggeredReserve = triggeredCards.length
+    ? Math.max(1, Math.floor(maxWorldBookTokens * 0.45))
+    : 0;
+  const coreConstantCap = Math.max(
+    1,
+    Math.min(Math.floor(maxWorldBookTokens * 0.65), maxWorldBookTokens - triggeredReserve)
+  );
+  // A card's world model and protagonist constraints must survive before
+  // presentation/style entries. Community books frequently mark everything as
+  // constant with the same priority, so array order cannot decide this.
+  const coreConstantBudget = budgetWorldBookEntries(coreConstantCards, {
+    maxTokens: coreConstantCap,
+    maxEntryTokens: constantEntryTokens
   });
+  const supplementalConstantCap = Math.max(
+    0,
+    maxWorldBookTokens - coreConstantBudget.report.usedTokens - triggeredReserve
+  );
+  const supplementalConstantBudget = supplementalConstantCap > 0
+    ? budgetWorldBookEntries(supplementalConstantCards, {
+      maxTokens: supplementalConstantCap,
+      maxEntryTokens: constantEntryTokens
+    })
+    : emptyWorldBookBudget(supplementalConstantCards, constantEntryTokens);
+  const constantBudget = {
+    entries: [...coreConstantBudget.entries, ...supplementalConstantBudget.entries],
+    report: {
+      maxTokens: maxWorldBookTokens,
+      maxEntryTokens: constantEntryTokens,
+      usedTokens: coreConstantBudget.report.usedTokens + supplementalConstantBudget.report.usedTokens,
+      selectedCount: coreConstantBudget.report.selectedCount + supplementalConstantBudget.report.selectedCount,
+      omittedCount: coreConstantBudget.report.omittedCount + supplementalConstantBudget.report.omittedCount,
+      omittedIds: [...coreConstantBudget.report.omittedIds, ...supplementalConstantBudget.report.omittedIds],
+      truncatedCount: coreConstantBudget.report.truncatedCount + supplementalConstantBudget.report.truncatedCount,
+      core: coreConstantBudget.report,
+      supplemental: supplementalConstantBudget.report
+    }
+  };
   const triggeredBudget = budgetWorldBookEntries(triggeredCards, {
     maxTokens: Math.max(1, maxWorldBookTokens - constantBudget.report.usedTokens),
     maxEntryTokens: Number(options.maxWorldBookEntryTokens ?? Math.max(320, Math.floor(maxWorldBookTokens * 0.3)))
@@ -137,26 +210,57 @@ export function assemblePrompt({
       ? Number(options.maxCommunityPromptModules ?? 18)
       : null
   });
-  const renderedPromptModules = promptModuleCompilation.modules;
+  const preflightCommunityBundles = inspectCommunityPresetBundles(renderablePromptModules, {
+    maxModules: hasCommunityPresetBundle ? Number(options.maxCommunityPromptModules ?? 18) : null,
+    maxTokens: promptModuleBudget
+  });
+  const suppressedCommunityBundleKeys = new Set(preflightCommunityBundles
+    .filter((bundle) => bundle.suppressed)
+    .map((bundle) => bundle.key));
+  const renderedPromptModules = promptModuleCompilation.modules
+    .filter((module) => !suppressedCommunityBundleKeys.has(communityPresetBundleKey(module)));
   const narrativeContext = resolveNarrativeContext({ memory, mode: options.narrativeMode });
   const narrativeControlPrompt = buildNarrativeControlPrompt({ memory, mode: narrativeContext.mode });
+  const narrativeEnsemble = buildNarrativeEnsemblePrompt({
+    memory,
+    messages: safeMessages,
+    userMessage
+  });
   const roleplayMode = normalizeRoleplayMode(options.roleplayMode);
   const roleplayModePrompt = buildRoleplayModePrompt(roleplayMode);
+  const interactionControl = buildInteractionControlPrompt({
+    roleplayMode,
+    generationType: activationContext.generationType,
+    promptModules: renderablePromptModules,
+    messages: safeMessages
+  });
   const rawSimulationPrompt = renderSimulationPrompt(memory, { targetSpeaker });
   const simulationPrompt = maxPromptTokens
     ? limitTextToTokenBudget(rawSimulationPrompt, Math.max(480, Math.floor(maxPromptTokens * 0.14)))
     : rawSimulationPrompt;
+  const rawCardRuntimePrompt = renderCardRuntimePrompt(memory);
+  const cardRuntimePrompt = maxPromptTokens
+    ? limitTextToTokenBudget(rawCardRuntimePrompt, Math.max(180, Math.floor(maxPromptTokens * 0.06)))
+    : rawCardRuntimePrompt;
   const actionProtocolPrompt = buildActionProtocolPrompt({ memory, targetSpeaker });
   const mvuPatchPrompt = buildMvuPatchPrompt({ memory });
   const agentProfileId = normalizeAgentProfileId(options.activeAgentProfileId);
   const agentProfilePrompt = buildAgentProfilePrompt(agentProfileId);
   const authoringLedgerPrompt = renderAuthoringLedgerPrompt(authoring);
+  const defaultPromptLayer = renderDefaultPromptLayerContract({
+    characterCard,
+    worldBook: safeWorldBook,
+    roleplayMode,
+    contentMode: characterContentMode,
+    protagonistName: memory?.worldState?.protagonist?.name
+  });
+  const closedLoopPrompt = renderSolvedQuestionClosurePrompt(memory);
 
   // 宏展开上下文
   const promptVariables = {};
   const promptVariableAudit = [];
   const macroContext = {
-    user: persona?.enabled ? (persona.name || '用户') : '用户',
+    user: promptUserName,
     characterCard,
     persona,
     groupMembers,
@@ -166,7 +270,8 @@ export function assemblePrompt({
     templates,
     customArrays,
     lightFrontendState: memory?.lightFrontendState || {},
-    promptVariables
+    promptVariables,
+    originalSystemPrompt: defaultPromptLayer || ''
   };
   const regexContext = {
     user: macroContext.user,
@@ -212,14 +317,34 @@ export function assemblePrompt({
   const topCards = cardsByDepth.get(0) || [];
   cardsByDepth.delete(0);
 
-  const topCardsText = topCards.length
-    ? ['# 常驻世界书和记忆', ...topCards.map(c => `## ${c.title}\n${c.content}`)].join('\n\n')
+  // SillyTavern position 语义：before_character 条目渲染在角色卡之前（合并进 core-system 前段），
+  // after_character / 未声明保持原行为（角色卡之后的独立常驻世界书消息）。
+  const beforeCharCards = topCards.filter((card) => normalizeWorldBookPosition(card.position) === 'before_character');
+  const afterCharCards = topCards.filter((card) => normalizeWorldBookPosition(card.position) !== 'before_character');
+  const beforeCharCardsText = beforeCharCards.length
+    ? ['# 世界书（角色定义前）', ...beforeCharCards.map(c => `## ${c.title}\n${c.content}`)].join('\n\n')
+    : '';
+  const topCardsText = afterCharCards.length
+    ? ['# 常驻世界书和记忆', ...afterCharCards.map(c => `## ${c.title}\n${c.content}`)].join('\n\n')
     : '';
 
   // 对角色卡展开宏；可读取本轮预设已声明的临时变量。
   const expandedCharacterCard = expandCharacterCard(characterCard, macroContext);
   const expandedPersona = expandPersona(persona, macroContext);
   const expandedGroupMembers = expandGroupMembers(groupMembers, macroContext);
+  const castIndex = buildCompactCastIndex({
+    characterCard: expandedCharacterCard,
+    protagonist: memory?.worldState?.protagonist,
+    groupMembers: expandedGroupMembers,
+    worldBook: safeWorldBook,
+    contentMode: characterContentMode,
+    maxCharacters: Number(options.maxCastIndexCharacters ?? 16)
+  });
+  const psychologicalProgression = buildPsychologicalProgressionPrompt({
+    characterCard: expandedCharacterCard,
+    activeCards: injectedCards,
+    memory
+  });
   const worldStateCompilation = compactWorldStateForPrompt(memory?.worldState, {
     maxTokens: maxPromptTokens ? Math.max(320, Math.floor(maxPromptTokens * 0.09)) : null
   });
@@ -228,10 +353,13 @@ export function assemblePrompt({
     : memory?.rollingSummary;
 
   const systemSections = [
+    defaultPromptLayer,
     narrativeControlPrompt,
     roleplayModePrompt,
     agentProfilePrompt,
     authoringLedgerPrompt,
+    // SillyTavern before_character 世界书条目：先于角色卡渲染，承接世界观前置设定
+    beforeCharCardsText,
     limitTextToTokenBudget(
       renderCharacterCard(expandedCharacterCard, {
         includeOpening: safeMessages.length === 0,
@@ -246,14 +374,24 @@ export function assemblePrompt({
       activeCards: injectedCards
     }),
     renderWorldState(worldStateCompilation.worldState),
-    limitTextToTokenBudget(renderKnowledgeGraph(memory?.knowledgeGraph), maxPromptTokens ? 320 : null),
+    renderNarrativeRepairPrompt(memory),
+    closedLoopPrompt,
+    limitTextToTokenBudget(renderKnowledgeGraph(memory?.knowledgeGraph, memoryContext?.graphExpansion), maxPromptTokens ? 320 : null),
     renderRollingSummary(rollingSummary),
     limitTextToTokenBudget(renderEpisodicMemory(memoryContext), maxPromptTokens ? 480 : null),
     renderVectorMemory(vectorHits),
     simulationPrompt,
+    cardRuntimePrompt,
     renderSpeakerInstruction({ groupMembers, targetSpeaker, characterCard }),
-    renderRecommendationInstruction(),
     renderRoleplayPresentationContract(),
+    renderRecommendationInstruction({
+      characterCard: expandedCharacterCard,
+      groupMembers: expandedGroupMembers,
+      memory,
+      worldState: worldStateCompilation?.worldState,
+      characterContentMode,
+      userMessage
+    }),
     actionProtocolPrompt,
     mvuPatchPrompt
   ].filter(Boolean);
@@ -274,7 +412,10 @@ export function assemblePrompt({
       return {
         role: message.role,
         content: message.speaker ? `[${message.speaker}] ${transformed}` : transformed,
-        _promptKind: message._promptProtected ? 'history-recent' : 'history'
+        _promptTurnId: message._promptTurnId,
+        _promptKind: message._promptAnchor === 'latest-user'
+          ? 'history-user-anchor'
+          : message._promptProtected ? 'history-recent' : 'history'
       };
     });
 
@@ -303,7 +444,9 @@ export function assemblePrompt({
         content: text,
         _promptKind: cards.some((card) => worldBookAnchorKeys.has(worldBookCardKey(card)))
           ? 'worldbook-anchor'
-          : 'worldbook'
+          : 'worldbook',
+        _promptDepth: depth,
+        _promptTrigger: cards.map((card) => String(card.title || '')).filter(Boolean).join('、')
       }
     });
   }
@@ -322,10 +465,33 @@ export function assemblePrompt({
         content: String(module.content || '').trim(),
         _promptKind: promptMessageKind(module, 'preset-in-chat', moduleIndex, promptPlacement.inChatModules.length),
         _promptPriority: promptModuleRuntimePriority(module, moduleIndex, promptPlacement.inChatModules.length),
-        _promptModuleId: module.id
+        _promptModuleId: module.id,
+        _promptBundleKey: communityPresetBundleKey(module),
+        _promptDepth: depth,
+        _promptTrigger: describePromptModuleTrigger(module)
       }
     });
   });
+
+  // SillyTavern V2/V3 角色卡级 depth_prompt：将 prompt 插入到对话历史指定深度
+  const cardDepthPrompt = resolveCardDepthPrompt(expandedCharacterCard, macroContext);
+  if (cardDepthPrompt) {
+    const depth = normalizeDepth(cardDepthPrompt.depth);
+    let insertIndex = totalHistory - depth;
+    if (insertIndex < 0) insertIndex = 0;
+    insertIndex = Math.min(insertIndex, Math.max(0, totalHistory - 1));
+    injections.push({
+      index: insertIndex,
+      order: 0,
+      sequence: injectionSequence++,
+      message: {
+        role: normalizePromptRole(cardDepthPrompt.role || 'system'),
+        content: cardDepthPrompt.prompt,
+        _promptKind: 'character-depth-prompt',
+        _promptDepth: depth
+      }
+    });
+  }
 
   injections.sort((a, b) => (
     a.index - b.index
@@ -356,23 +522,31 @@ export function assemblePrompt({
     ...(topCardsText ? [{
       role: 'system',
       content: topCardsText,
-      _promptKind: topCards.some((card) => worldBookAnchorKeys.has(worldBookCardKey(card)))
+      _promptKind: afterCharCards.some((card) => worldBookAnchorKeys.has(worldBookCardKey(card)))
         ? 'worldbook-anchor'
-        : 'worldbook'
+        : 'worldbook',
+      _promptDepth: 0,
+      _promptTrigger: afterCharCards.map((card) => String(card.title || '')).filter(Boolean).join('、')
     }] : []),
     ...promptPlacement.systemModules.map((module, index) => ({
       role: 'system',
       content: renderPromptModule(module),
       _promptKind: promptMessageKind(module, 'preset-system', index, promptPlacement.systemModules.length),
       _promptPriority: promptModuleRuntimePriority(module, index, promptPlacement.systemModules.length),
-      _promptModuleId: module.id
+      _promptModuleId: module.id,
+      _promptBundleKey: communityPresetBundleKey(module),
+      _promptDepth: normalizeDepth(module.depth),
+      _promptTrigger: describePromptModuleTrigger(module)
     })),
     ...promptPlacement.relativeMessages.map((module, index) => ({
       role: normalizePromptRole(module.role),
       content: String(module.content || '').trim(),
       _promptKind: promptMessageKind(module, 'preset-relative', index, promptPlacement.relativeMessages.length),
       _promptPriority: promptModuleRuntimePriority(module, index, promptPlacement.relativeMessages.length),
-      _promptModuleId: module.id
+      _promptModuleId: module.id,
+      _promptBundleKey: communityPresetBundleKey(module),
+      _promptDepth: normalizeDepth(module.depth),
+      _promptTrigger: describePromptModuleTrigger(module)
     })),
     ...interleavedHistory
   ];
@@ -385,10 +559,36 @@ export function assemblePrompt({
     });
   }
 
+  if (castIndex.prompt) {
+    assembledMessages.push({
+      role: 'system',
+      content: castIndex.prompt,
+      _promptKind: 'cast-index'
+    });
+  }
+
   const responseLengthMode = normalizeResponseLengthMode(options.responseLength);
   assembledMessages.push({
     role: 'system',
-    content: buildResponseContractPrompt(responseLengthMode),
+    content: narrativeEnsemble.prompt,
+    _promptKind: 'interaction-contract'
+  });
+  assembledMessages.push({
+    role: 'system',
+    content: interactionControl.prompt,
+    _promptKind: 'interaction-contract'
+  });
+  assembledMessages.push({
+    role: 'system',
+    content: renderNarrativeTurnFrameContract(),
+    _promptKind: 'interaction-contract'
+  });
+  assembledMessages.push({
+    role: 'system',
+    content: buildResponseContractPrompt(responseLengthMode, {
+      generationType: activationContext.generationType,
+      roleplayMode
+    }),
     _promptKind: 'response-contract'
   });
 
@@ -399,16 +599,38 @@ export function assemblePrompt({
     assembledMessages.push({ role: 'system', content: characterSourcePriority, _promptKind: 'character-anchor' });
   }
 
+  if (psychologicalProgression.prompt) {
+    assembledMessages.push({
+      role: 'system',
+      content: psychologicalProgression.prompt,
+      _promptKind: 'psychological-progression-contract'
+    });
+  }
+
   const authorNote = expandMacros(String(options.authorNote || '').trim(), macroContext);
   if (authorNote) {
     assembledMessages.push({ role: 'system', content: `# 作者注释\n${authorNote}`, _promptKind: 'author-note' });
+  }
+
+  const hardFactsTail = renderNarrativeHardFactsPrompt(memory);
+  if (hardFactsTail) {
+    assembledMessages.push({
+      role: 'system',
+      content: hardFactsTail,
+      _promptKind: 'hard-facts-tail'
+    });
   }
 
   if (finalUserMessage) {
     assembledMessages.push(finalUserMessage);
   }
 
-  const promptBudgetCompilation = enforcePromptMessageBudget(assembledMessages, { maxTokens: maxPromptTokens });
+  const initialPromptBudgetCompilation = enforcePromptMessageBudget(assembledMessages, { maxTokens: maxPromptTokens });
+  const integrityCompilation = removeIncompleteCommunityPresetBundles(
+    initialPromptBudgetCompilation,
+    renderedPromptModules
+  );
+  const promptBudgetCompilation = integrityCompilation.compilation;
   const budgetedMessages = promptBudgetCompilation.messages;
   const finalPromptText = budgetedMessages.map((message) => String(message.content || '')).join('\n');
   const retainedInjectedCardIds = injectedCards
@@ -445,12 +667,33 @@ export function assemblePrompt({
       },
       narrativeMode: narrativeContext.mode,
       roleplayMode,
+      interactionContract: interactionControl.report,
+      castIndex: {
+        count: castIndex.entries.length,
+        names: castIndex.entries.map((entry) => entry.name),
+        omittedCount: castIndex.omittedCount
+      },
       narrativeGenre: narrativeContext.genre,
       narrativeArc: narrativeContext.activeArc,
+      narrativeEnsemble: narrativeEnsemble.report,
+      psychologicalProgression: psychologicalProgression.report,
       agentProfileId,
       hasAuthoringLedger: Boolean(authoringLedgerPrompt),
       responseLengthMode,
       promptModuleBudget: promptModuleCompilation.report,
+      communityPresetIntegrity: {
+        preflightSuppressed: preflightCommunityBundles.filter((bundle) => bundle.suppressed),
+        finalSuppressed: integrityCompilation.suppressedBundles
+      },
+      promptStudio: buildPromptStudioSnapshot({
+        messageInspection: promptBudgetCompilation.messageInspection,
+        promptModules: safePromptModules,
+        promptModuleCompilation: promptModuleCompilation.report,
+        preflightCommunityBundles,
+        finalSuppressedBundles: integrityCompilation.suppressedBundles,
+        promptBudget: promptBudgetCompilation.report,
+        worldBookActivation: finalizedWorldBookActivation
+      }),
       promptVariableWrites: {
         appliedCount: promptVariableAudit.length,
         unresolvedCount: expandedPromptModules.reduce((count, module) => (
@@ -464,6 +707,11 @@ export function assemblePrompt({
       omittedPromptModuleIds: promptBudgetCompilation.report.omittedPromptModuleIds,
       simulationRevision: Number(memory?.simulation?.revision || 0),
       simulationActorCount: Array.isArray(memory?.simulation?.actors) ? memory.simulation.actors.length : 0,
+      cardRuntime: {
+        enabled: memory?.cardRuntime?.enabled === true,
+        actorCount: Array.isArray(memory?.cardRuntime?.actors) ? memory.cardRuntime.actors.length : 0,
+        openThreadCount: Array.isArray(memory?.cardRuntime?.openThreads) ? memory.cardRuntime.openThreads.length : 0
+      },
       injectedCardIds: injectedCards.map((card) => card.id),
       retainedInjectedCardIds,
       omittedInjectedCardIds: injectedCards
@@ -478,18 +726,55 @@ export function assemblePrompt({
   };
 }
 
-function renderKnowledgeGraph(graph) {
+function renderKnowledgeGraph(graph, graphExpansion = null) {
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   if (!edges.length) return '';
-  const names = new Map(nodes.map((node) => [node.id, node.label || node.name || node.id]));
+  const nodeName = (node) => node?.name || node?.label || node?.id || '';
+  const names = new Map(nodes.map((node) => [node.id, nodeName(node)]));
+
+  const relevantIds = new Set();
+  if (graphExpansion?.seedNodeIds?.length) {
+    graphExpansion.seedNodeIds.forEach((id) => relevantIds.add(id));
+  }
+  if (graphExpansion?.relatedEntities?.length) {
+    graphExpansion.relatedEntities.forEach((entity) => {
+      if (entity.id) relevantIds.add(entity.id);
+    });
+  }
+
+  const edgeSourceId = (edge) => edge.sourceId || edge.source || edge.from || '';
+  const edgeTargetId = (edge) => edge.targetId || edge.target || edge.to || '';
+
+  const isRelevantEdge = (edge) => {
+    if (!relevantIds.size) return true;
+    return relevantIds.has(edgeSourceId(edge)) || relevantIds.has(edgeTargetId(edge));
+  };
+
+  const actionableTypes = new Set(['TRUSTS', 'HOSTILE_TO', 'OWES', 'KNOWS_SECRET', 'INTERACTED_WITH']);
+  const priorityEdges = edges
+    .filter((edge) => edge.status !== 'superseded')
+    .filter(isRelevantEdge)
+    .sort((left, right) => {
+      const leftActionable = actionableTypes.has(left.type) ? 1 : 0;
+      const rightActionable = actionableTypes.has(right.type) ? 1 : 0;
+      if (leftActionable !== rightActionable) return rightActionable - leftActionable;
+      const leftConf = Number(left.confidence ?? 0.5);
+      const rightConf = Number(right.confidence ?? 0.5);
+      return rightConf - leftConf;
+    });
+
+  if (!priorityEdges.length) return '';
+
   const lines = [
     '# 当前场景关系子图',
     '以下关系来自已校验的本地知识图谱。角色卡和世界书仍具有最高事实优先级；不得凭空改写。'
   ];
-  edges.slice(0, 24).forEach((edge) => {
-    const source = names.get(edge.source) || edge.source;
-    const target = names.get(edge.target) || edge.target;
+  priorityEdges.slice(0, 18).forEach((edge) => {
+    const sourceId = edgeSourceId(edge);
+    const targetId = edgeTargetId(edge);
+    const source = names.get(sourceId) || sourceId;
+    const target = names.get(targetId) || targetId;
     const label = edge.label || edge.type || '关联';
     lines.push(`- ${source} → ${target}：${label}`);
   });
@@ -565,6 +850,37 @@ function expandCharacterCard(card, ctx) {
   return expanded;
 }
 
+function resolveCardDepthPrompt(card, ctx) {
+  if (!card) return null;
+  const raw = card.depthPrompt || card.depth_prompt || card.extensions?.depthPrompt || card.extensions?.depth_prompt;
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    const text = expandMacros(raw, ctx);
+    return text ? { depth: 4, prompt: text, role: 'system' } : null;
+  }
+  if (typeof raw === 'object') {
+    const promptText = expandMacros(String(raw.prompt || raw.content || raw.text || ''), ctx);
+    if (!promptText) return null;
+    const depth = Number(raw.depth ?? raw.depthValue ?? 4);
+    return {
+      depth: Number.isFinite(depth) && depth > 0 ? Math.floor(depth) : 4,
+      prompt: promptText,
+      role: String(raw.role || 'system')
+    };
+  }
+  return null;
+}
+
+function resolveCardWorldBookTokenBudget(card) {
+  if (!card) return null;
+  const local = card.extensions?.local_roleplay_agent;
+  if (!local || typeof local !== 'object') return null;
+  const meta = local.worldBook;
+  if (!meta || typeof meta !== 'object') return null;
+  const raw = Number(meta.tokenBudget);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : null;
+}
+
 function expandPersona(persona, ctx) {
   if (!persona) return persona;
   const fields = ['name', 'description', 'background', 'personality'];
@@ -591,42 +907,6 @@ function expandGroupMembers(groupMembers, ctx) {
   });
 }
 
-function resolveCharacterContentMode(characterCard, worldBookEntries) {
-  const declared = characterCard?.extensions?.local_roleplay_agent?.contentMode;
-  const declaredKind = typeof declared === 'string' ? declared : declared?.kind;
-  if (declaredKind === 'scenario-container') return { kind: declaredKind, source: 'declared' };
-
-  const names = collectWorldBookCharacterNames(worldBookEntries);
-  const cardName = String(characterCard?.name || '').trim();
-  const cardIsNamedCharacter = names.some((name) => name === cardName);
-  const genericScenarioName = /(?:世界|剧本|故事|物语|仙宗|宗门|之家|学院|公寓|庄园|录|志|症|模拟器|模组)$/u.test(cardName);
-  const generatedFields = new Set(
-    characterCard?.extensions?.local_roleplay_agent?.enrichment?.generatedFields || []
-  );
-  const inheritedNpcFields = ['personality', 'scenario', 'exampleDialog']
-    .filter((field) => generatedFields.has(field)).length;
-  if (!cardIsNamedCharacter && (
-    names.length >= 3
-    || (names.length >= 2 && genericScenarioName)
-    || (names.length >= 2 && inheritedNpcFields >= 2)
-  )) {
-    return { kind: 'scenario-container', source: 'worldbook', characterNames: names };
-  }
-  return { kind: 'character', source: 'default', characterNames: names };
-}
-
-function collectWorldBookCharacterNames(entries = []) {
-  const names = [];
-  for (const entry of Array.isArray(entries) ? entries : []) {
-    const title = String(entry?.title || entry?.name || '').trim();
-    const match = title.match(/^(.{1,50}?)[_·\s-]+(?:基础信息|二次解释|性格调色盘|人物档案|角色档案|人物设定|角色设定)(?:[_·\s-]|$)/u);
-    const name = String(match?.[1] || '').trim();
-    if (name && !names.includes(name)) names.push(name);
-    if (names.length >= 12) break;
-  }
-  return names;
-}
-
 function worldBookCardKey(card) {
   const id = String(card?.id || '').trim();
   if (id) return `id:${id}`;
@@ -646,7 +926,8 @@ function renderCharacterCard(card, { includeOpening = false, contentMode = { kin
       'NPC 的身份、外貌、性格、境界、关系和语言风格必须分别取自当前触发的世界书人物条目；禁止把根卡字段或任一 NPC 的字段复制给其他人物。'
     ];
     if (card.description && !generatedFields.has('description')) lines.push(`场景说明：${card.description}`);
-    if (card.scenario && !generatedFields.has('scenario')) lines.push(`开局条件：${card.scenario}`);
+    // 场景容器的顶层 scenario 在社区多角色卡中经常只是某一名 NPC 的遗留字段。
+    // 开局应由 firstMessage 与已触发世界书共同确定，不能把该字段提升为全局事实。
     if (includeOpening && card.firstMessage) {
       lines.push(`开场语：${limitTextToTokenBudget(card.firstMessage, 320)}`);
     }
@@ -656,7 +937,7 @@ function renderCharacterCard(card, { includeOpening = false, contentMode = { kin
   }
   const lines = [
     '# 角色卡',
-    `姓名：${card.name || '未命名主角'}`,
+    `姓名：${card.name || '未命名主角'}${card.nickname ? `（又称：${card.nickname}）` : ''}`,
     `身份：${card.role || ''}`,
     `描述：${card.description || ''}`,
     `性格：${card.personality || ''}`,
@@ -822,6 +1103,127 @@ function getRenderablePromptModules(promptModules = []) {
   return promptModules.filter((module) => module.enabled !== false && String(module.content || '').trim());
 }
 
+function emptyWorldBookBudget(entries = [], maxEntryTokens = 0) {
+  return {
+    entries: [],
+    report: {
+      maxTokens: 0,
+      maxEntryTokens,
+      usedTokens: 0,
+      selectedCount: 0,
+      omittedCount: Array.isArray(entries) ? entries.length : 0,
+      omittedIds: (Array.isArray(entries) ? entries : []).map((entry) => entry?.id).filter(Boolean),
+      truncatedCount: 0
+    }
+  };
+}
+
+function isCoreWorldBookAnchor(card = {}) {
+  if (card?.extensions?.local_roleplay_agent?.coreAnchor === true) return true;
+  if (card?.id === 'community-runtime-compatibility-contract') return true;
+  const title = String(card?.title || card?.name || '').trim();
+  const labels = [
+    title,
+    ...(Array.isArray(card?.keywords) ? card.keywords : []),
+    card?.category,
+    card?.comment,
+    card?.extensions?.category,
+    card?.extensions?.group
+  ].filter(Boolean).join(' ');
+  if (/(?:文风|写作|状态(?:栏|面板)?|格式|模板|样式|DLC|选开)/iu.test(labels)) return false;
+  return /(?:世界(?:观|背景|设定|规则)|主角|主人公|玩家|角色(?:生成|设定)?|人物(?:生成|设定)?|规则|法则|能力|等级|境界|体系|系统|约束|禁忌|关系|势力|历法|时间)/iu.test(labels);
+}
+
+function resolvePromptUserName(persona, memory) {
+  if (persona?.enabled && String(persona.name || '').trim()) return String(persona.name).trim();
+  return resolveCanonicalPlayerName(memory) || '用户';
+}
+
+function resolvePromptCharacterName(characterCard, memory, contentMode) {
+  const cardName = String(characterCard?.name || '').trim();
+  const protagonistName = String(memory?.worldState?.protagonist?.name || '').trim();
+  const cardRole = String(characterCard?.role || '').trim();
+  const cardActsAsPlayer = /(?:主角|主人公|玩家)/u.test(cardRole);
+  if (protagonistName && (contentMode?.kind === 'scenario-container' || cardActsAsPlayer)) {
+    return protagonistName;
+  }
+  return cardName || protagonistName || 'assistant';
+}
+
+function communityPresetBundleKey(module) {
+  const preset = module?.extensions?.sillyTavernPreset;
+  if (!preset?.presetTitle) return '';
+  return `${String(preset.sourceFormat || 'sillytavern-preset').trim()}::${String(preset.presetTitle).trim()}`;
+}
+
+function inspectCommunityPresetBundles(modules = [], { maxModules = null, maxTokens = null } = {}) {
+  const groups = new Map();
+  modules.forEach((module) => {
+    const key = communityPresetBundleKey(module);
+    if (!key) return;
+    const current = groups.get(key) || [];
+    current.push(module);
+    groups.set(key, current);
+  });
+  return [...groups.entries()].map(([key, bundleModules]) => {
+    const needsCoherence = bundleModules.some((module) => hasPromptVariableDependency(module.content));
+    const estimatedTokens = bundleModules.reduce((sum, module) => sum + estimateTokens(String(module.content || '')), 0);
+    const exceedsModuleLimit = Number.isFinite(maxModules) && maxModules > 0 && bundleModules.length > maxModules;
+    const exceedsTokenBudget = Number.isFinite(maxTokens) && maxTokens > 0 && estimatedTokens > maxTokens;
+    return {
+      key,
+      title: String(bundleModules[0]?.extensions?.sillyTavernPreset?.presetTitle || '').trim(),
+      moduleIds: bundleModules.map((module) => module.id),
+      moduleCount: bundleModules.length,
+      estimatedTokens,
+      coherenceSensitive: needsCoherence,
+      suppressed: needsCoherence && (exceedsModuleLimit || exceedsTokenBudget),
+      reason: exceedsModuleLimit
+        ? 'module-limit-would-split-variable-chain'
+        : exceedsTokenBudget ? 'token-budget-would-split-variable-chain' : ''
+    };
+  });
+}
+
+function hasPromptVariableDependency(content) {
+  return /\{\{\s*(?:setvar|addvar|incvar|decvar|getvar|globalvar|压缩相邻消息)\s*::/i.test(String(content || ''));
+}
+
+function removeIncompleteCommunityPresetBundles(compilation, renderedPromptModules = []) {
+  const sensitiveBundles = inspectCommunityPresetBundles(renderedPromptModules);
+  const messages = Array.isArray(compilation?.messages) ? compilation.messages : [];
+  const retainedIds = new Set(messages.map((message) => message?._promptModuleId).filter(Boolean));
+  const incomplete = sensitiveBundles.filter((bundle) => (
+    bundle.coherenceSensitive && bundle.moduleIds.some((id) => !retainedIds.has(id))
+  ));
+  if (!incomplete.length) return { compilation, suppressedBundles: [] };
+  const blocked = new Set(incomplete.map((bundle) => bundle.key));
+  const omittedIds = incomplete.flatMap((bundle) => bundle.moduleIds);
+  const nextMessages = messages.filter((message) => !blocked.has(String(message?._promptBundleKey || '')));
+  const report = compilation.report || {};
+  return {
+    compilation: {
+      ...compilation,
+      messages: nextMessages,
+      report: {
+        ...report,
+        afterTokens: estimateTokens(nextMessages.map((message) => `${message.role}: ${message.content}`).join('\n')),
+        retainedPromptModuleIds: (report.retainedPromptModuleIds || []).filter((id) => !omittedIds.includes(id)),
+        omittedPromptModuleIds: [...new Set([...(report.omittedPromptModuleIds || []), ...omittedIds])],
+        omittedKinds: {
+          ...(report.omittedKinds || {}),
+          'preset-bundle-incomplete': Number(report.omittedKinds?.['preset-bundle-incomplete'] || 0) + omittedIds.length
+        }
+      }
+    },
+    suppressedBundles: incomplete.map((bundle) => ({
+      ...bundle,
+      suppressed: true,
+      reason: 'final-prompt-budget-would-split-variable-chain'
+    }))
+  };
+}
+
 function organizePromptModules(promptModules = []) {
   const ordered = [...promptModules].sort(comparePromptModuleSequence);
   const systemModules = [];
@@ -898,16 +1300,412 @@ function normalizeDepth(depth) {
   return Math.floor(number);
 }
 
-function renderRecommendationInstruction() {
-  return [
+// 归一化 SillyTavern 世界书 position 字段：数字 0 = before_char、1 = after_char；
+// 历史别名 before_char/after_char 统一映射到 before_character/after_character
+function normalizeWorldBookPosition(position) {
+  if (position === 0) return 'before_character';
+  if (position === 1) return 'after_character';
+  const value = String(position || '').trim().toLowerCase();
+  if (value === 'before_char' || value === 'before_character') return 'before_character';
+  if (value === 'after_char' || value === 'after_character') return 'after_character';
+  return 'after_character';
+}
+
+function renderRecommendationInstruction({
+  characterCard = null,
+  groupMembers = [],
+  memory = {},
+  worldState = null,
+  characterContentMode = '',
+  userMessage = ''
+} = {}) {
+  const lines = [
     '# 推荐选项输出规则',
-    '每次回复正文之后，额外给出 2-4 个用户下一步行动建议。',
-    '建议必须适合作为用户下一轮输入，简短、可点击、不要包含解释。',
-    '请用如下独立标签输出，标签之外仍是正常回复正文：',
+    '标准 DM、对白流、叙事流与导演/共创流的正常回合，必须在回复正文之后给出 3 个行动建议；自由输入由界面单独提供，不要把“自定义”作为第四个伪选项。只有用户明确要求“不要选项”、纯改写/设定任务，或没有任何可用的当前场景事实时才可省略。',
+    '先依据正文收束处识别唯一的“当前决策节点”：以本轮正文结束时尚未解决、且此刻确实需要玩家表态的交互为准。明确二选一和迫在眉睫的真实危险优先；NPC 问话或命令只有在世界已经暂停等待玩家回应时才是强节点。',
+    'NPC 说过话不等于玩家必须围绕 NPC 行动。玩家已经用行动拒绝、绕开或推进到新场景时，旧问话、旧请求和旧命令视为被覆盖，不得继续压过当前的新路线、新异常或可操作物件。',
+    '【时效性要求】严禁回溯正文前段已经过去或已解决的旧细节（例如前文已经扫除的痕迹、已经走过的路途），必须严格以正文最后一两句话结束时的当下一刻作为行动决策落点。',
+    '【极其重要】选项必须富有文学色彩与画面感，仿佛视觉小说或RPG游戏中的生动抉择！选项必须直接呈现出鲜明的性格、情感张力与戏剧冲突。请提供3个充满网文质感且策略截然不同的抉择。',
+    '切忌使用死板干瘪的说明文（如“回应对方”、“询问边界”、“明确自己的意图”），而应直接写出带感的台词或动作。',
+    '示例：“富贵险中求！”、“以蜕凡境的蝼蚁之姿，斩出一记毫无保留的刀法试探！”、“假装被吓破了胆，连滚带爬地往阴影里缩”、“微微一笑，反客为主地贴近她的耳边低语”。',
+    '如果 NPC 正在等待回答，三项必须直接呈现不同情绪的台词或具体应对动作；若存在明确二选一，两项分别对应两个方向，第三项保留破局或真正不同的第三方案。',
+    '选项只能操作本轮已确认存在的人物、物件、路径和能力；动作可以有画面感，但不能把修辞本身改造成可交互对象。',
+    '叙述中的比喻、光影、衣饰、声调和动作修辞不是独立线索；除非有明确可验证的物件、人物或出口，否则不得据此编造新的调查目标。',
+    '不得用“观察周围”、“环顾四周”等无指向的动作替代真正与当前决策节点相关的回应。'
+  ];
+
+  const sceneHints = buildRecommendationSceneHints({ characterCard, groupMembers, memory, worldState, characterContentMode, userMessage });
+  if (sceneHints) {
+    lines.push('', '# 当前场景锚点（推荐选项必须围绕以下要素生成）', sceneHints);
+  }
+
+  const affordanceMemory = worldState && typeof worldState === 'object'
+    ? { ...memory, worldState }
+    : memory;
+  const affordancePrompt = renderSceneAffordancePrompt(buildSceneAffordanceSnapshot({ memory: affordanceMemory }));
+  if (affordancePrompt) {
+    lines.push('', '# 当前可行动条件（带来源的硬约束）', affordancePrompt);
+  }
+
+  lines.push(
+    '', '选项应体现角色性格与当前关系态势——不同角色面对同一情境会给出不同风格的行动建议。',
+    '用如下独立标签输出；标签之外仍是正常回复正文：',
     '<recommended_actions>',
     '["行动选项一", "行动选项二", "行动选项三"]',
     '</recommended_actions>'
+  );
+  return lines.join('\n');
+}
+
+function renderNarrativeTurnFrameContract() {
+  return [
+    '# 隐藏回合帧（精简机器协议）',
+    '正文和 <recommended_actions> 之后输出一个 <turn_frame> JSON；它会被界面隐藏，只记录正文已公开呈现的结果，不是思维链。',
+    '只需填写 scene、decision、evidence 与 stateDelta；affordances、panels 可省略。不要复述正文，不要在 JSON 中补造设定。',
+    '权威顺序：角色卡与已启用世界书 > 用户已确认行动 > 既有已确认状态 > 本轮模型叙事。只有来源明确写为“角色卡”“世界书”“用户行动”“既有已确认状态”或“动作裁决”的事实可标 confirmed；纯正文推断和新发现一律标 hypothesis。',
+    'decision 表示正文结束这一秒唯一等待玩家处理的节点。NPC 正在等待回答时 requiresPlayerResponse=true；普通建议、闲聊或已经结束的问话不能设为强节点。',
+    'stateDelta 只写本轮已发生、可观察且有上述可信来源的变化；没有可信变化时 facts 为空。隐藏动机、未来计划和模型猜测不得进入 stateDelta。',
+    '<turn_frame>',
+    '{"scene":{"location":"","time":"","summary":"","presentActors":[]},"decision":{"kind":"direct-response|explicit-choice|immediate-threat|pending-interaction|new-discovery|navigation|open-state","focus":"","actor":"","requiresPlayerResponse":false,"urgency":"normal"},"evidence":[{"text":"","status":"confirmed|hypothesis|risk","source":""}],"stateDelta":{"summary":"","facts":[],"timeAdvanceMinutes":null}}',
+    '</turn_frame>'
   ].join('\n');
+}
+
+function buildRecommendationSceneHints({ characterCard, groupMembers, memory, worldState, characterContentMode, userMessage }) {
+  const hints = [];
+
+  // 角色性格锚点（场景容器型角色卡跳过 personality，因为它不是单一角色）
+  const charName = String(characterCard?.name || '').trim();
+  const isScenarioContainer = characterContentMode?.kind === 'scenario-container'
+    || characterContentMode === 'scenario-container';
+  const personality = isScenarioContainer ? '' : String(characterCard?.personality || '').trim();
+  const protagonistName = String(memory?.worldState?.protagonist?.name || '').trim();
+  if (protagonistName) {
+    hints.push(`玩家主角：${protagonistName}`);
+  }
+  if (charName && !isScenarioContainer) {
+    const personalityBrief = personality.slice(0, 120);
+    hints.push(`当前演绎角色：${charName}${personalityBrief ? `（性格：${personalityBrief}）` : ''}`);
+  }
+
+  // 在场角色锚点
+  const currentActNames = new Set((Array.isArray(memory?.characterRegistry?.currentAct?.members)
+    ? memory.characterRegistry.currentAct.members : [])
+    .map((member) => String(member?.name || '').trim())
+    .filter(Boolean));
+  const members = (Array.isArray(groupMembers) ? groupMembers : [])
+    .filter((member) => member && member.enabled !== false && String(member.name || '').trim())
+    .filter((member) => !currentActNames.size || currentActNames.has(String(member.name || '').trim()));
+  if (members.length > 0) {
+    const memberHints = members.slice(0, 5).map((member) => {
+      const name = String(member.name || '').trim();
+      const role = String(member.role || member.personality || '').trim().slice(0, 40);
+      return role ? `${name}（${role}）` : name;
+    });
+    hints.push(`在场角色：${memberHints.join('、')}`);
+  }
+
+  // 当前地点
+  const location = resolveWorldStateLocation(worldState)
+    || resolveWorldStateLocation(memory?.worldState);
+  if (location) {
+    hints.push(`当前地点：${location}`);
+  }
+
+  // 在台角色（来自 characterRegistry）
+  const currentActMembers = resolveCurrentActMembers(memory);
+  if (currentActMembers) {
+    hints.push(`当前在台角色：${currentActMembers}`);
+  }
+
+  // 活跃线索（来自世界状态）
+  const activeQuests = resolveActiveQuests(worldState || memory?.worldState);
+  if (activeQuests) {
+    hints.push(`活跃线索：${activeQuests}`);
+  }
+
+  // 关键事实（来自记忆）
+  const keyFacts = resolveKeyFacts(memory);
+  if (keyFacts) {
+    hints.push(`已确认事实：${keyFacts}`);
+  }
+
+  const currentUserAction = String(userMessage || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (currentUserAction) {
+    hints.push(`本轮玩家已明确的行动或问题：${currentUserAction}`);
+  }
+
+  return hints.length ? hints.join('\n') : '';
+}
+
+function resolveWorldStateLocation(worldState) {
+  if (!worldState) return '';
+  const loc = worldState.location?.current || worldState.location;
+  if (typeof loc === 'string') return loc.trim();
+  if (loc && typeof loc === 'object') {
+    return String(loc.name || loc.title || loc.label || '').trim();
+  }
+  return '';
+}
+
+function resolveCurrentActMembers(memory) {
+  const members = memory?.characterRegistry?.currentAct?.members;
+  if (!Array.isArray(members) || !members.length) return '';
+  const protagonist = String(memory?.worldState?.protagonist?.name || '').trim();
+  return members
+    .filter((member) => {
+      const name = String(member?.name || '').trim();
+      return name && name !== protagonist;
+    })
+    .map((member) => String(member.name || '').trim())
+    .slice(0, 5)
+    .join('、');
+}
+
+function buildWorldBookActivationTerms(memory, targetSpeaker) {
+  const presentCharacters = Array.isArray(memory?.narrativeRepair?.canonicalFacts?.presentCharacters)
+    ? memory.narrativeRepair.canonicalFacts.presentCharacters
+    : [];
+  const graphEntityTerms = collectGraphActivationTerms(memory?.knowledgeGraph);
+  return [...new Set([
+    ...String(resolveCurrentActMembers(memory) || '').split('、'),
+    ...presentCharacters,
+    ...graphEntityTerms,
+    targetSpeaker
+  ].map((value) => String(value || '').trim()).filter(Boolean))]
+    .slice(0, 24)
+    .join('\n');
+}
+
+function collectGraphActivationTerms(graph) {
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const edges = Array.isArray(graph?.edges) ? graph.edges : [];
+  if (!nodes.length || !edges.length) return [];
+
+  const protagonistId = graph.protagonistId;
+  const neighborIds = new Set();
+  if (protagonistId) {
+    edges.forEach((edge) => {
+      if (edge.status === 'superseded') return;
+      if (edge.sourceId === protagonistId) neighborIds.add(edge.targetId);
+      if (edge.targetId === protagonistId) neighborIds.add(edge.sourceId);
+    });
+  }
+
+  const relevantNodes = nodes.filter((node) => {
+    if (!protagonistId) return true;
+    return neighborIds.has(node.id) || node.id === protagonistId;
+  });
+
+  const terms = [];
+  relevantNodes.slice(0, 16).forEach((node) => {
+    const name = String(node.name || node.label || '').trim();
+    if (name && name.length >= 2) terms.push(name);
+    if (Array.isArray(node.aliases)) {
+      node.aliases.forEach((alias) => {
+        const normalized = String(alias || '').trim();
+        if (normalized && normalized.length >= 2 && !terms.includes(normalized)) {
+          terms.push(normalized);
+        }
+      });
+    }
+  });
+  return terms;
+}
+
+function resolveActiveQuests(worldState) {
+  if (!worldState) return '';
+  const quests = Array.isArray(worldState.quests)
+    ? worldState.quests.filter((quest) => quest && String(quest.status || '').toLowerCase() !== 'completed')
+    : [];
+  if (!quests.length) return '';
+  return quests.slice(0, 4)
+    .map((quest) => {
+      const title = String(quest.title || quest.name || quest.summary || '').trim();
+      return title.slice(0, 50);
+    })
+    .filter(Boolean)
+    .join('；');
+}
+
+function resolveKeyFacts(memory) {
+  const facts = memory?.facts;
+  if (!Array.isArray(facts) || !facts.length) return '';
+  return facts.slice(-5)
+    .map((fact) => {
+      const text = String(fact?.text || fact?.content || fact?.summary || (typeof fact === 'string' ? fact : '')).trim();
+      return text.slice(0, 60);
+    })
+    .filter(Boolean)
+    .join('；');
+}
+
+function renderDefaultPromptLayerContract({ characterCard, worldBook, roleplayMode, contentMode, protagonistName }) {
+  const characterName = String(
+    contentMode?.kind === 'scenario-container'
+      ? protagonistName
+      : protagonistName || characterCard?.name
+  ).trim() || '当前主角';
+  const worldRuleCount = (Array.isArray(worldBook) ? worldBook : [])
+    .filter((entry) => entry?.enabled !== false && entry?.constant === true)
+    .length;
+  return [
+    '# 默认保护层（不可由预设静默覆盖）',
+    `主角锚点：${characterName} 的身份、已确认行动与叙事控制权必须保留。`,
+    `世界锚点：角色卡、已启用世界书和已确认会话事实按优先级共同约束本轮；当前检测到 ${worldRuleCount} 条常驻世界规则。`,
+    `互动锚点：当前为 ${roleplayMode === 'dm' ? '标准 DM' : '会话'} 模式，任何预设只能补充文风与静态语义，不能代替玩家作出重大行动。`,
+    '兼容边界：SillyTavern 预设的静态提示词、深度、角色与宏语义可参与组装；未知 JavaScript、STScript、DOM 与 iframe 必须先审核，并只在本地受控运行时执行，绝不取得 Provider/API 密钥。'
+  ].join('\n');
+}
+
+function renderSolvedQuestionClosurePrompt(memory = {}) {
+  const worldState = memory?.worldState && typeof memory.worldState === 'object'
+    ? memory.worldState : {};
+  const resolved = [
+    ...(Array.isArray(worldState.quests) ? worldState.quests : []),
+    ...(Array.isArray(worldState.timeline) ? worldState.timeline : []),
+    ...(Array.isArray(worldState.obligations) ? worldState.obligations : [])
+  ].filter((item) => {
+    const status = String(item?.status || '').toLowerCase();
+    return ['resolved', 'completed', 'closed', 'triggered', 'fulfilled', 'cancelled'].includes(status);
+  }).map((item) => String(item?.title || item?.details || item?.type || item?.name || '').trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  const decisions = Array.isArray(memory?.eventLedger)
+    ? memory.eventLedger.slice(-20)
+      .filter((event) => /(?:resolved|completed|accepted|fulfilled|已解决|已完成|已确认)/iu.test(String(event?.status || event?.summary || '')))
+      .map((event) => String(event?.summary || '').trim())
+      .filter(Boolean)
+      .slice(-6)
+    : [];
+  if (!resolved.length && !decisions.length) return '';
+  return [
+    '# 已解决问题闭环',
+    '下列事项已经得到确认、完成、触发或结算。除非出现新的证据、直接后果、到期事件或玩家主动重开，不得把它们再次写成需要玩家回答的同一个问题，也不得反复要求同样的确认。',
+    ...(resolved.length ? [`已闭环事项：${resolved.join('；')}。`] : []),
+    ...(decisions.length ? [`已结算记录：${decisions.join('；')}。`] : []),
+    '如需再次触及，必须明确说明新增的事实或变化，而不是重复旧问题。'
+  ].join('\n');
+}
+
+function describePromptModuleTrigger(module = {}) {
+  const keys = Array.isArray(module.triggers)
+    ? module.triggers
+    : Array.isArray(module.keywords) ? module.keywords : [];
+  const normalized = keys.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4);
+  if (normalized.length) return `触发：${normalized.join('、')}`;
+  if (module.position === 'in_chat') return '按深度插入最近对话';
+  return '静态预设模块';
+}
+
+function buildPromptStudioSnapshot({
+  messageInspection = [],
+  promptModules = [],
+  promptModuleCompilation = {},
+  preflightCommunityBundles = [],
+  finalSuppressedBundles = [],
+  promptBudget = {},
+  worldBookActivation = {}
+} = {}) {
+  const retained = new Set(Array.isArray(promptBudget.retainedPromptModuleIds)
+    ? promptBudget.retainedPromptModuleIds : []);
+  const runtimeOmitted = new Set(Array.isArray(promptBudget.omittedPromptModuleIds)
+    ? promptBudget.omittedPromptModuleIds : []);
+  const compileOmitted = new Set(Array.isArray(promptModuleCompilation.omittedIds)
+    ? promptModuleCompilation.omittedIds : []);
+  const noops = new Set(Array.isArray(promptModuleCompilation.noopIds)
+    ? promptModuleCompilation.noopIds : []);
+  const truncations = new Set(Array.isArray(promptModuleCompilation.truncatedIds)
+    ? promptModuleCompilation.truncatedIds : []);
+  const suppressedKeys = new Map([
+    ...preflightCommunityBundles,
+    ...finalSuppressedBundles
+  ].filter((bundle) => bundle?.key).map((bundle) => [bundle.key, bundle]));
+  const moduleDetails = (Array.isArray(promptModules) ? promptModules : []).map((module, index) => {
+    const id = String(module?.id || `module-${index + 1}`);
+    const bundle = suppressedKeys.get(communityPresetBundleKey(module));
+    const enabled = module?.enabled !== false;
+    let status = retained.has(id) ? 'running' : 'not-running';
+    let evictionReason = '';
+    if (!enabled) {
+      status = 'disabled';
+      evictionReason = '模块已在当前会话关闭';
+    } else if (!String(module?.content || '').trim() || noops.has(id)) {
+      status = 'empty';
+      evictionReason = '没有可发送的静态提示词内容';
+    } else if (bundle?.suppressed) {
+      status = 'suppressed-for-integrity';
+      evictionReason = bundle.reason === 'module-limit-would-split-variable-chain'
+        ? '完整性保护：模块上限会拆开变量链'
+        : '完整性保护：令牌上限会拆开变量链';
+    } else if (compileOmitted.has(id) || runtimeOmitted.has(id)) {
+      status = 'evicted-by-budget';
+      evictionReason = '超出当前模块或总提示词预算';
+    } else if (truncations.has(id)) {
+      status = 'truncated';
+      evictionReason = '按当前预算保留了截断版本';
+    }
+    return {
+      id,
+      title: String(module?.title || module?.name || `未命名模块 ${index + 1}`),
+      role: normalizePromptRole(module?.role),
+      position: String(module?.position || 'system'),
+      depth: normalizeDepth(module?.depth),
+      trigger: describePromptModuleTrigger(module),
+      tokenEstimate: estimateTokens(String(module?.content || '')),
+      enabled,
+      status,
+      evictionReason,
+      editable: true,
+      // Imported SillyTavern blocks carry an authored sequence.  The studio
+      // may still toggle/override them per session, but reordering inside the
+      // bundle would silently change its static compatibility semantics.
+      orderLocked: Boolean(module?.extensions?.sillyTavernPreset)
+    };
+  });
+  return {
+    blocks: (Array.isArray(messageInspection) ? messageInspection : []).map((message) => ({
+      ...message,
+      title: promptStudioBlockTitle(message, moduleDetails),
+      editable: Boolean(message.moduleId)
+    })),
+    modules: moduleDetails,
+    integrity: {
+      status: finalSuppressedBundles.length || preflightCommunityBundles.some((bundle) => bundle.suppressed)
+        ? 'suppressed-for-integrity' : 'complete',
+      suppressedBundles: [...suppressedKeys.values()]
+        .filter((bundle) => bundle?.suppressed)
+        .map((bundle) => ({
+          title: String(bundle.title || '社区预设'),
+          reason: String(bundle.reason || '完整性保护')
+        }))
+    },
+    budgets: {
+      total: Number(promptBudget.maxTokens || 0) || null,
+      used: Number(promptBudget.afterTokens || 0),
+      worldBookActivated: Array.isArray(worldBookActivation?.activeCardIds)
+        ? worldBookActivation.activeCardIds.length : 0
+    }
+  };
+}
+
+function promptStudioBlockTitle(message = {}, modules = []) {
+  const module = modules.find((item) => item.id === message.moduleId);
+  if (module) return module.title;
+  const labels = {
+    'core-system': '默认保护层与核心契约',
+    'worldbook-anchor': '世界书硬锚点',
+    worldbook: '触发世界书',
+    'character-anchor': '角色卡硬锚点',
+    'cast-index': '多人角色索引',
+    'response-contract': '篇幅与节拍契约',
+    'interaction-contract': '互动控制契约',
+    'current-user': '当前用户输入',
+    'history-user-anchor': '最近真实用户输入',
+    history: '近期对话',
+    'history-recent': '受保护近期对话'
+  };
+  return labels[message.kind] || '本地提示词区块';
 }
 
 function renderRoleplayPresentationContract() {
@@ -919,7 +1717,8 @@ function renderRoleplayPresentationContract() {
     '用 <special_status> 分角色记录主角及本幕关键人物的当前档案。本轮实际登场、对话或与主角发生互动的每个具名人物都必须登记，并使用角色卡或世界书中的规范名称。每个角色以『角色名·状态』开头，按需包含：身份、外貌/穿着、性格、身体状况、境界/能力、物品、姿势、神情和当前目标。字段必须是“名称：内容”的单行格式，未知项写“未知”，不要编造；隐藏秘密不得写入玩家可见状态。',
     '用 <relationship_status> 记录本轮实际形成或变化的联系，优先采用“角色A→角色B：变化与依据”的格式；未见面、仅听闻的角色要明确标为间接关联。',
     '用 <NextCharacterPanel> 简短记录下一幕建议登场或退场的角色与原因。这些控制区不会显示在正文中，内容应简洁、可更新。',
+    '在正文之前用 <emotion> 标签用单个英文或中文词标注当前发言角色的主要情绪（如 happy、sad、angry、neutral、微笑、愤怒、悲伤），用于驱动角色立绘表情切换。该标签不会显示在正文中。',
     '同一回复只能推进一条连续叙事，不得在后半段重新从同一起点出发、改写另一套人物或地点版本。',
-    '不要输出内部推理过程。正文结尾必须留下用户可行动的局面，再按推荐选项协议给出 2-4 个互有差异的行动。'
+    '不要输出内部推理过程。正文结尾必须留下用户可行动的局面，再按推荐选项协议给出 3 个互有差异的行动；自由输入由界面单独承接。'
   ].join('\n');
 }

@@ -41,6 +41,8 @@ export function createComposerController({
   onSend = () => {},
   onContinue = () => {},
   onRewrite = () => {},
+  onStopGeneration = () => {},
+  onVoiceDictation = () => {},
   onToggleAuthorNote = () => {},
   onToggleBackground = () => {},
   onOpenTab = () => {},
@@ -51,6 +53,7 @@ export function createComposerController({
   windowObject = globalThis.window
 } = {}) {
   let eventsBound = false;
+  const sessionDrafts = new Map();
   const actionMenus = createComposerActionMenusController({
     root: els.stageActions,
     documentObject,
@@ -84,6 +87,7 @@ export function createComposerController({
 
   function syncActionState() {
     const availability = getAvailability();
+    const streamFinalizing = availability.streaming && state.chatStreamPhase === 'finalizing';
     const formatAction = els.stageActions?.querySelector?.('[data-action-template]');
 
     if (els.chatForm) {
@@ -95,9 +99,19 @@ export function createComposerController({
       els.sendMessageButton.disabled = !availability.canSend;
       els.sendMessageButton.title = availability.actionPending
         ? '上一项对话行动仍在处理中'
+        : streamFinalizing
+        ? '正文已生成，正在同步世界状态与记忆'
         : availability.streaming
         ? '旁白生成中，可先输入下一步'
         : (availability.hasInput ? '发送' : '请输入内容后发送');
+    }
+    // 停止按钮：仅流式生成期间可见，点击中止并保留已生成正文
+    if (els.stopGeneration) {
+      els.stopGeneration.hidden = !availability.streaming;
+    }
+    // 语音听写按钮：行动处理期间禁用（录音与流式可并存，转写结果落输入框）
+    if (els.voiceDictation) {
+      els.voiceDictation.disabled = availability.actionPending;
     }
     if (els.rewriteChatInput) {
       els.rewriteChatInput.disabled = !availability.canRewrite;
@@ -121,12 +135,15 @@ export function createComposerController({
       els.composerStatus.hidden = !availability.busy;
       els.composerStatus.textContent = availability.actionPending
         ? '正在处理对话行动'
+        : streamFinalizing ? '正文已生成 · 正在同步状态'
         : availability.streaming ? '旁白生成中 · 可继续起草' : '';
     }
     if (els.chatInput) {
       els.chatInput.disabled = availability.actionPending;
       els.chatInput.placeholder = availability.actionPending
         ? '正在处理当前行动...'
+        : streamFinalizing
+        ? '正文已生成，正在同步状态；可先写下一步...'
         : availability.streaming
         ? '旁白生成中，可先写下一步...'
         : '输入角色行动或旁白指令...';
@@ -161,6 +178,18 @@ export function createComposerController({
 
   function clearInput({ focus = false } = {}) {
     setInputValue('', { focus });
+  }
+
+  function handleSessionChanged({ previousSessionId, nextSessionId } = {}) {
+    const previousId = String(previousSessionId || '').trim();
+    const nextId = String(nextSessionId || '').trim();
+    if (!previousId || !nextId || previousId === nextId) return false;
+
+    sessionDrafts.set(previousId, String(els.chatInput?.value || ''));
+    if (els.chatInput) els.chatInput.value = sessionDrafts.get(nextId) || '';
+    resizeInput();
+    syncActionState();
+    return true;
   }
 
   function renderTargetSpeakerIndicator() {
@@ -238,8 +267,9 @@ export function createComposerController({
     dialog.showModal();
   }
 
-  function setStreamingState(streaming, statusMessage) {
+  function setStreamingState(streaming, statusMessage, phase = '') {
     state.chatStreaming = Boolean(streaming);
+    state.chatStreamPhase = state.chatStreaming ? String(phase || '') : '';
     syncActionState();
     onStreamingChange(state.chatStreaming);
     if (streaming && statusMessage) setStatus(els.sessionStatus, statusMessage, 'busy');
@@ -264,6 +294,12 @@ export function createComposerController({
     });
     els.continueMessage?.addEventListener('click', () => {
       if (getAvailability().canContinue) void onContinue();
+    });
+    els.stopGeneration?.addEventListener('click', () => {
+      onStopGeneration();
+    });
+    els.voiceDictation?.addEventListener('click', () => {
+      onVoiceDictation();
     });
     els.toggleAuthorNote?.addEventListener('click', onToggleAuthorNote);
     els.toggleBackground?.addEventListener('click', onToggleBackground);
@@ -298,6 +334,7 @@ export function createComposerController({
     getAvailability,
     getTargetSpeakerCandidates,
     handleInput,
+    handleSessionChanged,
     insertText,
     pickTargetSpeaker,
     reconcileTargetSpeaker,

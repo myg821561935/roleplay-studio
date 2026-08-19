@@ -1,18 +1,20 @@
 import {
   cleanImmersiveSidebarText,
-  formatImmersiveMemoryMeta,
-  getCustomOpeningProtagonistSnapshot,
-  mergeImmersiveFacts,
   normalizeImmersiveRecords,
   parseImmersiveDocumentSections,
-  parseImmersiveStatusFields,
   resolveLatestRoleplayPanels,
+  resolveLatestTurnFrame,
   toImmersiveWorldBookRecord
 } from './immersiveDossier.js';
+import { resolveImmersiveQuestRecords } from './immersiveStateProjection.js';
 import {
   buildImmersiveRelationshipGraph,
   renderImmersiveRelationshipGraph
 } from './relationshipGraph.js';
+import { createImmersiveMemoryLedger } from './immersiveMemoryLedger.js';
+import { createImmersiveGrowthLedger } from './immersiveGrowthLedger.js';
+import { createImmersiveSituationLedger } from './immersiveSituationLedger.js';
+import { collectImmersiveCharacterMembers } from './relationshipGraph.js';
 
 export function createImmersiveLedgerController({
   state = {},
@@ -29,9 +31,7 @@ export function createImmersiveLedgerController({
     appendImmersiveDossierEmpty = () => {},
     appendImmersiveFactGrid = () => {},
     appendImmersiveLedgerSection = () => {},
-    appendImmersiveMemoryRows = () => {},
-    createImmersiveDossier = () => ({ root: null, body: null }),
-    getImmersiveRecentTurns = () => []
+    createImmersiveDossier = () => ({ root: null, body: null })
   } = dossier;
 
   const getLatestPanels = () => resolveLatestRoleplayPanels(
@@ -47,32 +47,42 @@ export function createImmersiveLedgerController({
     const memory = state.session?.memory || {};
     const worldState = memory.worldState || {};
     const panels = getLatestPanels();
+    const turnFrame = resolveLatestTurnFrame(Array.isArray(state.session?.messages) ? state.session.messages : []);
     const crisisSections = presentation.custom
       ? []
       : parseImmersiveDocumentSections(tpl?.tabs?.currentCrisis?.content)
         .filter((section) => /线索|谜|调查|证据|异动|传闻/.test(`${section.title} ${section.body || ''}`));
     const quests = filterCustomStoryRecords(
-      normalizeImmersiveRecords(worldState.quests, '待办事项'),
+      normalizeImmersiveRecords(resolveImmersiveQuestRecords(memory), '待办事项'),
       presentation
     );
     const worldbookClues = buildImmersiveWorldBookRecords(/任务|主线|剧情|事件|线索|谜|证据|开局|传闻/, 6);
     const factRecords = filterCustomStoryRecords(
       normalizeImmersiveRecords(
         Array.isArray(memory.memoryCards)
-          ? memory.memoryCards
+          ? memory.memoryCards.filter((card) => (
+            String(card?.extensions?.stability || card?.stability || 'confirmed') === 'confirmed'
+          ))
           : Array.isArray(memory.facts) ? memory.facts : [],
         '事实'
       ),
       presentation
     ).filter((record) => /线索|证据|发现|调查|谜|秘密|异常|失踪|任务|承诺|去向/.test(`${record.title || ''} ${record.detail || ''}`));
-
+    const turnEvidence = (Array.isArray(turnFrame?.evidence) ? turnFrame.evidence : [])
+      .filter((entry) => entry?.source !== 'accepted-prose-fallback')
+      .map((entry) => ({
+        title: entry.status === 'confirmed' ? '本轮已确认' : entry.status === 'risk' ? '当前风险' : '待验证判断',
+        detail: entry.text,
+        meta: entry.source || ''
+      }))
+      .filter((entry) => entry.detail);
     const view = createImmersiveDossier({
       kind: 'intelligence',
-      eyebrow: `${presentation.title} · 局势卷宗`,
+      eyebrow: `${presentation.title} · 决策线索`,
       title: label,
       summary: panels.sceneStatus
-        ? cleanImmersiveSidebarText(panels.sceneStatus)
-        : '只呈现当前剧本已经载入或在对话中实际形成的任务、证据与未解问题。人物关系与势力归入独立卷宗。',
+        ? `围绕“${cleanImmersiveSidebarText(panels.sceneStatus)}”整理待验证信息与行动依据；当前状态、关系变化另见对应视图。`
+        : '只呈现能帮助下一步决策的任务、证据、未解问题与已载入依据，不重复展示当前状态或人物关系。',
       metrics: [
         ['任务', quests.length],
         ['底稿', worldbookClues.length],
@@ -83,11 +93,14 @@ export function createImmersiveLedgerController({
     if (crisisSections.length) {
       appendImmersiveLedgerSection(view.body, '未解异动', crisisSections, { tone: 'warning' });
     }
+    if (turnEvidence.length) {
+      appendImmersiveLedgerSection(view.body, '本轮决策依据', turnEvidence, { numbered: true, tone: 'active' });
+    }
     if (quests.length) {
       appendImmersiveLedgerSection(view.body, '当前任务', quests, { numbered: true, tone: 'active' });
     }
     if (worldbookClues.length) {
-      appendImmersiveLedgerSection(view.body, '剧本底稿', worldbookClues, { numbered: true });
+      appendImmersiveLedgerSection(view.body, '已载入的行动依据', worldbookClues, { numbered: true });
     }
     if (factRecords.length) {
       appendImmersiveLedgerSection(view.body, '已获线索', factRecords, { numbered: true, tone: 'active' });
@@ -112,9 +125,54 @@ export function createImmersiveLedgerController({
     const factionSections = presentation.custom
       ? []
       : parseImmersiveDocumentSections(tpl?.tabs?.factions?.content);
+    const knowledgeGraph = state.session?.memory?.knowledgeGraph || { nodes: [], edges: [] };
+    const memoryCards = state.session?.memory?.memoryCards || [];
+    const protagonistName = worldState.protagonist?.name || state.config?.characterCard?.name || '主角';
+    const characterPanels = splitCharacterStatus(panels.characterStatus, [protagonistName].filter(Boolean));
+    const castTab = Object.values(tpl?.tabs || {}).find((tab) => /互动|角色/.test(tab?.label || ''));
+    const members = collectImmersiveCharacterMembers({
+      configured: state.config?.groupMembers,
+      relationships: worldState.relationships,
+      characters: worldState.characters,
+      messages: state.session?.messages,
+      interactiveStatus: characterPanels.interactive,
+      relationshipStatus: panels.relationshipStatus,
+      castContent: castTab?.content,
+      protagonistNames: [protagonistName],
+      registry: state.session?.memory?.characterRegistry
+    });
+
+    // Inject active memory cards as memory nodes
+    const memoryNodes = memoryCards
+      .filter(card => card.enabled !== false && card.title)
+      .map(card => ({
+        id: card.id || card.title,
+        label: card.title,
+        name: card.title,
+        type: 'memory',
+        properties: {
+          description: card.content,
+          role: card.type === 'event' ? '关键事件' : (card.type === 'location' ? '地点' : '记忆碎片')
+        }
+      }));
+    // Try to link memories to the protagonist or characters if their keywords match
+    const memoryEdges = memoryCards
+      .filter(card => card.enabled !== false && Array.isArray(card.keywords))
+      .flatMap(card => card.keywords.map(kw => ({
+        source: card.id || card.title,
+        target: kw,
+        label: '关联',
+        type: 'RELATED_TO'
+      })));
+
+    const mergedProjection = {
+      nodes: [...(knowledgeGraph.nodes || []), ...memoryNodes],
+      edges: [...(knowledgeGraph.edges || []), ...memoryEdges]
+    };
+
     const graph = buildImmersiveRelationshipGraph({
-      protagonistName: worldState.protagonist?.name || state.config?.characterCard?.name || '主角',
-      graphProjection: state.session?.memory?.knowledgeGraph,
+      protagonistName,
+      graphProjection: mergedProjection,
       relationships: worldState.relationships,
       factions: worldState.factions,
       relationshipStatus: panels.relationshipStatus
@@ -127,10 +185,19 @@ export function createImmersiveLedgerController({
       summary: '以已发生的接触和世界状态为依据绘制关系；虚线仅表示已知但尚未直接接触的关联。',
       metrics: [
         ['已接触', directCount],
-        ['联系', graph.edges.length],
+        ['关键人物', members.length],
+        ['联系', relationships.length || graph.edges.length],
         ['势力', factions.length || factionSections.length]
       ]
     });
+    if (members.length) {
+      appendImmersiveLedgerSection(view.body, '关系人物档案', members.slice(0, 8).map((member) => ({
+        title: member.name,
+        detail: [member.role, member.relationship, member.description].filter(Boolean).join(' · ') || '已在当前叙事中登场。',
+        meta: member.encountered ? '已接触' : ''
+      })), { tone: 'active' });
+      appendRelationshipArchiveLink(view.body);
+    }
     renderImmersiveRelationshipGraph(view.body, graph, { documentObject });
     if (relationships.length) {
       appendImmersiveLedgerSection(view.body, '关系卷宗', relationships, { tone: 'active' });
@@ -144,6 +211,16 @@ export function createImmersiveLedgerController({
     els.immersiveSidebarBody.replaceChildren(view.root);
   }
 
+  function appendRelationshipArchiveLink(container) {
+    const action = documentObject.createElement('button');
+    action.type = 'button';
+    action.className = 'immersive-network-archive-link';
+    action.dataset.immersiveCharacterAction = 'open-archive';
+    action.textContent = '查看完整角色档案';
+    action.title = '打开已登场角色的完整档案与当前状态';
+    container.append(action);
+  }
+
   function buildImmersiveWorldBookRecords(pattern, limit = 6) {
     return (Array.isArray(state.config?.worldBook) ? state.config.worldBook : [])
       .filter((entry) => entry && entry.enabled !== false)
@@ -151,7 +228,17 @@ export function createImmersiveLedgerController({
         const visibility = entry?.extensions?.visibility || entry?.visibility || 'player';
         return visibility !== 'gm' && entry?.extensions?.gmOnly !== true;
       })
-      .filter((entry) => pattern.test(`${entry.title || ''} ${entry.content || ''}`))
+      .filter((entry) => pattern.test([
+        entry.title,
+        entry.name,
+        entry.category,
+        entry.type,
+        ...(Array.isArray(entry.keys) ? entry.keys : []),
+        ...(Array.isArray(entry.keywords) ? entry.keywords : []),
+        entry.extensions?.category,
+        entry.extensions?.kind,
+        ...(Array.isArray(entry.extensions?.tags) ? entry.extensions.tags : [])
+      ].filter(Boolean).join(' ')))
       .sort((left, right) => Number(right.priority ?? 50) - Number(left.priority ?? 50))
       .slice(0, limit)
       .map(toWorldBookRecord);
@@ -207,145 +294,44 @@ export function createImmersiveLedgerController({
     ].filter(Boolean).join('\n');
   }
 
-  function renderImmersiveProgressLedger(label, tpl, genre) {
-    if (!els.immersiveSidebarBody) return;
-    const presentation = getCurrentStoryPresentation(tpl, genre);
-    const opening = getCustomOpeningProtagonistSnapshot(tpl);
-    const character = state.config?.characterCard || {};
-    const memory = state.session?.memory || {};
-    const worldState = memory.worldState || {};
-    const protagonist = worldState.protagonist || {};
-    const panels = getLatestPanels();
-    const protagonistNames = [protagonist.name, character.name].filter(Boolean);
-    const protagonistStatus = splitCharacterStatus(panels.characterStatus, protagonistNames).protagonist;
-    const statusFields = parseImmersiveStatusFields(protagonistStatus);
-    const ruleSections = presentation.custom
-      ? []
-      : parseImmersiveDocumentSections(tpl?.tabs?.rules?.content)
-        .filter((section) => /修行|境界|功法|武学|神通|武器|法宝|心魔|天劫|战力/.test(section.title));
-    const crisisSections = presentation.custom
-      ? []
-      : parseImmersiveDocumentSections(tpl?.tabs?.currentCrisis?.content)
-        .filter((section) => /神通|造化|功法|境界|伤|劫|资源/.test(section.title));
-    const resources = filterCustomStoryRecords(
-      normalizeImmersiveRecords(
-        worldState.resourceLedger?.length ? worldState.resourceLedger : protagonist.inventory || worldState.inventory,
-        '随身资源'
-      ),
-      presentation
-    );
-    const injuries = filterCustomStoryRecords(
-      normalizeImmersiveRecords(protagonist.injuries, '伤势与代价'),
-      presentation
-    );
-    const facts = mergeImmersiveFacts([
-      ['姓名', opening.name || protagonist.name || character.name],
-      ['身份/境界', opening.role || protagonist.realm || character.role],
-      ['性格/道心', opening.personality || protagonist.traits || character.personality],
-      ['当前目标', opening.goal],
-      ['关系模式', opening.relationshipStyle],
-      ['当前位置', worldState.location?.current || worldState.location],
-      ...statusFields.map(({ label: fieldLabel, value }) => [fieldLabel, value])
-    ], 12);
+  const renderImmersiveSituationLedger = createImmersiveSituationLedger({
+    state,
+    els,
+    dossier,
+    getCurrentStoryPresentation,
+    getLatestPanels,
+    filterCustomStoryRecords,
+    truncateText
+  });
 
-    const view = createImmersiveDossier({
-      kind: 'progress',
-      eyebrow: `${presentation.title} · 成长档案`,
-      title: label,
-      summary: protagonist.realm && !opening.scenarioRole
-        ? `${opening.name || protagonist.name || character.name || '主角'}当前处于${protagonist.realm}，修行所得与代价均以世界状态为准。`
-        : '能力、资源与代价会随世界状态同步，不以单次模型描写覆盖既有设定。',
-      metrics: [
-        ['状态', facts.length],
-        ['资源', resources.length],
-        ['代价', injuries.length]
-      ]
-    });
+  const renderImmersiveMemoryLedger = createImmersiveMemoryLedger({
+    state,
+    els,
+    dossier,
+    resolvePrologueTemplate,
+    getCurrentStoryPresentation,
+    filterCustomStoryRecords,
+    truncateText,
+    documentObject
+  });
 
-    appendImmersiveFactGrid(view.body, facts, 'immersive-progress-facts');
-    if (injuries.length) {
-      appendImmersiveLedgerSection(view.body, '伤势与代价', injuries, { tone: 'warning' });
-    }
-    if (resources.length) {
-      appendImmersiveLedgerSection(view.body, '资源储备', resources, { tone: 'resource' });
-    }
-    if (crisisSections.length) {
-      appendImmersiveLedgerSection(view.body, '当前契机', crisisSections, { tone: 'active' });
-    }
-    if (ruleSections.length) {
-      appendImmersiveLedgerSection(view.body, '体系与边界', ruleSections);
-    }
-    appendImmersiveDossierEmpty(view.body, '尚未建立成长记录。完成开局或推进一轮剧情后会自动补全。');
-    els.immersiveSidebarBody.replaceChildren(view.root);
-  }
-
-  function renderImmersiveMemoryLedger(label, genre) {
-    if (!els.immersiveSidebarBody) return;
-    const { tpl } = resolvePrologueTemplate();
-    const presentation = getCurrentStoryPresentation(tpl, genre);
-    const memory = state.session?.memory || {};
-    const worldState = memory.worldState || {};
-    const timeline = filterCustomStoryRecords(
-      normalizeImmersiveRecords(worldState.timeline, '剧情纪事'),
-      presentation
-    );
-    const memoryCards = Array.isArray(memory.memoryCards)
-      ? memory.memoryCards
-      : Array.isArray(memory.facts) ? memory.facts : [];
-    const recentFacts = filterCustomStoryRecords(
-      memoryCards.slice(-12).reverse().map((fact, index) => ({
-        title: fact.title || fact.subject || `事实 ${memoryCards.length - index}`,
-        detail: fact.content || fact.fact || [fact.subject, fact.predicate, fact.object].filter(Boolean).join(' '),
-        meta: formatImmersiveMemoryMeta(fact)
-      })).filter((item) => item.detail),
-      presentation
-    ).slice(0, 7);
-    const recentTurns = getImmersiveRecentTurns(state.session?.messages || []);
-    const summary = cleanImmersiveSidebarText(memory.rollingSummary);
-
-    const view = createImmersiveDossier({
-      kind: 'memory',
-      eyebrow: `${presentation.title} · 叙事记忆`,
-      title: label,
-      summary: '长期摘要负责守住章节因果，近期纪事负责保留刚刚发生、尚未沉淀的客观信息。',
-      metrics: [
-        ['长期摘要', summary ? 1 : 0],
-        ['事实卡', memoryCards.length],
-        ['待整理回合', Number(memory.unsummarizedTurnCount || 0)]
-      ]
-    });
-
-    const longTerm = documentObject.createElement('section');
-    longTerm.className = 'immersive-memory-block immersive-memory-long-term';
-    const longTermTitle = documentObject.createElement('div');
-    longTermTitle.className = 'immersive-memory-block-title';
-    const longTermHeading = documentObject.createElement('h4');
-    longTermHeading.textContent = '长期记忆';
-    const longTermBadge = documentObject.createElement('span');
-    longTermBadge.textContent = summary ? '已沉淀' : '等待总结';
-    longTermTitle.append(longTermHeading, longTermBadge);
-    const longTermText = documentObject.createElement('p');
-    longTermText.textContent = summary || '尚未形成章节摘要。达到总结阈值后，系统会把稳定因果沉淀到这里。';
-    longTerm.append(longTermTitle, longTermText);
-    view.body.append(longTerm);
-
-    if (recentFacts.length) {
-      appendImmersiveMemoryRows(view.body, '短期事实', recentFacts);
-    }
-    if (timeline.length) {
-      appendImmersiveMemoryRows(view.body, '剧情纪事', timeline.slice(-8).reverse());
-    }
-    if (recentTurns.length) {
-      appendImmersiveMemoryRows(view.body, '最近对话', recentTurns);
-    }
-    els.immersiveSidebarBody.replaceChildren(view.root);
-  }
+  const renderImmersiveGrowthLedger = createImmersiveGrowthLedger({
+    state,
+    els,
+    dossier,
+    getCurrentStoryPresentation,
+    getLatestPanels,
+    splitCharacterStatus,
+    truncateText
+  });
 
   return {
     filterCustomStoryRecords,
     renderImmersiveIntelligenceLedger,
     renderImmersiveRelationshipLedger,
     renderImmersiveMemoryLedger,
-    renderImmersiveProgressLedger
+    renderImmersiveGrowthLedger,
+    renderImmersiveProgressLedger: renderImmersiveGrowthLedger,
+    renderImmersiveSituationLedger
   };
 }

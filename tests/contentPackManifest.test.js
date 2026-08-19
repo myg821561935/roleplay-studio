@@ -18,7 +18,7 @@ test('content pack v1 bundle is self-contained and preserves story systems', () 
   assert.equal(restored.ruleSystem.id, 'rain-night-rules');
   assert.equal(restored.lightFrontend.quickReplies[0].label, '查看雨势');
   assert.equal(restored.lightFrontend.panels[0].title, '线索档案');
-  assert.equal(restored.lightFrontend.mvu.values.clueCount, 0);
+  assert.equal(restored.lightFrontend.mvu.values.chat.clueCount, 0);
   assert.equal(restored.groupMembers[0].name, '守夜人');
   assert.equal(restored.openingTemplate.title, '听雨开局');
   assert.ok(bundle.manifest.capabilities.includes('quick-replies'));

@@ -2,6 +2,10 @@ import { deflateSync } from 'node:zlib';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n += 1) {
@@ -73,7 +77,8 @@ export function exportCharacterCardPng(characterCard, worldBook = [], basePng = 
   const base64 = Buffer.from(json, 'utf8').toString('base64');
 
   const png = normalizeBasePng(basePng) || createPlaceholderPng(256, 256, [45, 42, 58]);
-  const textChunk = createTextChunk('chara', base64);
+  const keyword = String(v2Card?.spec || '').toLowerCase() === 'chara_card_v3' ? 'ccv3' : 'chara';
+  const textChunk = createTextChunk(keyword, base64);
   return replaceCharacterMetadata(png, textChunk);
 }
 
@@ -113,36 +118,48 @@ function replaceCharacterMetadata(png, textChunk) {
   return Buffer.concat([PNG_SIGNATURE, ...chunks]);
 }
 
+const CHARA_KEYWORDS = new Set(['chara', 'ccv3']);
+
 function isCharacterTextChunk(type, data) {
   if (!['tEXt', 'zTXt', 'iTXt'].includes(type)) return false;
   const separator = data.indexOf(0);
   if (separator < 0) return false;
-  return data.subarray(0, separator).toString(type === 'iTXt' ? 'utf8' : 'latin1').toLowerCase() === 'chara';
+  return CHARA_KEYWORDS.has(data.subarray(0, separator).toString(type === 'iTXt' ? 'utf8' : 'latin1').toLowerCase());
 }
 
 function toV2CharacterCard(characterCard, worldBook = []) {
   const card = characterCard || {};
-  return {
-    spec: 'chara_card_v2',
-    spec_version: '2.0',
-    data: {
-      name: card.name || '',
-      description: card.description || '',
-      personality: card.personality || '',
-      scenario: card.scenario || '',
-      first_mes: card.firstMessage || '',
-      mes_example: Array.isArray(card.exampleDialog) ? card.exampleDialog.join('\n') : '',
-      creator_notes: card.creatorNotes || '',
-      system_prompt: card.systemPrompt || '',
-      post_history_instructions: card.postHistoryInstructions || '',
-      alternate_greetings: Array.isArray(card.alternateGreetings) ? card.alternateGreetings : [],
-      tags: Array.isArray(card.tags) ? card.tags : [],
-      creator: card.creator || '',
-      character_version: card.characterVersion || '1.0',
-      extensions: card.extensions || {},
-      character_book: toV2CharacterBook(worldBook)
-    }
+  const isV3 = String(card.sourceSpec || '').toLowerCase() === 'chara_card_v3';
+  const data = {
+    name: card.name || '',
+    description: card.description || '',
+    personality: card.personality || '',
+    scenario: card.scenario || '',
+    first_mes: card.firstMessage || '',
+    mes_example: Array.isArray(card.exampleDialog) ? card.exampleDialog.join('\n') : '',
+    creator_notes: card.creatorNotes || '',
+    system_prompt: card.systemPrompt || '',
+    post_history_instructions: card.postHistoryInstructions || '',
+    alternate_greetings: Array.isArray(card.alternateGreetings) ? card.alternateGreetings : [],
+    tags: Array.isArray(card.tags) ? card.tags : [],
+    creator: card.creator || '',
+    character_version: card.characterVersion || '1.0',
+    extensions: card.extensions || {},
+    character_book: toV2CharacterBook(worldBook)
   };
+  if (isV3) {
+    Object.assign(data, {
+      nickname: card.nickname || '',
+      group_only_greetings: Array.isArray(card.groupOnlyGreetings) ? card.groupOnlyGreetings : [],
+      creator_notes_multilingual: isPlainObject(card.creatorNotesMultilingual) ? card.creatorNotesMultilingual : {},
+      source: Array.isArray(card.source) ? card.source : [],
+      assets: Array.isArray(card.assets) ? card.assets : [],
+      creation_date: Number.isFinite(Number(card.creationDate)) ? Math.floor(Number(card.creationDate)) : undefined,
+      modification_date: Number.isFinite(Number(card.modificationDate)) ? Math.floor(Number(card.modificationDate)) : undefined
+    });
+    return { spec: 'chara_card_v3', spec_version: '3.0', data };
+  }
+  return { spec: 'chara_card_v2', spec_version: '2.0', data };
 }
 
 function toV2CharacterBook(worldBook) {

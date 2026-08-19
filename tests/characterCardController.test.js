@@ -41,6 +41,145 @@ test('character overview values flatten nested arrays and objects for readable d
   }), '身份：巡夜人\n资源：旧灯\n铜钱');
 });
 
+test('renderCharacterOverview shows a multilingual creator notes section when card declares creator_notes_multilingual', () => {
+  const created = [];
+  const documentRef = {
+    createElement: (tagName) => {
+      const el = {
+        tagName,
+        className: '',
+        textContent: '',
+        children: [],
+        append(...items) { this.children.push(...items); },
+        replaceChildren() { this.children.length = 0; }
+      };
+      created.push(el);
+      return el;
+    }
+  };
+  const controller = createCharacterCardController({
+    elements: { characterOverview: { replaceChildren() {}, append() {} } },
+    getCharacterCard: () => ({
+      name: '测试卡',
+      creatorNotes: 'Default notes.',
+      creatorNotesMultilingual: { en: 'English notes.', zh: '中文注释。' }
+    }),
+    documentRef
+  });
+  controller.renderCharacterOverview();
+  // 多语言注释区块应包含语言标签与对应文本
+  const langLabels = created.filter((el) => el.textContent === 'English' || el.textContent === '中文');
+  assert.ok(langLabels.length >= 2, '应渲染 en 和 zh 语言标签');
+  const noteTexts = created.filter((el) => el.textContent === 'English notes.' || el.textContent === '中文注释。');
+  assert.equal(noteTexts.length, 2, '应渲染两种语言的注释文本');
+});
+
+test('renderCharacterOverview omits multilingual section when no creator_notes_multilingual is present', () => {
+  const created = [];
+  const documentRef = {
+    createElement: (tagName) => {
+      const el = {
+        tagName,
+        className: '',
+        textContent: '',
+        children: [],
+        append(...items) { this.children.push(...items); },
+        replaceChildren() { this.children.length = 0; }
+      };
+      created.push(el);
+      return el;
+    }
+  };
+  const controller = createCharacterCardController({
+    elements: { characterOverview: { replaceChildren() {}, append() {} } },
+    getCharacterCard: () => ({ name: '无多语言卡', creatorNotes: '单一注释。' }),
+    documentRef
+  });
+  controller.renderCharacterOverview();
+  const multilingualHeader = created.find((el) => el.textContent === '多语言注释');
+  assert.equal(multilingualHeader, undefined, '无多语言注释时不应渲染该区块');
+});
+
+function createStubDocument(created) {
+  return {
+    createElement: (tagName) => {
+      const el = {
+        tagName,
+        className: '',
+        textContent: '',
+        src: '',
+        alt: '',
+        children: [],
+        listeners: {},
+        append(...items) { this.children.push(...items); },
+        replaceChildren() { this.children.length = 0; },
+        addEventListener(type, handler) { this.listeners[type] = handler; },
+        querySelector() { return null; },
+        prepend(item) { this.children.unshift(item); }
+      };
+      created.push(el);
+      return el;
+    }
+  };
+}
+
+test('renderCharacterOverview renders V3 assets with proxied external images and safe uri filtering', () => {
+  const created = [];
+  const documentRef = createStubDocument(created);
+  const controller = createCharacterCardController({
+    elements: { characterOverview: { replaceChildren() {}, append() {} } },
+    getCharacterCard: () => ({
+      name: 'V3 资产卡',
+      sourceSpec: 'chara_card_v3',
+      assets: [
+        { type: 'image', name: '立绘.png', ext: 'png', uri: 'https://example.com/portrait.png' },
+        { type: 'music', name: '主题曲.mp3', ext: 'mp3', uri: 'https://example.com/theme.mp3' },
+        { type: 'image', name: '危险图.png', ext: 'png', uri: 'javascript:alert(1)' },
+        { type: 'image', name: '内联图.png', ext: 'png', uri: 'data:image/png;base64,AAAA' },
+        { type: 'icon', name: '头像.png', ext: 'png', uri: '/assets/local-avatar.png' }
+      ]
+    }),
+    documentRef
+  });
+  controller.renderCharacterOverview();
+
+  // spec 徽章
+  const specBadge = created.find((el) => el.textContent === 'V3 卡');
+  assert.ok(specBadge, '应渲染 V3 卡规范徽章');
+
+  // assets 标题
+  const assetsHeader = created.find((el) => el.textContent === '卡内素材（5）');
+  assert.ok(assetsHeader, '应渲染卡内素材区块标题');
+
+  // 外链图片走代理
+  const images = created.filter((el) => el.tagName === 'img');
+  const proxied = images.find((el) => el.src === '/api/proxy-image?url=https%3A%2F%2Fexample.com%2Fportrait.png');
+  assert.ok(proxied, '外链图片应经 /api/proxy-image 代理');
+  // 同源相对路径直连
+  const relative = images.find((el) => el.src === '/assets/local-avatar.png');
+  assert.ok(relative, '同源相对路径图片应直接引用');
+  // javascript:/data: URI 一律不生成 img
+  const dangerous = images.filter((el) => el.src.includes('javascript:') || el.src.includes('data:'));
+  assert.equal(dangerous.length, 0, '危险 URI 不应进入 img.src');
+
+  // 音乐类素材无预览图，显示类型占位
+  const fallbacks = created.filter((el) => el.className === 'character-asset-fallback');
+  assert.equal(fallbacks.length, 3, '音乐 + 两个危险 URI 共 3 个占位');
+});
+
+test('renderCharacterOverview omits assets section when card has no assets', () => {
+  const created = [];
+  const documentRef = createStubDocument(created);
+  const controller = createCharacterCardController({
+    elements: { characterOverview: { replaceChildren() {}, append() {} } },
+    getCharacterCard: () => ({ name: '普通卡' }),
+    documentRef
+  });
+  controller.renderCharacterOverview();
+  const assetsHeader = created.find((el) => String(el.textContent).startsWith('卡内素材'));
+  assert.equal(assetsHeader, undefined, '无 assets 时不应渲染素材区块');
+});
+
 test('character-card controller saves editor state with the active session id', async () => {
   const editor = { value: '' };
   const saveButton = { disabled: false };

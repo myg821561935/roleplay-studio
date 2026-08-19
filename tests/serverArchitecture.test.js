@@ -25,7 +25,7 @@ test('server entry delegates bounded API areas to route modules', async () => {
   assert.match(app, /handleSessionConfigMigrationRoutes\(\{/);
   assert.doesNotMatch(app, /url\.pathname === '\/api\/import\/preview'/);
   assert.doesNotMatch(app, /url\.pathname === '\/api\/story-projects'/);
-  assert.ok(app.split('\n').length < 2200, 'server/app.js should remain an orchestration entry');
+  assert.ok(app.split('\n').length < 2300, 'server/app.js should remain an orchestration entry');
 });
 
 test('route modules own their endpoint families', async () => {

@@ -18,6 +18,15 @@ server.on('error', (error) => {
   process.exitCode = 1;
 });
 
+process.on('unhandledRejection', (reason) => {
+  console.error('[local-roleplay-agent] Unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[local-roleplay-agent] Uncaught exception:', error);
+  process.exit(1);
+});
+
 server.listen(port, host, () => {
   console.log(`Local roleplay agent v${APP_VERSION} running at http://${host}:${port}`);
   console.log(`Data schema v${migration.currentVersion}; applied migrations: ${migration.applied.join(', ') || 'none'}`);

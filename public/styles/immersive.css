@@ -69,24 +69,136 @@
   gap: 10px;
 }
 
+.immersive-character-roster {
+  display: grid;
+  gap: 16px;
+}
+
+.immersive-character-group {
+  display: grid;
+  gap: 10px;
+}
+
+.immersive-character-group > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.immersive-character-group h4,
+.immersive-character-group p {
+  margin: 0;
+}
+
+.immersive-character-group h4 {
+  color: var(--text);
+  font-family: var(--display);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.immersive-character-group p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.immersive-character-group-count {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid rgba(129, 212, 202, 0.28);
+  border-radius: 999px;
+  color: var(--teal);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.immersive-character-group.is-declared {
+  opacity: 0.88;
+}
+
+.immersive-character-group.is-declared .immersive-character-card {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.immersive-character-group-empty {
+  padding: 10px 12px;
+}
+
+.immersive-character-archive-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 11px;
+  border: 1px solid rgba(129, 212, 202, 0.2);
+  border-radius: 8px;
+  background: rgba(129, 212, 202, 0.045);
+}
+
+.immersive-character-archive-actions p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.immersive-network-archive-link {
+  width: fit-content;
+  margin: -4px 0 2px;
+  padding: 7px 10px;
+  border: 1px solid rgba(129, 212, 202, 0.26);
+  border-radius: 6px;
+  background: rgba(129, 212, 202, 0.06);
+  color: var(--teal);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.immersive-network-archive-link:hover {
+  border-color: rgba(129, 212, 202, 0.46);
+  background: rgba(129, 212, 202, 0.12);
+}
+
 .immersive-character-card {
+  position: relative;
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
-  gap: 11px;
+  gap: 12px;
   min-width: 0;
-  padding: 10px;
-  border: 1px solid rgba(129, 212, 202, 0.18);
-  border-radius: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
   background: rgba(255, 255, 255, 0.035);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 4px 12px rgba(0, 0, 0, 0.15);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s, border-color 0.3s, box-shadow 0.3s;
+}
+
+.immersive-character-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(214, 166, 74, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
 .immersive-protagonist-card {
   overflow: hidden;
-  border: 1px solid rgba(129, 212, 202, 0.22);
-  border-radius: 8px;
+  border: 1px solid rgba(129, 212, 202, 0.3);
+  border-radius: 12px;
   background: rgba(6, 11, 14, 0.76);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
 .immersive-protagonist-hero {
@@ -129,22 +241,52 @@
   padding-bottom: 4px;
 }
 
-.immersive-protagonist-heading > span {
+.immersive-protagonist-heading span {
   display: block;
-  margin-bottom: 7px;
-  color: rgba(129, 212, 202, 0.78);
-  font-size: 10px;
-  font-weight: 760;
+  margin-bottom: 6px;
+  color: var(--teal);
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: 0.1em;
 }
 
 .immersive-protagonist-heading h3 {
   margin: 0;
-  overflow-wrap: anywhere;
-  color: var(--text);
+  color: #fff;
   font-family: var(--display);
-  font-size: 23px;
+  font-size: 20px;
   line-height: 1.2;
+}
+
+.immersive-faction-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  box-shadow: 0 0 6px currentColor;
+}
+.immersive-faction-indicator.is-hostile { color: #ff5e5e; background: #ff5e5e; }
+.immersive-faction-indicator.is-allied { color: #51cfc1; background: #51cfc1; }
+.immersive-faction-indicator.is-neutral { color: #e2c98f; background: #e2c98f; }
+
+.immersive-character-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.immersive-character-heading strong {
+  color: #fff;
+  font-size: 14px;
+}
+
+.immersive-character-heading span:not(.immersive-faction-indicator) {
+  color: rgba(214, 166, 74, 0.8);
+  font-size: 11px;
 }
 
 .immersive-protagonist-heading p {
@@ -156,32 +298,44 @@
 
 .immersive-protagonist-facts,
 .immersive-character-facts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 0;
-  padding: 1px;
-  background: rgba(255, 255, 255, 0.06);
+  padding: 4px;
 }
 
 .immersive-protagonist-facts > div,
 .immersive-character-facts > div {
-  min-width: 0;
-  padding: 9px 10px;
-  background: rgba(8, 13, 15, 0.94);
+  flex: 1 1 45%;
+  min-width: 120px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.immersive-protagonist-facts > div:hover,
+.immersive-character-facts > div:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(214, 166, 74, 0.3);
 }
 
 .immersive-protagonist-facts > .is-wide,
 .immersive-character-facts > .is-wide {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
 }
 
 .immersive-protagonist-facts dt,
 .immersive-character-facts dt {
-  margin-bottom: 3px;
-  color: rgba(129, 212, 202, 0.72);
-  font-size: 9px;
-  font-weight: 760;
+  margin-bottom: 4px;
+  color: rgba(129, 212, 202, 0.85);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .immersive-protagonist-facts dd,
@@ -189,31 +343,43 @@
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
-  color: var(--text);
-  font-size: 11px;
-  line-height: 1.55;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 .immersive-character-facts {
-  margin: 0 0 8px;
-  border-radius: 4px;
-  overflow: hidden;
+  margin: 8px 0;
+}
+
+.immersive-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(214, 166, 74, 0.15);
+  border: 1px solid rgba(214, 166, 74, 0.3);
+  border-radius: 12px;
+  color: #f5deb0;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .immersive-profile-meter {
   display: block;
-  height: 3px;
-  margin-top: 6px;
+  height: 4px;
+  margin-top: 8px;
   overflow: hidden;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .immersive-profile-meter i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--teal), var(--gold));
+  background: linear-gradient(90deg, #51cfc1, #e2c98f);
+  box-shadow: 0 0 8px rgba(81, 207, 193, 0.5);
 }
 
 .immersive-profile-section {
@@ -858,6 +1024,13 @@
   stroke: rgba(214, 166, 74, 0.64);
 }
 
+.immersive-graph-node.is-knowledge rect,
+.immersive-graph-node.is-memory rect {
+  fill: rgba(28, 43, 65, 0.9);
+  stroke: rgba(110, 160, 230, 0.6);
+  stroke-dasharray: 4 2;
+}
+
 .immersive-graph-node.is-indirect {
   opacity: 0.58;
 }
@@ -869,6 +1042,7 @@
   fill: rgba(35, 75, 73, 0.98);
   stroke: #a7e4dc;
   stroke-width: 2.5;
+  filter: drop-shadow(0 0 8px rgba(129, 212, 202, 0.4));
 }
 
 .immersive-graph-node text {
@@ -878,13 +1052,165 @@
   pointer-events: none;
 }
 
+.immersive-graph-edge.is-dimmed,
+.immersive-graph-node.is-dimmed {
+  opacity: 0.18 !important;
+  filter: grayscale(0.8);
+  transition: opacity 0.22s ease, filter 0.22s ease;
+}
+
+.immersive-graph-edge.is-highlighted {
+  stroke: var(--teal, #60e0d0);
+  stroke-width: 2.8;
+  filter: drop-shadow(0 0 6px rgba(121, 211, 201, 0.6));
+}
+
+.immersive-graph-node.is-selected circle,
+.immersive-graph-node.is-selected rect {
+  stroke: var(--gold, #ffc860);
+  stroke-width: 3.2;
+  filter: drop-shadow(0 0 12px rgba(255, 200, 96, 0.6));
+}
+
+.immersive-graph-node.is-neighbor circle,
+.immersive-graph-node.is-neighbor rect {
+  stroke: var(--teal, #60e0d0);
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 8px rgba(121, 211, 201, 0.4));
+}
+
 .immersive-relationship-graph-detail,
 .immersive-relationship-graph-empty {
-  min-height: 38px;
+  min-height: 44px;
   margin: 0;
-  padding: 10px 13px;
-  border-top: 1px solid rgba(129, 212, 202, 0.14);
+  padding: 12px 14px;
+  border-top: 1px solid var(--line, rgba(129, 212, 202, 0.14));
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+  background: var(--panel-deep, rgba(4, 10, 12, 0.4));
+}
+
+.immersive-graph-detail-placeholder {
+  margin: 0;
+  color: var(--subtle);
+  font-size: 11px;
+}
+
+.immersive-graph-panorama-card {
+  display: grid;
+  gap: 10px;
+}
+
+.immersive-graph-panorama-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.immersive-graph-panorama-header > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.immersive-graph-panorama-header strong {
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--display, var(--sans));
+}
+
+.immersive-graph-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  border: 1px solid var(--line);
+}
+
+.immersive-graph-badge.is-protagonist {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 45%, var(--line));
+  background: color-mix(in srgb, var(--gold) 12%, var(--panel));
+}
+
+.immersive-graph-badge.is-faction {
+  color: var(--teal);
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--line));
+  background: color-mix(in srgb, var(--teal) 12%, var(--panel));
+}
+
+.immersive-graph-badge.is-character {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.immersive-graph-reset-focus {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
   color: var(--muted);
   font-size: 10px;
-  line-height: 1.65;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.immersive-graph-reset-focus:hover {
+  background: var(--panel-raised);
+  color: var(--text);
+  border-color: var(--teal);
+}
+
+.immersive-graph-panorama-role {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.immersive-graph-panorama-relations h5,
+.immersive-graph-panorama-causal h5 {
+  margin: 0 0 6px;
+  color: var(--subtle);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.immersive-graph-relation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.immersive-graph-relation-tag {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--teal) 30%, var(--line));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--teal) 8%, var(--panel));
+  color: var(--teal);
+  font-size: 10px;
+}
+
+.immersive-graph-causal-list {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.immersive-graph-causal-list li {
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.immersive-graph-text-subtle {
+  color: var(--subtle);
+  font-size: 10px;
 }

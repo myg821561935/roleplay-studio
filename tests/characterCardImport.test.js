@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deflateSync } from 'node:zlib';
 import {
   extractCharacterCardImage,
   importCharacterCardFromPayload
@@ -26,6 +27,49 @@ test('imports Character Card V2 JSON into local character card and world book en
   assert.deepEqual(imported.worldBook[0].secondaryKeywords, ['暗线']);
   assert.equal(imported.worldBook[0].logic, 'and_any');
   assert.equal(imported.worldBook[0].depth, 6);
+  // SillyTavern V2 规范：character_book.token_budget 保留到卡片扩展元数据，
+  // 供后续裁剪逻辑回退使用。
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook.tokenBudget, 500);
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook.recursiveScanning, true);
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook.scanDepth, 6);
+});
+
+test('preserves character_book extensions token_budget when book-level value is absent', () => {
+  const fixture = {
+    spec: 'chara_card_v2',
+    data: {
+      name: '扩展预算卡',
+      character_book: {
+        extensions: { token_budget: 2048, recursive_scanning: true },
+        entries: [{ id: 1, content: '条目' }]
+      }
+    }
+  };
+  const imported = importCharacterCardFromPayload({
+    fileName: 'ext.json',
+    mimeType: 'application/json',
+    data: JSON.stringify(fixture)
+  });
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook.tokenBudget, 2048);
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook.recursiveScanning, true);
+});
+
+test('omits worldBook meta when character_book has no token_budget or scanning flags', () => {
+  const fixture = {
+    spec: 'chara_card_v2',
+    data: {
+      name: '无预算卡',
+      character_book: {
+        entries: [{ id: 1, content: '条目' }]
+      }
+    }
+  };
+  const imported = importCharacterCardFromPayload({
+    fileName: 'no-budget.json',
+    mimeType: 'application/json',
+    data: JSON.stringify(fixture)
+  });
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook, undefined);
 });
 
 test('imports Character Card V2 from PNG Chara metadata', () => {
@@ -42,6 +86,96 @@ test('imports Character Card V2 from PNG Chara metadata', () => {
   assert.equal(imported.characterCard.extensions.local_roleplay_agent.sourceFileName, 'shen.png');
   assert.equal(imported.worldBook[0].source, 'character-card-v2');
 });
+
+test('imports CharX ZIP archive containing card.json and avatar asset', () => {
+  // CharX 是 SillyTavern/RisuAI 的 ZIP 角色卡格式，包含 card.json 与 assets/ 头像。
+  const cardJson = JSON.stringify({
+    spec: 'chara_card_v3',
+    spec_version: '3.0',
+    data: {
+      name: 'CharX角色',
+      description: '来自压缩包的角色。',
+      first_mes: '从 CharX 中醒来。',
+      character_book: {
+        token_budget: 800,
+        entries: [{ id: 1, keys: ['背景'], content: '背景设定。', enabled: true }]
+      }
+    }
+  });
+  const avatarPng = createPngWithTextChunk('chara', Buffer.from(JSON.stringify({ name: 'avatar' }), 'utf8').toString('base64'));
+  const charx = createZipBuffer([
+    { name: 'card.json', data: Buffer.from(cardJson, 'utf8') },
+    { name: 'assets/avatar.png', data: avatarPng }
+  ]);
+  const imported = importCharacterCardFromPayload({
+    fileName: 'charx-test.charx',
+    mimeType: 'application/zip',
+    data: charx,
+    encoding: 'base64'
+  });
+
+  assert.equal(imported.characterCard.name, 'CharX角色');
+  assert.equal(imported.characterCard.sourceSpec, 'chara_card_v3');
+  assert.equal(imported.characterCard.firstMessage, '从 CharX 中醒来。');
+  assert.equal(imported.worldBook.length, 1);
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.sourceFileName, 'charx-test.charx');
+  assert.equal(imported.characterCard.extensions.local_roleplay_agent.worldBook.tokenBudget, 800);
+});
+
+test('extracts portrait PNG from CharX archive assets directory', () => {
+  const avatarPng = createPngWithTextChunk('chara', Buffer.from(JSON.stringify({ name: 'avatar' }), 'utf8').toString('base64'));
+  const charx = createZipBuffer([
+    { name: 'card.json', data: Buffer.from(JSON.stringify({ spec: 'chara_card_v2', data: { name: 'X' } }), 'utf8') },
+    { name: 'assets/avatar.png', data: avatarPng }
+  ]);
+  const image = extractCharacterCardImage({
+    fileName: 'test.charx',
+    mimeType: 'application/zip',
+    data: charx,
+    encoding: 'base64'
+  });
+  assert.ok(image, '应从 CharX assets/ 提取头像');
+  assert.equal(image.mimeType, 'image/png');
+});
+
+test('CharX import rejects a ZIP without card.json as unsupported payload', () => {
+  const charx = createZipBuffer([
+    { name: 'assets/avatar.png', data: Buffer.from('not-a-real-png') }
+  ]);
+  // 没有 card.json 的 ZIP 不是有效角色卡，应抛出明确的错误。
+  assert.throws(() => {
+    importCharacterCardFromPayload({
+      fileName: 'empty.charx',
+      mimeType: 'application/zip',
+      data: charx,
+      encoding: 'base64'
+    });
+  }, /UNSUPPORTED_CHARACTER_CARD_PAYLOAD/);
+});
+
+function createZipBuffer(entries) {
+  // 构建最小化 ZIP（使用 deflate 压缩，模拟真实 CharX）。
+  const chunks = [];
+  for (const entry of entries) {
+    const nameBytes = Buffer.from(entry.name, 'utf8');
+    const compressed = deflateSync(entry.data);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0); // 签名
+    localHeader.writeUInt16LE(20, 4); // 版本
+    localHeader.writeUInt16LE(0, 6); // 标志位
+    localHeader.writeUInt16LE(8, 8); // 压缩方式: deflate
+    localHeader.writeUInt16LE(0, 10); // 时间
+    localHeader.writeUInt16LE(0, 12); // 日期
+    // CRC32 — 使用 0（我们的读取器不校验 CRC）
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(compressed.length, 18); // 压缩后大小
+    localHeader.writeUInt32LE(entry.data.length, 22); // 压缩前大小
+    localHeader.writeUInt16LE(nameBytes.length, 26);
+    localHeader.writeUInt16LE(0, 28); // 额外字段长度
+    chunks.push(localHeader, nameBytes, compressed);
+  }
+  return Buffer.concat(chunks).toString('base64');
+}
 
 test('extracts the original PNG portrait and keeps its pixels when exporting an updated card', () => {
   const original = exportCharacterCardPng({
@@ -121,6 +255,33 @@ test('imports Character Card V3 PNG envelope and embedded lore settings', () => 
   assert.equal(imported.worldBook[0].depth, 7);
   assert.equal(imported.worldBook[0].caseSensitive, true);
   assert.equal(imported.worldBook[0].position, 'before_character');
+});
+
+test('imports V3 assets array and caps it at 50 entries with invalid items dropped', () => {
+  const assets = [];
+  for (let i = 0; i < 60; i += 1) {
+    assets.push({ type: 'image', name: `素材${i}`, ext: 'png', uri: `https://example.com/a${i}.png` });
+  }
+  // 无 uri 或无 name 的条目应被丢弃
+  assets.push({ type: 'image', name: '缺uri', ext: 'png' });
+  assets.push({ type: 'image', uri: 'https://example.com/x.png' });
+  assets.push('not-an-object');
+
+  const imported = importCharacterCardFromPayload({
+    fileName: 'assets-card.json',
+    mimeType: 'application/json',
+    data: JSON.stringify({
+      spec: 'chara_card_v3',
+      spec_version: '3.0',
+      data: { name: '资产卡', assets }
+    })
+  });
+
+  assert.equal(imported.characterCard.assets.length, 50, 'assets 应被截断到 50 条');
+  assert.equal(imported.characterCard.assets[0].name, '素材0');
+  assert.equal(imported.characterCard.assets[49].name, '素材49');
+  const missing = imported.characterCard.assets.filter((a) => !a.name || !a.uri);
+  assert.equal(missing.length, 0, '缺 name/uri 的条目应被丢弃');
 });
 
 function v2CardFixture() {

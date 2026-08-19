@@ -380,8 +380,11 @@ function resolveTemplateAtom(expression, context) {
   if (/^(?:true|false)$/i.test(source)) return { valid: true, value: source.toLowerCase() === 'true' };
   if (/^(?:null|undefined)$/i.test(source)) return { valid: true, value: null };
 
-  const getter = source.match(/^(?:getvar|getglobalvar)\(\s*(['"])([^'"]+)\1\s*\)$/i);
-  if (getter) return { valid: true, value: readStatePath(resolveTemplateState(context), getter[2]) };
+  const getter = source.match(/^(getvar|getglobalvar)\(\s*(['"])([^'"]+)\2\s*\)$/i);
+  if (getter) {
+    const scope = getter[1].toLowerCase() === 'getglobalvar' ? MVU_SCOPE_GLOBAL : MVU_SCOPE_CHAT;
+    return { valid: true, value: readStatePath(resolveTemplateScopeState(context, scope), getter[3]) };
+  }
 
   if (!/^[\p{L}_$][\p{L}\p{N}_$-]*(?:\.[\p{L}\p{N}_$-]+)*$/u.test(source)) {
     return { valid: false, value: undefined };
@@ -409,6 +412,16 @@ function resolveTemplateState(context = {}) {
   const value = context.lightFrontendState ?? context.mvu ?? context.state ?? context.variables ?? {};
   if (!isPlainObject(value)) return {};
   return isPlainObject(value.values) ? value.values : value;
+}
+
+// 按作用域解析模板可读状态：chat/global 双根下的对应子树；
+// 旧版扁平 values（迁移前）按 scope 兜底——chat 返回全部，global 返回空对象
+function resolveTemplateScopeState(context = {}, scope = MVU_SCOPE_CHAT) {
+  const values = resolveTemplateState(context);
+  if (isPlainObject(values[MVU_SCOPE_CHAT]) && isPlainObject(values[MVU_SCOPE_GLOBAL])) {
+    return values[scope] || {};
+  }
+  return scope === MVU_SCOPE_CHAT ? values : {};
 }
 
 function readStatePath(value, path) {
@@ -675,6 +688,14 @@ function stringifyPanelSource(value) {
   return String(value);
 }
 
+// SillyTavern 变量作用域：chat（会话级，{{getvar}}/{{setvar}}）、global（跨会话，{{globalvar}}/{{setglobalvar}}）
+// MVU 状态树双根结构：values = { chat: {...}, global: {...} }
+// 向后兼容：旧版扁平 values 自动迁移为 { chat: {...old}, global: {} }
+const MVU_SCOPE_CHAT = 'chat';
+const MVU_SCOPE_GLOBAL = 'global';
+const MVU_SCOPES = new Set([MVU_SCOPE_CHAT, MVU_SCOPE_GLOBAL]);
+const MVU_GLOBAL_KEYS = new Set(['enabled', 'revision', 'schema', 'rules', 'updaters', 'chat', 'global']);
+
 function normalizeMvuState(value, diagnostics) {
   const source = isPlainObject(value) ? value : {};
   const candidateValues = isPlainObject(source.values)
@@ -685,23 +706,46 @@ function normalizeMvuState(value, diagnostics) {
   let values = {};
   try {
     assertSafeState(candidateValues);
-    values = structuredClone(candidateValues);
+    values = migrateToDualScope(candidateValues);
   } catch {
     diagnostics.push({ code: 'invalid-mvu-seed-disabled' });
   }
+  // 双根结构下判定是否存在实际变量（chat/global 任一非空）
+  const hasValues = Object.values(values).some((scope) => Object.keys(scope || {}).length > 0);
   return {
-    enabled: source.enabled === true || Object.keys(values).length > 0,
+    enabled: source.enabled === true || hasValues,
     values,
     revision: Math.max(0, Math.trunc(Number(source.revision) || 0))
   };
 }
 
+// 旧版扁平 values 迁移为双根：已存在 chat/global 子对象则保留；否则全部归入 chat
+function migrateToDualScope(values) {
+  if (!isPlainObject(values)) return { chat: {}, global: {} };
+  const hasChat = isPlainObject(values[MVU_SCOPE_CHAT]);
+  const hasGlobal = isPlainObject(values[MVU_SCOPE_GLOBAL]);
+  if (hasChat || hasGlobal) {
+    return {
+      chat: isPlainObject(values[MVU_SCOPE_CHAT]) ? structuredClone(values[MVU_SCOPE_CHAT]) : {},
+      global: isPlainObject(values[MVU_SCOPE_GLOBAL]) ? structuredClone(values[MVU_SCOPE_GLOBAL]) : {}
+    };
+  }
+  // 旧版扁平结构：全部归入 chat 作用域
+  const chatValues = {};
+  for (const [key, val] of Object.entries(values)) {
+    if (MVU_GLOBAL_KEYS.has(key)) continue;
+    chatValues[key] = val;
+  }
+  return { chat: chatValues, global: {} };
+}
+
 function applyMvuOperation(target, operation) {
   if (!isPlainObject(operation)) throw new Error('INVALID_MVU_OPERATION');
   const op = String(operation.op || 'set').toLowerCase();
-  const path = normalizeStatePath(operation.path);
+  const { scope, path } = resolveStateScopePath(operation.path);
   if (!path.length) throw new Error('INVALID_MVU_PATH');
-  const { parent, key } = resolveStateParent(target, path, op === 'set' || op === 'increment' || op === 'append');
+  const scoped = ensureScopeRoot(target, scope);
+  const { parent, key } = resolveStateParent(scoped, path, op === 'set' || op === 'increment' || op === 'append');
   if (op === 'set') {
     assertSafeState(operation.value);
     parent[key] = structuredClone(operation.value);
@@ -752,6 +796,36 @@ function normalizeStatePath(value) {
     return [];
   }
   return normalized;
+}
+
+// 解析 MVU 操作路径的作用域前缀：
+//   chat.xxx / chat:xxx → chat 作用域；global.xxx / global:xxx → global 作用域
+//   裸路径（xxx）默认 chat 作用域（兼容旧补丁与模型输出习惯）
+function resolveStateScopePath(value) {
+  const raw = Array.isArray(value) ? value.join('.') : String(value || '');
+  const match = /^\s*(chat|global)\s*[:.]\s*(.+)$/i.exec(raw);
+  if (match) {
+    return { scope: match[1].toLowerCase(), path: normalizeStatePath(match[2]) };
+  }
+  return { scope: MVU_SCOPE_CHAT, path: normalizeStatePath(raw) };
+}
+
+// 确保双根结构中指定作用域的根对象存在，返回该作用域的写入目标
+function ensureScopeRoot(target, scope) {
+  const normalizedScope = MVU_SCOPES.has(scope) ? scope : MVU_SCOPE_CHAT;
+  if (isPlainObject(target.chat) && isPlainObject(target.global)) return target[normalizedScope];
+  // 目标不是双根结构（旧版扁平 values）：原地改造为双根，旧数据归入 chat
+  const legacyValues = {};
+  for (const [key, val] of Object.entries(target)) {
+    if (MVU_GLOBAL_KEYS.has(key)) continue;
+    legacyValues[key] = val;
+  }
+  for (const key of Object.keys(target)) {
+    if (!MVU_SCOPES.has(key)) delete target[key];
+  }
+  target.chat = normalizedScope === MVU_SCOPE_CHAT ? legacyValues : {};
+  target.global = normalizedScope === MVU_SCOPE_GLOBAL ? legacyValues : {};
+  return target[normalizedScope];
 }
 
 function assertSafeState(value, depth = 0, seen = new Set()) {
@@ -1210,10 +1284,25 @@ function collectAllContainers(payload) {
 }
 
 function mergeMvuSeeds(values) {
-  const merged = {};
+  // 种子合并直接在双根结构上进行：裸键归 chat，显式 chat./global. 前缀归对应作用域
+  const merged = { chat: {}, global: {} };
   let enabled = false;
   let revision = 0;
   for (const value of values) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (isPlainObject(item) && item.name) {
+          const k = String(item.name).trim();
+          if (k) {
+            const { scope, path } = resolveStateScopePath(k);
+            const root = ensureScopeRoot(merged, scope);
+            writeSeedPath(root, path, item.value ?? '');
+            enabled = true;
+          }
+        }
+      }
+      continue;
+    }
     if (!isPlainObject(value)) continue;
     const normalized = normalizeMvuState(value, []);
     if (normalized.enabled) enabled = true;
@@ -1221,6 +1310,17 @@ function mergeMvuSeeds(values) {
     safeMerge(merged, normalized.values);
   }
   return { enabled, values: merged, revision };
+}
+
+// 种子写入：逐级创建父对象后写叶子值
+function writeSeedPath(root, path, value) {
+  if (!path.length) return;
+  let current = root;
+  for (const segment of path.slice(0, -1)) {
+    if (!isPlainObject(current[segment])) current[segment] = {};
+    current = current[segment];
+  }
+  current[path.at(-1)] = value;
 }
 
 function collectNamedValues(containers, names) {

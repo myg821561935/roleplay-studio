@@ -76,6 +76,7 @@ function createHarness({ apiRequest = async () => ({}) } = {}) {
     sessionProvider: createElement('sessionProvider', 'select'),
     sessionResponseLength: createElement('sessionResponseLength', 'select'),
     sessionRoleplayMode: createElement('sessionRoleplayMode', 'select'),
+    sessionPromptIntegrity: createElement('sessionPromptIntegrity'),
     sessionSettingsStatus: createElement('sessionSettingsStatus'),
     saveSessionSettings: createElement('saveSessionSettings', 'button'),
     narrativeModeButtons
@@ -168,6 +169,30 @@ test('session settings render provider choices and normalized narrative mode', (
   assert.equal(normalizeResponseLength('unexpected'), 'balanced');
   assert.equal(els.sessionRoleplayMode.value, 'dm');
   assert.equal(normalizeRoleplayMode('unexpected'), 'dm');
+});
+
+test('session settings distinguish pending community-preset verification from an integrity suppression', () => {
+  const { controller, els, state } = createHarness();
+  state.config.promptModules = [{
+    id: 'community',
+    extensions: { sillyTavernPreset: { presetTitle: '社区预设' } }
+  }];
+
+  controller.renderSessionSettings();
+  assert.equal(els.sessionPromptIntegrity.textContent, '预设待核验');
+  assert.equal(els.sessionPromptIntegrity.classList.contains('is-pending'), true);
+
+  state.session.memory = {
+    promptRuntime: {
+      communityPresetIntegrity: {
+        status: 'suppressed-for-integrity',
+        suppressedBundles: [{ title: '社区预设', reason: '变量链不完整' }]
+      }
+    }
+  };
+  controller.renderSessionSettings();
+  assert.equal(els.sessionPromptIntegrity.textContent, '预设待调整');
+  assert.equal(els.sessionPromptIntegrity.classList.contains('is-warning'), true);
 });
 
 test('roleplay mode saves independently and preserves unrelated settings', async () => {

@@ -118,6 +118,160 @@
   color: var(--reading-emphasis);
 }
 
+/* Editorial narrative hierarchy: prose stays quiet while spoken lines carry character presence. */
+:root[data-theme] .message.assistant .narrative-prose {
+  --narrative-speaker-accent: var(--accent);
+  line-break: strict;
+  text-wrap: pretty;
+}
+
+:root[data-theme] .message.assistant .narrative-prose--tone-0,
+:root[data-theme] .message.assistant .narrative-block--tone-0 {
+  --narrative-speaker-accent: var(--accent);
+}
+
+:root[data-theme] .message.assistant .narrative-prose--tone-1,
+:root[data-theme] .message.assistant .narrative-block--tone-1 {
+  --narrative-speaker-accent: var(--teal);
+}
+
+:root[data-theme] .message.assistant .narrative-prose--tone-2,
+:root[data-theme] .message.assistant .narrative-block--tone-2 {
+  --narrative-speaker-accent: var(--gold);
+}
+
+:root[data-theme] .message.assistant .narrative-prose--tone-3,
+:root[data-theme] .message.assistant .narrative-block--tone-3 {
+  --narrative-speaker-accent: var(--blue);
+}
+
+:root[data-theme] .message.assistant .narrative-prose--tone-4,
+:root[data-theme] .message.assistant .narrative-block--tone-4 {
+  --narrative-speaker-accent: color-mix(in srgb, var(--gold) 48%, var(--blue));
+}
+
+:root[data-theme] .message.assistant .narrative-block {
+  margin: 0 0 1.08em;
+}
+
+:root[data-theme] .message.assistant .narrative-block:last-child {
+  margin-bottom: 0;
+}
+
+:root[data-theme] .message.assistant .narrative-block--narration,
+:root[data-theme] .message.assistant .narrative-block--mixed {
+  color: color-mix(in srgb, var(--reading-content) 84%, var(--muted));
+}
+
+:root[data-theme] .message.assistant .narrative-block--narration {
+  text-indent: 1.6em;
+}
+
+:root[data-theme] .message.assistant .narrative-block--mixed {
+  text-indent: 0.9em;
+}
+
+:root[data-theme] .message.assistant .narrative-dialogue {
+  padding: 0.04em 0.2em 0.09em;
+  border-bottom: 1px solid color-mix(in srgb, var(--narrative-speaker-accent) 48%, transparent);
+  border-radius: 0.24em;
+  background: linear-gradient(
+    180deg,
+    transparent 10%,
+    color-mix(in srgb, var(--narrative-speaker-accent) 9%, transparent) 100%
+  );
+  color: color-mix(in srgb, var(--reading-content) 88%, var(--reading-strong));
+  font-weight: 610;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+:root[data-theme] .message.assistant .narrative-block--dialogue {
+  position: relative;
+  margin: 1.2em 0.2em 1.3em;
+  padding: 0.82em 1em 0.88em 1.25em;
+  border-left: 2px solid color-mix(in srgb, var(--narrative-speaker-accent) 60%, transparent);
+  border-radius: 2px 10px 10px 2px;
+  background: color-mix(in srgb, var(--narrative-speaker-accent) 8%, transparent);
+  color: color-mix(in srgb, var(--reading-content) 88%, var(--reading-strong));
+  font-size: 1.015em;
+  line-height: 1.82;
+  quotes: none;
+}
+
+:root[data-theme] .message.assistant .narrative-dialogue-copy {
+  display: block;
+}
+
+:root[data-theme] .message.assistant .narrative-speaker {
+  display: flex;
+  width: fit-content;
+  max-width: min(100%, 18em);
+  align-items: center;
+  gap: 0.48em;
+  margin: -0.22em 0 0.62em -0.2em;
+  padding: 0.22em 0.72em 0.26em;
+  border: 1px solid color-mix(in srgb, var(--narrative-speaker-accent) 36%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--narrative-speaker-accent) 10%, var(--reading-surface));
+  color: color-mix(in srgb, var(--narrative-speaker-accent) 72%, var(--reading-content));
+  font-size: 0.78em;
+  font-style: normal;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-indent: 0;
+}
+
+:root[data-theme] .message.assistant .narrative-speaker::before {
+  width: 0.42em;
+  height: 0.42em;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--narrative-speaker-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--narrative-speaker-accent) 12%, transparent);
+  content: "";
+}
+
+:root[data-theme] .message.assistant .narrative-speaker:has(.narrative-speaker-avatar)::before {
+  display: none;
+}
+
+:root[data-theme] .message.assistant .narrative-speaker-avatar {
+  width: 2.15em;
+  height: 2.15em;
+  flex: 0 0 auto;
+  margin: -0.48em 0 -0.48em -0.55em;
+  border: 1px solid color-mix(in srgb, var(--narrative-speaker-accent) 48%, transparent);
+  border-radius: 50%;
+  background: var(--reading-surface);
+  object-fit: cover;
+  object-position: 50% 20%;
+}
+
+:root[data-theme] .message.assistant .narrative-block--dialogue .narrative-dialogue {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+:root[data-theme] .message.assistant .narrative-special-block {
+  margin: 1.15em 0;
+}
+
+:root[data-theme] .message-role.speaker-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0.18em 0.72em 0.24em;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--reading-surface));
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-shadow: none;
+}
+
 :root[data-theme] .message-avatar {
   border-color: color-mix(in srgb, var(--accent) 54%, transparent);
   background: var(--panel-deep);
@@ -145,9 +299,11 @@
 }
 
 /* Eye-care: low glare, low ornament, and steady reading surfaces. */
+/* ════════════════════════════════════════════════
+   1. 古卷陈笺 · 泛黄书香（暖调宣纸 / 朱砂赤印）
+   ════════════════════════════════════════════════ */
 :root[data-theme="eye-care"] .message {
-  box-shadow: 0 8px 22px rgba(5, 10, 7, 0.16);
-  backdrop-filter: blur(3px);
+  box-shadow: var(--shadow-soft);
 }
 
 :root[data-theme="eye-care"] .message-content,
@@ -156,155 +312,666 @@
   text-shadow: none;
 }
 
-/* Dark: asymmetric frames and a restrained vignette for suspense or horror. */
+:root[data-theme="eye-care"] .message.assistant {
+  border-left: 3px solid var(--accent);
+}
+
+:root[data-theme="eye-care"] .send-button {
+  background: var(--send-bg);
+  color: var(--send-text);
+}
+
+:root[data-theme="eye-care"] .message.assistant .narrative-dialogue {
+  border-bottom-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 6%, transparent));
+  color: var(--text);
+}
+
+:root[data-theme="eye-care"] .message.assistant .narrative-block--dialogue {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+/* ════════════════════════════════════════════════
+   2. 玄渊曜金 · 东方玄幻（黑曜夜空 / 璀璨流金）
+   ════════════════════════════════════════════════ */
 :root[data-theme="dark"] .chat-panel {
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 :root[data-theme="dark"] .message.assistant {
-  border-left: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  border-left: 3px solid var(--gold);
 }
 
 :root[data-theme="dark"] .message.user,
 :root[data-theme="dark"] .chat-panel.has-stage-background .message.user {
-  border-right: 3px solid color-mix(in srgb, var(--teal) 54%, transparent);
-  border-radius: 14px 3px 3px 14px;
+  border-right: 3px solid var(--teal);
+  border-radius: 12px 4px 4px 12px;
 }
 
-:root[data-theme="dark"] .composer {
-  border-radius: 6px;
+:root[data-theme="dark"] .send-button {
+  background: var(--send-bg);
+  color: var(--send-text);
+  box-shadow: 0 0 16px rgba(240, 184, 72, 0.35);
 }
 
-/* Bright: a clean daylight surface while the story image remains untouched beneath it. */
-:root[data-theme="bright"] .topbar,
-:root[data-theme="bright"] .work-mode-switch,
-:root[data-theme="bright"] .theme-switcher select,
-:root[data-theme="bright"] .mode-pill {
-  background: rgba(246, 248, 248, 0.9);
-  color: var(--text);
+:root[data-theme="dark"] .message.assistant .narrative-dialogue {
+  border-bottom-color: color-mix(in srgb, var(--gold) 45%, transparent);
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--gold) 10%, transparent));
 }
 
-:root[data-theme="bright"] .message,
-:root[data-theme="bright"] .composer {
-  box-shadow: 0 10px 28px rgba(39, 54, 61, 0.16);
+:root[data-theme="dark"] .message.assistant .narrative-block--dialogue {
+  border-left-color: var(--gold);
+  border-radius: 0 4px 4px 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--gold) 12%, transparent), transparent 90%);
 }
 
-:root[data-theme="bright"] .provider-panel,
-:root[data-theme="bright"] .inspector-panel,
-:root[data-theme="bright"] .immersive-sidebar-content {
-  border-color: var(--line);
-  background: rgba(245, 247, 247, 0.94);
-  color: var(--text);
-  box-shadow: 0 14px 34px rgba(39, 54, 61, 0.16);
-}
-
-:root[data-theme="bright"] .panel.collapsed .collapsed-rail-button,
-:root[data-theme="bright"] .panel.collapsed .collapsed-rail-button svg,
-:root[data-theme="bright"] .panel.collapsed .drawer-toggle,
-:root[data-theme="bright"] .ghost-button,
-:root[data-theme="bright"] .chat-header-overlay select,
-:root[data-theme="bright"] .narrative-mode-switch {
-  border-color: var(--line);
-  background: rgba(248, 250, 250, 0.92);
-  color: var(--text);
-  box-shadow: none;
-}
-
-:root[data-theme="bright"] .ghost-button:hover,
-:root[data-theme="bright"] .panel.collapsed .collapsed-rail-button:hover,
-:root[data-theme="bright"] .panel.collapsed .collapsed-rail-button:hover span {
-  border-color: var(--line-strong);
-  color: var(--blue);
-}
-
-:root[data-theme="bright"] .immersive-sidebar-tab {
-  border-color: var(--line);
-  background: rgba(245, 247, 247, 0.92);
-  color: var(--muted);
-  box-shadow: 0 8px 22px rgba(39, 54, 61, 0.14);
-}
-
-:root[data-theme="bright"] .immersive-sidebar-tab.active,
-:root[data-theme="bright"] .immersive-sidebar-tab:hover {
-  border-color: var(--line-strong);
-  background: #ffffff;
-  color: var(--blue);
-}
-
-:root[data-theme="bright"] .stage-actions {
-  border-color: var(--line);
-  background: rgba(245, 247, 247, 0.84);
-}
-
-:root[data-theme="bright"] .composer-menu-trigger,
-:root[data-theme="bright"] .stage-actions .tool-button {
-  border-color: rgba(69, 91, 101, 0.18);
-  background: rgba(255, 255, 255, 0.5);
-  color: var(--muted);
-}
-
-:root[data-theme="bright"] .send-button {
-  background: #597f97;
-  color: #ffffff;
-}
-
-/* Soft: warm tinting and rounded dialogue for light-novel and character-driven scenes. */
+/* ════════════════════════════════════════════════
+   3. 玉华云岫 · 仙侠青白（羊脂白玉 / 碧潭翡翠青）
+   ════════════════════════════════════════════════ */
 :root[data-theme="soft"] .message.assistant,
 :root[data-theme="soft"] .chat-panel.has-stage-background .message.assistant {
-  border-radius: 8px 22px 22px 22px;
+  border-left: 3px solid var(--teal);
+  border-radius: 6px 14px 14px 6px;
 }
 
 :root[data-theme="soft"] .message.user,
 :root[data-theme="soft"] .chat-panel.has-stage-background .message.user {
-  border-radius: 22px 8px 22px 22px;
-}
-
-:root[data-theme="soft"] .composer,
-:root[data-theme="soft"] .chat-form textarea {
-  border-radius: 22px;
+  border-right: 3px solid var(--gold);
+  border-radius: 14px 6px 6px 14px;
 }
 
 :root[data-theme="soft"] .send-button {
-  background: linear-gradient(135deg, #d3a4ba, #9ebcb7);
+  background: var(--send-bg);
+  color: var(--send-text);
 }
 
-/* Modern: clean geometry and minimal ornament for contemporary stories. */
-:root[data-theme="modern"] .chat-panel::after,
-:root[data-theme="modern"] .chat-panel.has-stage-background::after {
-  opacity: 0.72;
+:root[data-theme="soft"] .message.assistant .narrative-dialogue {
+  border-bottom-color: color-mix(in srgb, var(--teal) 45%, transparent);
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--teal) 8%, transparent));
+  color: var(--text);
 }
 
-:root[data-theme="modern"] .message {
-  box-shadow: 0 10px 24px rgba(2, 7, 12, 0.24);
+:root[data-theme="soft"] .message.assistant .narrative-block--dialogue {
+  border-left-color: var(--teal);
+  border-radius: 0 6px 6px 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--teal) 10%, transparent), transparent 85%);
 }
 
-:root[data-theme="modern"] .composer {
-  border-radius: 12px;
-}
-
-/* Cyber: precise neon edges while body text stays matte and readable. */
+/* ════════════════════════════════════════════════
+   4. 幻夜霓虹 · 赛博异能（午夜深蓝 / 电光冰青）
+   ════════════════════════════════════════════════ */
 :root[data-theme="cyber"] .chat-panel,
 :root[data-theme="cyber"] .composer,
 :root[data-theme="cyber"] .chat-form textarea {
-  border-radius: 2px;
+  border-radius: 4px;
 }
 
 :root[data-theme="cyber"] .message {
-  border-left: 2px solid color-mix(in srgb, var(--teal) 66%, transparent);
-  border-right-color: color-mix(in srgb, #d64e92 38%, transparent);
+  border-left: 3px solid var(--teal);
 }
 
 :root[data-theme="cyber"] .message.user {
-  border-left-color: color-mix(in srgb, #d64e92 58%, transparent);
-  border-right: 2px solid color-mix(in srgb, var(--teal) 66%, transparent);
+  border-right: 3px solid #ff2a85;
 }
 
 :root[data-theme="cyber"] .message-content {
   text-shadow: none;
 }
 
+:root[data-theme="cyber"] .message.assistant .narrative-dialogue {
+  border-bottom-color: color-mix(in srgb, var(--teal) 60%, transparent);
+  background: linear-gradient(180deg, transparent 50%, color-mix(in srgb, var(--teal) 10%, transparent) 50%);
+}
+
+:root[data-theme="cyber"] .message.assistant .narrative-block--dialogue {
+  border-left-color: var(--teal);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--teal) 12%, transparent), transparent 80%);
+}
+
 :root[data-theme="cyber"] .send-button {
-  background: linear-gradient(135deg, #55c5c4, #4b82bb);
+  background: var(--send-bg);
+  color: var(--send-text);
+}
+
+/* ════════════════════════════════════════════════
+   5. 冷砚极简 · 现代都市（明净冷砚 / 科技雅蓝）
+   ════════════════════════════════════════════════ */
+:root[data-theme="modern"] .message.assistant {
+  border-left: 3px solid var(--accent);
+}
+
+:root[data-theme="modern"] .send-button {
+  background: var(--send-bg);
+  color: var(--send-text);
+}
+
+:root[data-theme="modern"] .message.assistant .narrative-block--dialogue {
+  border-left-color: var(--accent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent);
+}
+
+/* ════════════════════════════════════════════════
+   6. 霁月流光 · 清雅纯白（清透素雅 / 天水霁蓝）
+   ════════════════════════════════════════════════ */
+:root[data-theme="bright"] .topbar,
+:root[data-theme="bright"] .work-mode-switch,
+:root[data-theme="bright"] .theme-switcher select,
+:root[data-theme="bright"] .mode-pill {
+  background: var(--panel-raised);
+  color: var(--text);
+}
+
+:root[data-theme="bright"] .message.assistant {
+  border-left: 3px solid var(--accent);
+}
+
+:root[data-theme="bright"] .send-button {
+  background: var(--send-bg);
+  color: var(--send-text);
+}
+
+:root[data-theme="bright"] .message.assistant .narrative-dialogue {
+  border-bottom-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 6%, transparent));
+}
+
+:root[data-theme="bright"] .message.assistant .narrative-block--dialogue {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+/* Interaction drawer: its information layer follows the active reading palette.
+   The stage can remain expressive, while names, facts and relationship details
+   always live on a stable surface with the same contrast as the reading column. */
+:root[data-theme] .immersive-sidebar-content {
+  border-color: var(--reading-border);
+  background: color-mix(in srgb, var(--panel) 95%, transparent);
+  color: var(--reading-content);
+  box-shadow: var(--shadow-paper);
+}
+
+:root[data-theme] .immersive-sidebar-close {
+  border-color: var(--reading-border);
+  background: color-mix(in srgb, var(--panel-raised) 82%, transparent);
+  color: var(--muted);
+}
+
+:root[data-theme] .immersive-sidebar-title {
+  border-bottom-color: var(--reading-border);
+  color: var(--reading-strong);
+}
+
+:root[data-theme] .immersive-sidebar-body,
+:root[data-theme] .immersive-dossier,
+:root[data-theme] .immersive-director-note > summary,
+:root[data-theme] .immersive-ledger-row strong,
+:root[data-theme] .immersive-memory-row strong,
+:root[data-theme] .immersive-progress-facts dd {
+  color: var(--reading-content);
+}
+
+:root[data-theme] .immersive-sidebar-tab {
+  border-color: var(--reading-border);
+  background: color-mix(in srgb, var(--panel-deep) 88%, transparent);
+  color: var(--muted);
+  box-shadow: var(--shadow-soft);
+}
+
+:root[data-theme] .immersive-sidebar-tab.active,
+:root[data-theme] .immersive-sidebar-tab:hover {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent) 11%, var(--panel-raised));
+  color: var(--accent);
+}
+
+:root[data-theme] .immersive-character-group > header,
+:root[data-theme] .immersive-character-relationship,
+:root[data-theme] .immersive-sidebar-note,
+:root[data-theme] .immersive-profile-section {
+  border-color: var(--reading-border);
+}
+
+:root[data-theme] .immersive-character-group h4,
+:root[data-theme] .immersive-dossier-header h3,
+:root[data-theme] .immersive-character-heading strong,
+:root[data-theme] .immersive-protagonist-heading h3,
+:root[data-theme] .immersive-dossier-metrics dd,
+:root[data-theme] .immersive-relationship-graph-heading h4 {
+  color: var(--reading-strong);
+}
+
+:root[data-theme] .immersive-character-group-count,
+:root[data-theme] .immersive-character-detail > span,
+:root[data-theme] .immersive-dossier-header > div > span,
+:root[data-theme] .immersive-progress-facts dt,
+:root[data-theme] .immersive-memory-block-title span,
+:root[data-theme] .immersive-memory-row > span {
+  border-color: color-mix(in srgb, var(--teal) 38%, var(--reading-border));
+  color: var(--teal);
+}
+
+:root[data-theme] .immersive-character-card,
+:root[data-theme] .immersive-protagonist-card,
+:root[data-theme] .immersive-ledger-section,
+:root[data-theme] .immersive-memory-block,
+:root[data-theme] .immersive-community-prose,
+:root[data-theme] .immersive-sidebar-empty {
+  border-color: var(--reading-border);
+  background: color-mix(in srgb, var(--panel-raised) 68%, var(--panel-deep));
+  box-shadow: none;
+}
+
+:root[data-theme] .immersive-character-group.is-declared .immersive-character-card,
+:root[data-theme] .immersive-character-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--reading-border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel-raised));
+}
+
+:root[data-theme] .immersive-protagonist-hero,
+:root[data-theme] .immersive-dossier-header {
+  border-color: var(--reading-border);
+  background:
+    linear-gradient(112deg, color-mix(in srgb, var(--teal) 11%, transparent), transparent 58%),
+    color-mix(in srgb, var(--panel-deep) 94%, transparent);
+}
+
+:root[data-theme] .immersive-protagonist-heading p,
+:root[data-theme] .immersive-character-detail p,
+:root[data-theme] .immersive-sidebar-note p,
+:root[data-theme] .immersive-dossier-header > p,
+:root[data-theme] .immersive-ledger-row p,
+:root[data-theme] .immersive-memory-row p,
+:root[data-theme] .immersive-director-note-content,
+:root[data-theme] .immersive-community-prose > div,
+:root[data-theme] .immersive-memory-long-term > p,
+:root[data-theme] .immersive-relationship-graph-detail,
+:root[data-theme] .immersive-relationship-graph-empty {
+  color: var(--muted);
+}
+
+:root[data-theme] .immersive-protagonist-facts > div,
+:root[data-theme] .immersive-character-facts > div,
+:root[data-theme] .immersive-dossier-metrics,
+:root[data-theme] .immersive-progress-facts {
+  border-color: var(--reading-border);
+  background: color-mix(in srgb, var(--panel-deep) 84%, transparent);
+}
+
+:root[data-theme] .immersive-protagonist-facts > div,
+:root[data-theme] .immersive-character-facts > div,
+:root[data-theme] .immersive-dossier-metrics > div,
+:root[data-theme] .immersive-progress-facts > div {
+  background: color-mix(in srgb, var(--panel-raised) 76%, var(--panel-deep));
+  border-color: var(--reading-border);
+  box-shadow: none;
+}
+
+:root[data-theme] .immersive-protagonist-facts dt,
+:root[data-theme] .immersive-character-facts dt,
+:root[data-theme] .immersive-profile-section h4,
+:root[data-theme] .immersive-sidebar-note h4,
+:root[data-theme] .immersive-ledger-section > h4,
+:root[data-theme] .immersive-memory-block-title h4,
+:root[data-theme] .immersive-community-prose > h4 {
+  color: var(--teal);
+}
+
+:root[data-theme] .immersive-protagonist-facts dd,
+:root[data-theme] .immersive-character-facts dd,
+:root[data-theme] .immersive-ledger-section > h4,
+:root[data-theme] .immersive-memory-block-title,
+:root[data-theme] .immersive-community-prose > h4,
+:root[data-theme] .immersive-ledger-row,
+:root[data-theme] .immersive-memory-row {
+  border-color: var(--reading-border);
+}
+
+:root[data-theme] .immersive-protagonist-facts dd,
+:root[data-theme] .immersive-character-facts dd,
+:root[data-theme] .immersive-character-heading span,
+:root[data-theme] .immersive-badge,
+:root[data-theme] .immersive-ledger-row small,
+:root[data-theme] .immersive-memory-row small {
+  color: var(--text-soft);
+}
+
+:root[data-theme] .immersive-character-heading span,
+:root[data-theme] .immersive-badge,
+:root[data-theme] .immersive-character-expand,
+:root[data-theme] .immersive-character-archive-actions,
+:root[data-theme] .immersive-network-archive-link,
+:root[data-theme] .immersive-ledger-marker,
+:root[data-theme] .immersive-sidebar-empty {
+  border-color: color-mix(in srgb, var(--teal) 34%, var(--reading-border));
+  background: color-mix(in srgb, var(--teal) 7%, var(--panel-raised));
+  color: var(--teal);
+}
+
+:root[data-theme] .immersive-character-expand:hover,
+:root[data-theme] .immersive-character-expand:focus-visible,
+:root[data-theme] .immersive-network-archive-link:hover {
+  border-color: color-mix(in srgb, var(--teal) 62%, var(--reading-border));
+  background: color-mix(in srgb, var(--teal) 14%, var(--panel-raised));
+}
+
+:root[data-theme] .immersive-protagonist-portrait,
+:root[data-theme] .immersive-protagonist-monogram,
+:root[data-theme] .immersive-character-portrait,
+:root[data-theme] .immersive-character-monogram {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--reading-border));
+  background: var(--panel-deep);
+}
+
+:root[data-theme] .immersive-character-monogram,
+:root[data-theme] .immersive-protagonist-monogram {
+  color: var(--teal);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--teal) 12%, transparent), var(--panel-deep));
+}
+
+:root[data-theme] .immersive-profile-meter {
+  background: color-mix(in srgb, var(--text) 12%, var(--panel-deep));
+  box-shadow: none;
+}
+
+:root[data-theme] .immersive-profile-meter i {
+  background: linear-gradient(90deg, var(--teal), var(--accent));
+  box-shadow: none;
+}
+
+:root[data-theme] .immersive-ledger-section.is-faction .immersive-ledger-row {
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--accent) 46%, transparent);
+}
+
+:root[data-theme] .immersive-relationship-graph {
+  border-color: var(--reading-border);
+  background:
+    radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--teal) 10%, transparent), transparent 44%),
+    linear-gradient(var(--line-soft) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-soft) 1px, transparent 1px),
+    color-mix(in srgb, var(--panel-deep) 92%, transparent);
+  background-size: auto, 24px 24px, 24px 24px, auto;
+}
+
+:root[data-theme] .immersive-relationship-graph-heading,
+:root[data-theme] .immersive-relationship-graph-detail,
+:root[data-theme] .immersive-relationship-graph-empty {
+  border-color: var(--reading-border);
+}
+
+:root[data-theme] .immersive-relationship-graph-heading span {
+  color: var(--muted);
+}
+
+:root[data-theme] .immersive-graph-edge {
+  stroke: color-mix(in srgb, var(--teal) 54%, transparent);
+}
+
+:root[data-theme] .immersive-graph-edge.is-indirect {
+  stroke: color-mix(in srgb, var(--accent) 46%, transparent);
+}
+
+:root[data-theme] .immersive-graph-node {
+  color: var(--reading-content);
+}
+
+:root[data-theme] .immersive-graph-node circle,
+:root[data-theme] .immersive-graph-node rect {
+  fill: var(--panel-raised);
+  stroke: color-mix(in srgb, var(--teal) 66%, var(--reading-border));
+}
+
+:root[data-theme] .immersive-graph-node.is-protagonist circle {
+  fill: color-mix(in srgb, var(--accent) 16%, var(--panel-raised));
+  stroke: var(--accent);
+}
+
+:root[data-theme] .immersive-graph-node.is-faction rect {
+  fill: color-mix(in srgb, var(--accent) 12%, var(--panel-raised));
+  stroke: color-mix(in srgb, var(--accent) 68%, var(--reading-border));
+}
+
+:root[data-theme] .immersive-graph-node.is-knowledge rect,
+:root[data-theme] .immersive-graph-node.is-memory rect {
+  fill: color-mix(in srgb, var(--blue) 12%, var(--panel-raised));
+  stroke: color-mix(in srgb, var(--blue) 66%, var(--reading-border));
+}
+
+:root[data-theme] .immersive-graph-node:hover circle,
+:root[data-theme] .immersive-graph-node:hover rect,
+:root[data-theme] .immersive-graph-node:focus circle,
+:root[data-theme] .immersive-graph-node:focus rect {
+  fill: color-mix(in srgb, var(--teal) 18%, var(--panel-raised));
+  stroke: var(--teal);
+  filter: none;
+}
+
+/* The eye-care mode stays quiet even when the story stage itself is saturated. */
+:root[data-theme="eye-care"] .immersive-sidebar-content {
+  background: rgba(248, 241, 232, 0.97);
+}
+
+:root[data-theme="eye-care"] .immersive-character-card,
+:root[data-theme="eye-care"] .immersive-protagonist-card,
+:root[data-theme="eye-care"] .immersive-ledger-section,
+:root[data-theme="eye-care"] .immersive-memory-block,
+:root[data-theme="eye-care"] .immersive-community-prose {
+  background: rgba(255, 250, 244, 0.82);
+}
+
+/* ══════════════════════════════════════════════════════════
+   Workbench & Subpage (设定 / 调试 / 接口) 全局主题统一规范层
+   确保设定与调试子面板、世界书、人设、健康度、MCP 工具等
+   所有子页面与选定阅读模式（暖米、暗金、雾银、赛博、现代、明亮）100% 协调一致
+   ══════════════════════════════════════════════════════════ */
+
+:root[data-theme] .inspector-panel,
+:root[data-theme] .provider-panel {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+
+:root[data-theme] .inspector-panel .panel-heading,
+:root[data-theme] .provider-panel .panel-heading {
+  border-bottom-color: var(--line);
+  background: color-mix(in srgb, var(--panel-raised) 75%, var(--panel));
+  color: var(--text);
+}
+
+:root[data-theme] .inspector-panel .panel-heading h2,
+:root[data-theme] .provider-panel .panel-heading h2 {
+  color: var(--gold);
+}
+
+:root[data-theme] .inspector-panel .tab-pane {
+  background: var(--panel);
+  color: var(--text);
+}
+
+:root[data-theme] .tab-button {
+  border-color: var(--line);
+  background: var(--panel-deep);
+  color: var(--muted);
+}
+
+:root[data-theme] .tab-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  color: var(--text);
+  background: var(--panel-raised);
+}
+
+:root[data-theme] .tab-button.active {
+  border-color: var(--accent);
+  background: var(--panel-raised);
+  color: var(--accent);
+  box-shadow: var(--shadow-soft);
+}
+
+:root[data-theme] .provider-tool-panel {
+  border-color: var(--line);
+  background: var(--panel-deep);
+  color: var(--text);
+}
+
+:root[data-theme] .provider-tool-panel > summary {
+  color: var(--gold);
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .tool-field span,
+:root[data-theme] .tool-lead,
+:root[data-theme] .tool-muted {
+  color: var(--muted);
+}
+
+:root[data-theme] .tool-divider {
+  border-top-color: var(--line);
+}
+
+:root[data-theme] input:not(.story-search input):not(.asset-center-search input),
+:root[data-theme] textarea,
+:root[data-theme] select,
+:root[data-theme] .form-input {
+  border-color: var(--line);
+  background: var(--panel-deep);
+  color: var(--text);
+}
+
+:root[data-theme] input:not(.story-search input):not(.asset-center-search input):focus,
+:root[data-theme] textarea:focus,
+:root[data-theme] select:focus,
+:root[data-theme] .form-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+:root[data-theme] .story-search input,
+:root[data-theme] .asset-center-search input {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+}
+
+:root[data-theme] .wb-entry-card,
+:root[data-theme] .fact-card,
+:root[data-theme] .quick-reply-row,
+:root[data-theme] .macro-template-card,
+:root[data-theme] .health-issue-card,
+:root[data-theme] .source-card,
+:root[data-theme] .authoring-card,
+:root[data-theme] .mcp-server-row,
+:root[data-theme] .mcp-tool-row,
+:root[data-theme] .memory-overview-card,
+:root[data-theme] .immersive-worldbook-card {
+  border-color: var(--line);
+  background: var(--panel-deep);
+  color: var(--text);
+}
+
+:root[data-theme] .wb-entry-card:hover,
+:root[data-theme] .fact-card:hover,
+:root[data-theme] .mcp-server-row:hover,
+:root[data-theme] .mcp-tool-row:hover,
+:root[data-theme] .immersive-worldbook-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel-raised));
+}
+
+:root[data-theme] .content-stack-summary {
+  background: color-mix(in srgb, var(--panel-raised) 70%, var(--panel));
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .content-stack-heading strong {
+  color: var(--text);
+}
+
+:root[data-theme] .content-stack-item strong {
+  color: var(--text-soft, var(--text));
+}
+
+:root[data-theme] .inspector-group-nav {
+  background: color-mix(in srgb, var(--panel-deep) 65%, var(--panel));
+  border-top-color: var(--line);
+}
+
+:root[data-theme] .inspector-group-button {
+  background: var(--panel-deep);
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+:root[data-theme] .inspector-group-button strong {
+  color: var(--text);
+}
+
+:root[data-theme] .inspector-group-button.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-raised));
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+:root[data-theme] .tabs {
+  background: color-mix(in srgb, var(--panel-deep) 75%, var(--panel));
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .memory-metric {
+  background: var(--panel-raised);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+:root[data-theme] .resource-workbench-header {
+  background: var(--panel-raised);
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .resource-flow {
+  background: var(--panel-deep);
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .resource-metrics {
+  background: var(--panel-raised);
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .resource-library-item {
+  background: var(--panel);
+  border-bottom-color: var(--line);
+}
+
+:root[data-theme] .resource-library-item:hover {
+  background: var(--panel-raised);
+}
+
+:root[data-theme] .mcp-server-command {
+  background: color-mix(in srgb, var(--panel-raised) 70%, var(--panel-deep));
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  :root[data-theme] .message.assistant .narrative-block--narration {
+    text-indent: 1.15em;
+  }
+
+  :root[data-theme] .message.assistant .narrative-block--mixed {
+    text-indent: 0.55em;
+  }
+
+  :root[data-theme] .message.assistant .narrative-block--dialogue {
+    margin-right: 0;
+    margin-left: 0;
+    padding: 0.76em 0.8em 0.8em 1em;
+  }
+
+  :root[data-theme] .message.assistant .narrative-speaker {
+    max-width: 100%;
+    margin-left: -0.1em;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

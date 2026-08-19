@@ -19,6 +19,7 @@ import { previewImportPayload } from './character/importPreview.js';
 import { createWorldBookEntryFromFact, normalizeFactCards, worldBookIdentity } from './agent/factCards.js';
 import { retrieveCards } from './agent/memoryRetriever.js';
 import { expandMacros } from './agent/macroEngine.js';
+import { assemblePrompt } from './agent/promptAssembler.js';
 import { getContentPack, getRuleSystemForGenre, listContentPackCharacters, listContentPackSummaries } from './config/contentPacks.js';
 import { McpRegistry } from './mcp/mcpRegistry.js';
 import { StdioMcpClient } from './mcp/stdioTransport.js';
@@ -56,6 +57,7 @@ import { handleStoryProjectRoutes } from './routes/storyProjectRoutes.js';
 import { handleImportRoutes } from './routes/importRoutes.js';
 import { handleScriptGovernanceRoutes } from './routes/scriptGovernanceRoutes.js';
 import { handleSessionHealthRoutes } from './routes/sessionHealthRoutes.js';
+import { handleTimelineRoutes } from './routes/timelineRoutes.js';
 import { handleReferenceRepairRoutes } from './routes/referenceRepairRoutes.js';
 import { handleSessionConfigMigrationRoutes } from './routes/sessionConfigMigrationRoutes.js';
 import { handleKnowledgeGraphRoutes } from './routes/knowledgeGraphRoutes.js';
@@ -222,7 +224,10 @@ export function createApp({ rootDir = process.cwd(), providerClient: providerCli
       writeApiError(res, error);
     }
   };
-  app.close = () => graphRepository.close();
+  app.close = () => {
+    try { mcpRegistry.close(); } catch {}
+    graphRepository.close();
+  };
   return app;
 }
 
@@ -286,20 +291,28 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
     const targetUrl = url.searchParams.get('url');
     const parsedTarget = parseProxyImageUrl(targetUrl);
     const proxyResponse = await fetchImpl(parsedTarget.toString(), {
+      redirect: 'manual',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Referer': `${parsedTarget.protocol}//${parsedTarget.host}/`
       }
     });
+    // 禁止跟随重定向，防止 302 跳转到内网地址绕过 SSRF 校验
+    if (proxyResponse.status >= 300 && proxyResponse.status < 400) {
+      throw new ApiError(400, 'PROXY_REDIRECT_NOT_ALLOWED');
+    }
     if (!proxyResponse.ok) {
       throw new ApiError(proxyResponse.status, 'PROXY_FAILED');
     }
     const contentType = proxyResponse.headers.get('content-type') || 'application/octet-stream';
+    const arrayBuffer = await proxyResponse.arrayBuffer();
+    if (arrayBuffer.byteLength > 20 * 1024 * 1024) {
+      throw new ApiError(413, 'PROXY_RESPONSE_TOO_LARGE');
+    }
     res.writeHead(200, {
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=86400'
     });
-    const arrayBuffer = await proxyResponse.arrayBuffer();
     res.end(Buffer.from(arrayBuffer));
     return;
   }
@@ -441,6 +454,17 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
       sessionHealthService
     })) return;
 
+    if (await handleTimelineRoutes({
+      req,
+      res,
+      url,
+      sessionId,
+      subPath,
+      agentService,
+      validateMutatingRequest,
+      readRequestJson
+    })) return;
+
     if (subPath === 'authoring' && req.method === 'GET') {
       writeJson(res, 200, await authoringService.getBySession(sessionId));
       return;
@@ -539,6 +563,47 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
         reason: String(body.reason || '创作者推进时间'),
         director: body.view !== 'public'
       })));
+      return;
+    }
+
+    if (subPath === 'prompt-preview' && req.method === 'POST') {
+      validateMutatingRequest(req);
+      const body = await readRequestJson(req);
+      const [globalConfig, session] = await Promise.all([
+        configService.getAll(),
+        getApiSession(sessionService, sessionId)
+      ]);
+      const activeConfig = buildEditableSessionConfig(globalConfig, session);
+      const generationType = String(body.generationType || 'normal') === 'continue' ? 'continue' : 'normal';
+      const previewMessage = String(body.content ?? '').trim();
+      worldSimulationService.prepareSession(session, {
+        characterCard: activeConfig.characterCard,
+        characterPresets: activeConfig.characterPresets,
+        groupMembers: activeConfig.groupMembers,
+        worldBook: activeConfig.worldBook,
+        worldSystems: activeConfig.worldSystems
+      });
+      const assembled = assemblePrompt({
+        promptModules: activeConfig.promptModules,
+        characterCard: activeConfig.characterCard,
+        worldBook: activeConfig.worldBook,
+        memory: session.memory,
+        authoring: session.authoring,
+        messages: session.messages,
+        userMessage: generationType === 'continue' ? '' : previewMessage,
+        persona: activeConfig.persona,
+        groupMembers: activeConfig.groupMembers,
+        templates: globalConfig.macroTemplates,
+        customArrays: globalConfig.customArrays,
+        lightFrontend: activeConfig.lightFrontend,
+        activationContext: { seed: session.id || sessionId, generationType },
+        options: session.settings
+      });
+      writeJson(res, 200, {
+        tokenEstimate: assembled.tokenEstimate,
+        promptStudio: assembled.sections.promptStudio,
+        request: { messages: assembled.messages }
+      });
       return;
     }
 
@@ -680,6 +745,33 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
     const body = await readRequestJson(req);
     const session = await importSession({ sessionService, body });
     writeJson(res, 200, { session });
+    return;
+  }
+
+  const sessionDeleteMatch = req.method === 'DELETE' && url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
+  if (sessionDeleteMatch) {
+    validateMutatingRequest(req);
+    const sessionId = decodeURIComponent(sessionDeleteMatch[1]);
+    try {
+      const result = await sessionService.deleteSession(sessionId);
+      if (!result) throw new ApiError(404, 'SESSION_NOT_FOUND');
+      if (result.storyProjectId) {
+        try {
+          const project = await storyProjectService.getProject(result.storyProjectId);
+          if (project) {
+            project.sessionIds = (project.sessionIds || []).filter((id) => id !== result.id);
+            if (project.activeSessionId === result.id) {
+              project.activeSessionId = project.sessionIds.at(-1) || '';
+            }
+            await storyProjectService.saveProject(project);
+          }
+        } catch { /* project may already be deleted */ }
+      }
+      writeJson(res, 200, { deleted: true, id: result.id });
+    } catch (error) {
+      if (error.message === 'CANNOT_DELETE_MAIN_SESSION') throw new ApiError(400, 'CANNOT_DELETE_MAIN_SESSION');
+      throw error;
+    }
     return;
   }
 
@@ -1441,6 +1533,20 @@ async function saveImportedCharacterPortrait(assetService, payload) {
   }
 }
 
+// 绑定客户端断开监听：真实 Node res 支持 close 事件，测试 mock 可能没有，返回 null 表示不可用
+function bindAbortOnDisconnect(res) {
+  if (typeof res.on !== 'function') return null;
+  const abortController = new AbortController();
+  const closeHandler = () => abortController.abort(new Error('CLIENT_DISCONNECTED'));
+  res.on('close', closeHandler);
+  return {
+    signal: abortController.signal,
+    detach() {
+      if (typeof res.off === 'function') res.off('close', closeHandler);
+    }
+  };
+}
+
 async function streamChat({ agentService, body, res }) {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
@@ -1448,18 +1554,24 @@ async function streamChat({ agentService, body, res }) {
     connection: 'keep-alive'
   });
 
+  // 客户端断开（用户停止/刷新）时中止上游生成，停止计费消耗
+  const disconnectGuard = bindAbortOnDisconnect(res);
+
   try {
     const result = await agentService.sendMessageStream({
       sessionId: body.sessionId || 'main',
       content: body.content,
       targetSpeaker: body.targetSpeaker,
       hideUserMessage: body.hideUserMessage === true,
-      onToken: async (content) => writeSse(res, 'token', { content })
+      onToken: async (content) => writeSse(res, 'token', { content }),
+      onPhase: async (phase) => writeSse(res, 'phase', { phase }),
+      signal: disconnectGuard?.signal || null
     });
     writeSse(res, 'done', result);
   } catch (error) {
-    writeSse(res, 'error', { error: resolveProviderErrorCode(error) });
+    writeSse(res, 'error', buildStreamErrorPayload(error));
   } finally {
+    disconnectGuard?.detach();
     res.end();
   }
 }
@@ -1471,22 +1583,38 @@ async function streamContinue({ agentService, body, res }) {
     connection: 'keep-alive'
   });
 
+  // 客户端断开（用户停止/刷新）时中止上游生成，停止计费消耗
+  const disconnectGuard = bindAbortOnDisconnect(res);
+
   try {
     const result = await agentService.continueMessage({
       sessionId: body.sessionId || 'main',
-      onToken: async (content) => writeSse(res, 'token', { content })
+      onToken: async (content) => writeSse(res, 'token', { content }),
+      signal: disconnectGuard?.signal || null
     });
     writeSse(res, 'done', result);
   } catch (error) {
-    writeSse(res, 'error', { error: resolveProviderErrorCode(error) });
+    writeSse(res, 'error', buildStreamErrorPayload(error));
   } finally {
+    disconnectGuard?.detach();
     res.end();
   }
+}
+
+// SSE error 载荷：中止错误附带已留存的消息 ID，前端据此刷新本地会话展示 partial 回合
+function buildStreamErrorPayload(error) {
+  const payload = { error: resolveProviderErrorCode(error) };
+  if (error?.code === 'GENERATION_ABORTED' && error.partialMessage) {
+    payload.aborted = true;
+    payload.partialMessageId = error.partialMessage.id;
+  }
+  return payload;
 }
 
 function resolveProviderErrorCode(error) {
   const message = String(error?.message || '');
   if (message === 'NO_ACTIVE_PROVIDER') return 'NO_ACTIVE_PROVIDER';
+  if (error?.code === 'GENERATION_ABORTED' || message === 'GENERATION_ABORTED') return 'GENERATION_ABORTED';
   if (message.startsWith('PROVIDER_REASONING_ONLY_RESPONSE')) return 'PROVIDER_REASONING_ONLY_RESPONSE';
   if (message === 'PROVIDER_EMPTY_RESPONSE') return 'PROVIDER_EMPTY_RESPONSE';
   if (/insufficient_user_quota|quota[^\n]*exhaust|额度不足|剩余额度/i.test(message)) {
@@ -1622,7 +1750,7 @@ async function applyContentPack({ configService, sessionService, body, packId, r
       groupMembers: Array.isArray(pack.groupMembers) ? structuredClone(pack.groupMembers) : [],
       worldSystems: structuredClone(pack.worldSystems || {})
     },
-    memory: withLightFrontendMemory(withPackRuleSystem(pack.memory, pack.ruleSystem), pack.lightFrontend),
+    memory: await withLightFrontendMemory(sessionService, withPackRuleSystem(pack.memory, pack.ruleSystem), pack.lightFrontend),
     messages: Array.isArray(session.messages) ? session.messages : [],
     settings: session.settings || {
       recentPairs: 8,
@@ -1687,7 +1815,7 @@ async function createSessionFromContentPack({ sessionService, worldSimulationSer
     id: body.id,
     title: body.title || pack.sessionTitle || pack.title || '新的故事',
     config,
-    memory: withLightFrontendMemory(withPackRuleSystem(pack.memory, pack.ruleSystem), pack.lightFrontend),
+    memory: await withLightFrontendMemory(sessionService, withPackRuleSystem(pack.memory, pack.ruleSystem), pack.lightFrontend),
     storyProjectId: project?.id || '',
     basePackId: pack.id
   });
@@ -1753,13 +1881,15 @@ function withPackRuleSystem(memory, ruleSystem) {
   };
 }
 
-function withLightFrontendMemory(memory, lightFrontend) {
+async function withLightFrontendMemory(sessionService, memory, lightFrontend) {
   const runtime = normalizeLightFrontendRuntime(lightFrontend || {});
   const hasLifecycle = Object.keys(runtime.lifecycle?.events || {}).length > 0;
   if (!runtime.mvu.enabled && !hasLifecycle) return memory;
   const initialState = runtime.mvu.enabled
     ? structuredClone(runtime.mvu)
     : { enabled: true, values: {}, revision: 0 };
+  // 新会话继承跨会话 global 根（落盘值优先），chat 根从种子开始
+  await sessionService.globalMvuStore.mergeIntoSession({ memory: { lightFrontendState: initialState } });
   const imported = executeDeclarativeLifecycle({
     runtime,
     event: 'onImport',
@@ -1827,6 +1957,7 @@ function normalizeSessionSettings(settings = {}) {
     narrativeMode: normalizeSessionSettingChoice(settings.narrativeMode, ['free', 'stable', 'strict']) || 'stable',
     roleplayMode: normalizeSessionSettingChoice(settings.roleplayMode, ['dialogue', 'dm', 'protagonist', 'director', 'commentary']) || 'dm',
     responseLength: normalizeSessionSettingChoice(settings.responseLength, ['compact', 'balanced', 'long']) || 'balanced',
+    cardRuntimeEnabled: settings.cardRuntimeEnabled !== false,
     worldBookIncludeNames: settings.worldBookIncludeNames !== false,
     worldBookCaseSensitive: settings.worldBookCaseSensitive === true,
     worldBookMatchWholeWords: settings.worldBookMatchWholeWords === true,
@@ -1998,8 +2129,14 @@ async function readMultipartAudio(req) {
     throw new ApiError(400, 'INVALID_MULTIPART');
   }
   const boundary = boundaryMatch[1] || boundaryMatch[2];
+  const maxBytes = 50 * 1024 * 1024;
   const chunks = [];
+  let size = 0;
   for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) {
+      throw new ApiError(413, 'AUDIO_FILE_TOO_LARGE');
+    }
     chunks.push(chunk);
   }
   const bodyBuffer = Buffer.concat(chunks);
@@ -2098,7 +2235,17 @@ function parseProxyImageUrl(targetUrl) {
   if (!PROXY_IMAGE_ALLOWED_PROTOCOLS.has(parsed.protocol)) {
     throw new ApiError(400, 'INVALID_URL');
   }
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[|]$/g, '');
+  let hostname = parsed.hostname.toLowerCase().replace(/^\[|]$/g, '');
+  // 还原 IPv4 映射的 IPv6 地址（如 ::ffff:127.0.0.1 或其规范化形式 ::ffff:7f00:1），防止绕过内网黑名单
+  const mappedIpv4 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(hostname);
+  const mappedIpv4Hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(hostname);
+  if (mappedIpv4) {
+    hostname = mappedIpv4[1];
+  } else if (mappedIpv4Hex) {
+    const high = Number.parseInt(mappedIpv4Hex[1], 16);
+    const low = Number.parseInt(mappedIpv4Hex[2], 16);
+    hostname = `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+  }
   if (PROXY_IMAGE_BLOCKED_HOSTNAMES.has(hostname)) {
     throw new ApiError(400, 'INVALID_URL');
   }

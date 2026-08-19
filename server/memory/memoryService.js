@@ -17,6 +17,8 @@ import {
   upsertEpisode,
   upsertSummary
 } from './memoryContract.js';
+import { getNarrativeRepairContextExclusions } from './narrativeRepair.js';
+import { expandQueryWithGraph } from './graphGuidedRetrieval.js';
 
 export class MemoryService {
   constructor({ vectorMemoryService = null, now = () => new Date() } = {}) {
@@ -106,24 +108,37 @@ export class MemoryService {
       .slice(-16)
       .map((message) => message?.id)
       .filter(Boolean);
-    const retrievalExcludes = [...new Set([...excludeMessageIds, ...recentMessageIds])];
+    const repairExcludes = [...getNarrativeRepairContextExclusions(session.memory)];
+    const retrievalExcludes = [...new Set([...excludeMessageIds, ...recentMessageIds, ...repairExcludes])];
+    const activeScene = resolveActiveSceneAnchor(session.memory);
+    const graph = session.memory?.knowledgeGraph || null;
+
+    const graphExpansion = expandQueryWithGraph({
+      graph,
+      query,
+      hops: 2,
+      view
+    });
+
     const episodicHits = selectEpisodicMemories(state, {
       query,
       excludeMessageIds: retrievalExcludes,
       limit: 6,
-      view
+      view,
+      activeScene,
+      relatedEntities: graphExpansion.relatedEntities
     });
     const summaryHits = selectHierarchicalSummaries(state, {
       query,
       excludeMessageIds: retrievalExcludes,
-      view
+      view,
+      relatedEntities: graphExpansion.relatedEntities
     });
     const { vectorHits, vectorEnabled } = await this.retrieveVectorHits({
       session,
-      query,
+      query: graphExpansion.expandedQuery,
       excludeMessageIds: retrievalExcludes
     });
-    const graph = session.memory?.knowledgeGraph || null;
     session.memory.episodicMemory = appendRetrievalAudit(state, {
       query,
       episodeIds: episodicHits.map((item) => item.id),
@@ -139,12 +154,15 @@ export class MemoryService {
       vectorHits,
       vectorEnabled,
       graphRevision: Number(graph?.revision || 0),
+      graphExpansion,
       decisionRecords: state.decisions.filter((item) => view === 'director' || item.visibility === 'player').slice(-8),
       audit: {
         episodicCount: episodicHits.length,
         summaryCount: summaryHits.length,
         vectorCount: vectorHits.length,
-        graphRevision: Number(graph?.revision || 0)
+        graphRevision: Number(graph?.revision || 0),
+        graphRelatedEntities: graphExpansion.relatedEntities.length,
+        graphActionableRelations: graphExpansion.actionableRelations.length
       }
     };
   }
@@ -220,6 +238,15 @@ export class MemoryService {
     });
     return { vectorHits, vectorEnabled: true };
   }
+}
+
+function resolveActiveSceneAnchor(memory = {}) {
+  const location = String(
+    memory?.narrativeRepair?.canonicalFacts?.location
+    || memory?.worldState?.location?.name
+    || ''
+  ).trim();
+  return location.length >= 4 ? { location } : null;
 }
 
 function promoteHierarchy(memoryState, { now }) {

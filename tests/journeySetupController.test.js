@@ -322,3 +322,50 @@ test('journey setup closes on Escape without starting a journey', () => {
   assert.equal(documentObject.body.children.length, 0);
   assert.equal(documentObject.listeners.keydown, undefined);
 });
+
+test('journey setup renders alternate greetings and passes selected greeting', async () => {
+  const documentObject = createDocument();
+  const starts = [];
+  const controller = createJourneySetupController({
+    state: {
+      config: {
+        characterCard: {
+          name: '苏凌雪',
+          firstMessage: '初入宗门，破庙相依。',
+          alternateGreetings: ['宗门大殿，天骄退婚。', '秘境争夺，并肩作战。']
+        }
+      }
+    },
+    inferPrologueGenreFromTemplate: () => 'xianxia',
+    getOpeningGenreOption: () => ({ title: '仙侠', hint: '' }),
+    getCurrentStoryPresentation: () => ({ sourceLabel: '类脑卡' }),
+    startJourney: async (formData, tpl, destiny, options) => {
+      starts.push([formData, tpl, destiny, options]);
+    },
+    documentObject,
+    windowObject: { requestAnimationFrame: (cb) => cb(), setTimeout: (cb) => cb() }
+  });
+
+  controller.renderSetupPanel({
+    title: '仙道问心',
+    fields: { name: { label: '姓名', defaultValue: '天明' } },
+    tabs: {},
+    destinyCards: { cards: [] }
+  });
+
+  const overlay = documentObject.body.children[0];
+  const greetingCards = overlay.querySelectorAll('.epic-greeting-card');
+  assert.equal(greetingCards.length, 3);
+
+  // Click on greeting 1 (宗门大殿)
+  await greetingCards[1].listeners.click();
+  assert.equal(greetingCards[1].classList.contains('is-selected'), true);
+
+  const nextButton = findNode(overlay, (node) => node.textContent === '下一步 →');
+  await nextButton.listeners.click();
+  const sealButton = findNode(overlay, (node) => node.classList.contains('epic-seal-btn'));
+  await sealButton.listeners.click();
+
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0][0].selectedGreeting, '宗门大殿，天骄退婚。');
+});

@@ -15,8 +15,22 @@ export function createAssetLibraryController({
   activateTab,
   activateResourceView,
   renderResourcePackBuilder,
-  downloadJsonFile
+  downloadJsonFile,
+  quickLaunchCharacterStory
 }) {
+  async function quickLaunchFromCenter(item) {
+    if (!item) return;
+    try {
+      getAssetCenterController()?.close();
+      if (typeof quickLaunchCharacterStory === 'function') {
+        return await quickLaunchCharacterStory(item.id);
+      }
+    } catch (error) {
+      console.error('Quick launch failed:', error);
+      alert(`快捷启航失败：${error.message || error}`);
+    }
+  }
+
   function openAssetCenter() {
     closeStoryLauncher();
     getAssetCenterController()?.open();
@@ -203,7 +217,8 @@ export function createAssetLibraryController({
     saveAssetBatchMetadata,
     saveAssetContent,
     saveAssetMetadata,
-    useAssetFromCenter
+    useAssetFromCenter,
+    quickLaunchFromCenter
   };
 }
 

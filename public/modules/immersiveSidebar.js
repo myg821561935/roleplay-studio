@@ -10,29 +10,35 @@ import {
   splitDirectorNoteSections,
   toImmersiveWorldBookRecord
 } from './immersiveDossier.js';
-import { collectImmersiveCharacterMembers } from './relationshipGraph.js';
-
-export function getImmersiveWorldSystemGroups(systems, truncateText = (value) => String(value || '')) {
-  const groups = [
-    ['地点拓扑', systems?.topology?.nodes, 'active'],
-    ['人物与日程', systems?.population?.profiles, ''],
-    ['势力演化', systems?.factions?.entities, ''],
-    ['历法与天候', systems?.calendar?.rules, ''],
-    ['经济铁律', systems?.economy?.rules, ''],
-    ['修行刻度与反噬', systems?.cultivation?.rules, '']
-  ];
-  return groups.map(([title, records, tone]) => ({
-    title,
-    tone,
-    items: (Array.isArray(records) ? records : []).slice(0, 6).map((record) => ({
-      title: record?.name || record?.title || '未命名规则',
-      detail: truncateText(cleanImmersiveSidebarText(record?.summary) || '已登记结构，等待剧情触发。', 220),
-      meta: [
-        record?.constant ? '常驻' : '按情境生效',
-        record?.sourceEntryId ? `来源 ${record.sourceEntryId}` : ''
-      ].filter(Boolean).join(' · ')
-    }))
-  })).filter((group) => group.items.length);
+import { buildImmersiveCharacterGroups } from './relationshipGraph.js';
+import { appendImmersiveCharacterArchiveActions } from './immersiveCharacterArchiveActions.js';
+import { appendImmersiveCharacterGroup } from './immersiveCharacterRoster.js';
+import {
+  excludeImmersiveStructuredWorldBookEntries,
+  getImmersiveWorldSystemGroups
+} from './immersiveWorldRules.js';
+export const DEFAULT_INTERACTION_TABS = Object.freeze([
+  '当前态势',
+  '决策线索',
+  '角色档案',
+  '人物网络',
+  '成长轨迹',
+  '叙事记忆',
+  '世界规则'
+]);
+const INTERACTION_TAB_ALIASES = Object.freeze([
+  ['当前态势', /当前态势|场景态势|当前局势|局势|状态/],
+  ['决策线索', /线索|榜单|传闻|清单|账目|证据|任务|事件|进度|倒计时|风向|节点/],
+  ['角色档案', /互动角色|人物档案|角色档案|角色列表|登场人物/],
+  ['人物网络', /人物网络|人物关系|关系与势力|关系图|势力|旧账关系/],
+  ['成长轨迹', /主角|调查者|文书|神府造化|神机造化|造化|秘籍|武学|修为|功法|资源|装备|成长/],
+  ['叙事记忆', /梦入神机|梦如神机|记忆|回忆|纪事/],
+  ['世界规则', /世界规则|禁忌规则|规则/]
+]);
+export function normalizeImmersiveInteractionTab(label) {
+  const value = String(label || '').trim();
+  if (!value) return '';
+  return INTERACTION_TAB_ALIASES.find(([, pattern]) => pattern.test(value))?.[0] || value;
 }
 
 export function extractCharacterPanelExcerpt(value, name) {
@@ -74,6 +80,7 @@ export function createImmersiveSidebarController({
   extractRoleplayPresentation = () => ({ content: '', panels: {} }),
   createCharacterPortraitImage = () => null,
   getCharacterPortraitUrl = () => '',
+  openCharacterManagement = () => {},
   truncateText = (value) => String(value || ''),
   documentObject = globalThis.document
 } = {}) {
@@ -87,7 +94,9 @@ export function createImmersiveSidebarController({
     renderImmersiveIntelligenceLedger = () => {},
     renderImmersiveRelationshipLedger = () => {},
     renderImmersiveMemoryLedger = () => {},
-    renderImmersiveProgressLedger = () => {}
+    renderImmersiveGrowthLedger = () => {},
+    renderImmersiveProgressLedger = () => {},
+    renderImmersiveSituationLedger = () => {}
   } = ledgers;
 
   const getLatestPanels = () => resolveLatestRoleplayPanels(
@@ -101,6 +110,15 @@ export function createImmersiveSidebarController({
       const tabButton = event.target.closest('[data-immersive-tab]');
       if (tabButton) selectImmersiveSidebarTab(tabButton.dataset.immersiveTab);
     });
+    els.immersiveSidebarBody?.addEventListener?.('click', (event) => {
+      const action = event.target?.closest?.('[data-immersive-character-action]');
+      if (!action) return;
+      if (action.dataset.immersiveCharacterAction === 'open-archive') {
+        selectImmersiveSidebarTab('角色档案');
+      } else if (action.dataset.immersiveCharacterAction === 'manage') {
+        openCharacterManagement();
+      }
+    });
   }
 
   function renderImmersiveSidebar() {
@@ -113,7 +131,8 @@ export function createImmersiveSidebarController({
       .map((panel) => resolveLightFrontendPanel(panel, getLightFrontendContext()))
       .filter(Boolean);
     const tabs = [...new Set([
-      ...builtInTabs,
+      ...DEFAULT_INTERACTION_TABS,
+      ...builtInTabs.map(normalizeImmersiveInteractionTab).filter(Boolean),
       ...(latestPanels.directorNotes ? ['导演注记'] : []),
       ...lightPanels.map((panel) => panel.title).filter((title) => title && !builtInTabs.includes(title))
     ])];
@@ -123,11 +142,13 @@ export function createImmersiveSidebarController({
       return;
     }
 
-    if (state.immersiveSidebarTab && !tabs.includes(state.immersiveSidebarTab)) {
-      state.immersiveSidebarTab = '';
+    if (state.immersiveSidebarTab) {
+      const normalizedTab = normalizeImmersiveInteractionTab(state.immersiveSidebarTab);
+      state.immersiveSidebarTab = tabs.includes(normalizedTab) ? normalizedTab : '';
     }
 
     els.immersiveRightSidebar.classList.remove('hidden');
+    els.immersiveRightSidebar.classList.add('reader-rail-managed');
     els.immersiveSidebarTabs.innerHTML = '';
     tabs.forEach((label) => {
       const button = documentObject.createElement('button');
@@ -151,23 +172,15 @@ export function createImmersiveSidebarController({
       renderImmersiveCommunityPanel(lightPanel);
       return;
     }
-    if (/主角|档案|文书|调查者/.test(state.immersiveSidebarTab)) {
-      renderImmersiveProtagonistCard(genre);
-      return;
-    }
-    if (/互动|角色/.test(state.immersiveSidebarTab)) {
-      renderImmersiveCharacterCards(tpl);
-      return;
-    }
-    if (/梦入神机|梦如神机|记忆|回忆|纪事/.test(state.immersiveSidebarTab)) {
+    if (state.immersiveSidebarTab === '叙事记忆') {
       renderImmersiveMemoryLedger(state.immersiveSidebarTab, genre);
       return;
     }
-    if (/神府造化|神机造化|造化|秘籍|武学|修为|功法|资源|装备/.test(state.immersiveSidebarTab)) {
-      renderImmersiveProgressLedger(state.immersiveSidebarTab, tpl, genre);
+    if (state.immersiveSidebarTab === '成长轨迹') {
+      renderImmersiveGrowthLedger(state.immersiveSidebarTab, tpl, genre);
       return;
     }
-    if (/世界规则|禁忌规则|规则/.test(state.immersiveSidebarTab)) {
+    if (state.immersiveSidebarTab === '世界规则') {
       renderImmersiveWorldRules(state.immersiveSidebarTab, tpl, genre);
       return;
     }
@@ -175,11 +188,19 @@ export function createImmersiveSidebarController({
       renderImmersiveDirectorNotes(latestPanels.directorNotes);
       return;
     }
-    if (/关系与势力|人物关系|关系图|势力/.test(state.immersiveSidebarTab)) {
+    if (state.immersiveSidebarTab === '角色档案') {
+      renderImmersiveCharacterCards(tpl);
+      return;
+    }
+    if (state.immersiveSidebarTab === '人物网络') {
       renderImmersiveRelationshipLedger(state.immersiveSidebarTab, tpl, genre);
       return;
     }
-    if (/天机榜单|榜单|传闻|风向|清单|账目|证据|线索|任务|势力|事件|进度/.test(state.immersiveSidebarTab)) {
+    if (state.immersiveSidebarTab === '当前态势') {
+      renderImmersiveSituationLedger(state.immersiveSidebarTab, tpl, genre);
+      return;
+    }
+    if (state.immersiveSidebarTab === '决策线索') {
       renderImmersiveIntelligenceLedger(state.immersiveSidebarTab, tpl, genre);
       return;
     }
@@ -273,8 +294,9 @@ export function createImmersiveSidebarController({
         if (constantDiff) return constantDiff;
         return Number(right.priority ?? 50) - Number(left.priority ?? 50);
       });
-    const constantRules = entries.filter((entry) => entry.constant).slice(0, 8);
-    const triggeredRules = entries.filter((entry) => !entry.constant).slice(0, 8);
+    const unstructuredEntries = excludeImmersiveStructuredWorldBookEntries(entries, systemGroups);
+    const constantRules = unstructuredEntries.filter((entry) => entry.constant).slice(0, 8);
+    const triggeredRules = unstructuredEntries.filter((entry) => !entry.constant).slice(0, 8);
     const view = createImmersiveDossier({
       kind: 'world-rules',
       eyebrow: `${presentation.title} · 当前剧本`,
@@ -391,45 +413,49 @@ export function createImmersiveSidebarController({
     ].filter(Boolean);
     const characterPanels = splitCharacterStatus(panels.characterStatus, protagonistNames);
     const castTab = Object.values(tpl?.tabs || {}).find((tab) => /互动|角色/.test(tab?.label || ''));
-    const members = collectImmersiveCharacterMembers({
+    const groups = buildImmersiveCharacterGroups({
       configured: state.config?.groupMembers,
-      relationships: state.session?.memory?.worldState?.relationships,
-      characters: state.session?.memory?.worldState?.characters,
-      messages: state.session?.messages,
-      interactiveStatus: characterPanels.interactive,
-      relationshipStatus: panels.relationshipStatus,
-      castContent: castTab?.content,
-      protagonistNames
+      protagonistNames,
+      registry: state.session?.memory?.characterRegistry,
+      characterCard: state.config?.characterCard,
+      worldState: state.session?.memory?.worldState
     });
-
     els.immersiveSidebarBody.innerHTML = '';
-    const list = documentObject.createElement('div');
-    list.className = 'immersive-character-list';
-    if (!members.length) {
-      const empty = documentObject.createElement('div');
-      empty.className = 'immersive-sidebar-empty';
-      empty.textContent = cleanImmersiveSidebarText(castTab?.content) || '尚未登记本幕互动角色。角色进入场景后会在这里形成档案。';
-      list.append(empty);
-    } else {
-      let renderedRelationshipCount = 0;
-      members.forEach((member) => {
-        const relationship = member.relationship || extractCharacterPanelExcerpt(panels.relationshipStatus, member.name);
-        if (relationship) renderedRelationshipCount += 1;
-        list.append(createImmersiveCharacterCard(member, {
-          status: extractCharacterPanelExcerpt(characterPanels.interactive, member.name),
-          relationship
-        }));
-      });
-      list.dataset.hasRelationships = String(renderedRelationshipCount > 0);
-    }
-
-    els.immersiveSidebarBody.append(list);
-    if (list.dataset.hasRelationships !== 'true') {
-      appendImmersiveSidebarNote('关系变化', panels.relationshipStatus, 'relationship');
-    }
-    appendImmersiveSidebarNote('下一幕建议', panels.nextCharacter, 'next');
+    const roster = documentObject.createElement('div');
+    roster.className = 'immersive-character-roster';
+    appendImmersiveCharacterGroup(roster, {
+      kind: 'protagonist',
+      title: '主角',
+      hint: '由当前剧本与会话状态共同确定。',
+      members: groups.protagonist,
+      empty: '当前剧本尚未确定主角。'
+    }, { documentObject, createCharacterCard: createImmersiveCharacterCard });
+    appendImmersiveCharacterGroup(roster, {
+      kind: 'current-act',
+      title: '当前幕角色',
+      hint: '只显示本轮场景中已在场、提及或待进入本幕的角色。',
+      members: groups.currentAct,
+      empty: '本幕尚未登记其他角色。'
+    }, {
+      documentObject,
+      createCharacterCard: createImmersiveCharacterCard,
+      resolveCard: (member) => ({
+        status: extractCharacterPanelExcerpt(characterPanels.interactive, member.name),
+        relationship: member.relationship || extractCharacterPanelExcerpt(panels.relationshipStatus, member.name)
+      })
+    });
+    appendImmersiveCharacterGroup(roster, {
+      kind: 'declared',
+      title: '角色卡与世界书角色',
+      hint: '这是当前素材已声明的人物资料；未标注“当前在场”不代表其已经登场。',
+      members: groups.declared,
+      empty: cleanImmersiveSidebarText(castTab?.content)
+        ? '当前素材中尚无可结构化识别的角色资料。'
+        : '角色卡或世界书中的人物资料会在素材同步后显示。'
+    }, { documentObject, createCharacterCard: createImmersiveCharacterCard });
+    els.immersiveSidebarBody.append(roster);
+    appendImmersiveCharacterArchiveActions(els.immersiveSidebarBody, groups.currentAct.length + groups.declared.length, { documentObject });
   }
-
   function createImmersiveCharacterCard(member, { status = '', relationship = '' } = {}) {
     const card = documentObject.createElement('article');
     card.className = 'immersive-character-card';
@@ -449,16 +475,33 @@ export function createImmersiveSidebarController({
     content.className = 'immersive-character-copy';
     const heading = documentObject.createElement('div');
     heading.className = 'immersive-character-heading';
+
+    // Add faction indicator based on relationship text
+    const factionIndicator = documentObject.createElement('span');
+    factionIndicator.className = 'immersive-faction-indicator';
+    const relText = String(relationship || '').toLowerCase();
+    if (/敌|仇|杀|反|恶|叛/.test(relText)) {
+      factionIndicator.classList.add('is-hostile');
+    } else if (/友|盟|喜|爱|亲|忠|善/.test(relText)) {
+      factionIndicator.classList.add('is-allied');
+    } else {
+      factionIndicator.classList.add('is-neutral');
+    }
+
     const name = documentObject.createElement('strong');
     name.textContent = member.name || '未命名角色';
     const role = documentObject.createElement('span');
     role.textContent = member.role || '互动角色';
-    heading.append(name, role);
+
+    heading.append(factionIndicator, name, role);
     content.append(heading);
 
     const statusFields = parseImmersiveStatusFields(status);
     const facts = mergeImmersiveFacts([
       ['身份', member.role],
+      ['本幕', member.actState === 'on-stage' ? '当前在场' : member.actState === 'off-stage' ? '暂未在场' : member.actState === 'mentioned' ? '本幕提及' : member.actState === 'pending' ? '待登场' : ''],
+      ['资料来源', member.sourceLabel],
+      ['状态', member.rosterStatus],
       ['性格', member.personality],
       ...statusFields.map(({ label, value }) => [label, value])
     ], 7);
@@ -546,8 +589,10 @@ export function createImmersiveSidebarController({
   }
 
   function selectImmersiveSidebarTab(label) {
-    state.immersiveSidebarTab = state.immersiveSidebarTab === label ? '' : label;
+    const tab = normalizeImmersiveInteractionTab(label);
+    state.immersiveSidebarTab = state.immersiveSidebarTab === tab ? '' : tab;
     renderImmersiveSidebar();
+    return Boolean(state.immersiveSidebarTab);
   }
 
   function closeImmersiveSidebar() {

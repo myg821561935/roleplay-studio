@@ -47,6 +47,8 @@ test('audits ready local samples without requiring private fixtures in Git', asy
 
     const report = await auditLocalCommunitySamples(manifestPath);
     assert.equal(report.ok, true);
+    assert.equal(report.complete, false);
+    assert.deepEqual(report.incomplete, ['pending-character']);
     assert.deepEqual(report.summary, {
       total: 3,
       passed: 1,
@@ -56,6 +58,11 @@ test('audits ready local samples without requiring private fixtures in Git', asy
       notApplicable: 1
     });
     assert.equal(report.results[0].details.entries, 1);
+
+    const strictReport = await auditLocalCommunitySamples(manifestPath, { requireComplete: true });
+    assert.equal(strictReport.ok, false);
+    assert.equal(strictReport.complete, false);
+    assert.deepEqual(strictReport.incomplete, ['pending-character']);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

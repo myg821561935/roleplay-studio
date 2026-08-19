@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAssetCatalog, filterAssetCatalog } from '../public/modules/assetCenter.js';
+import {
+  buildAssetCatalog,
+  filterAssetCatalog,
+  paginateAssetCatalog
+} from '../public/modules/assetCenter.js';
 
 test('asset center builds a unified catalog for resources and content packs', () => {
   const catalog = buildAssetCatalog([
@@ -50,6 +54,17 @@ test('asset center builds a unified catalog for resources and content packs', ()
   assert.equal(catalog[2].compatibilityAudit.status, 'native');
 });
 
+test('asset center reads authoritative content-pack counts used by the bookshelf', () => {
+  const [pack] = buildAssetCatalog([], [{
+    id: 'zishi',
+    title: '子时 v1.1',
+    counts: { worldBook: 96, characterPresets: 1, promptModules: 226 }
+  }]);
+
+  assert.equal(pack.diagnostics.stats.entryCount, 96);
+  assert.equal(pack.diagnostics.stats.characterCount, 1);
+});
+
 test('asset center filters collections, source and kind while keeping favorites first', () => {
   const catalog = buildAssetCatalog([
     {
@@ -78,6 +93,55 @@ test('asset center filters collections, source and kind while keeping favorites 
   assert.deepEqual(filterAssetCatalog(catalog, { kind: 'all', sort: 'updated' }).map((item) => item.id), ['character-1', 'prompt-1']);
   assert.deepEqual(filterAssetCatalog(catalog, { kind: 'character', query: '问道' }).map((item) => item.id), ['character-1']);
   assert.deepEqual(filterAssetCatalog(catalog, { source: '本地素材', query: '待整理' }).map((item) => item.id), ['prompt-1']);
+  assert.deepEqual(filterAssetCatalog(catalog, { genre: 'xianxia' }).map((item) => item.id), ['character-1']);
+  assert.equal(catalog.find((item) => item.id === 'character-1').genre, 'xianxia');
+});
+
+test('asset center folder filters use real favorites and collection labels', () => {
+  const catalog = buildAssetCatalog([
+    { id: 'favorite', kind: 'character', title: '收藏角色', favorite: true },
+    { id: 'active', kind: 'worldbook', title: '在用世界书', collections: ['正在使用'] },
+    { id: 'frequent', kind: 'prompt', title: '常用预设', collections: ['常用资源'] },
+    { id: 'memo', kind: 'prompt', title: '灵感', collections: ['灵感备忘'] }
+  ]);
+
+  assert.deepEqual(filterAssetCatalog(catalog, { folder: 'favorite' }).map((item) => item.id), ['favorite']);
+  assert.deepEqual(filterAssetCatalog(catalog, { folder: 'active' }).map((item) => item.id), ['active']);
+  assert.deepEqual(filterAssetCatalog(catalog, { folder: 'frequent' }).map((item) => item.id), ['frequent']);
+  assert.deepEqual(filterAssetCatalog(catalog, { folder: 'memo' }).map((item) => item.id), ['memo']);
+});
+
+test('asset center pagination clamps pages and never renders the full catalog at once', () => {
+  const items = Array.from({ length: 43 }, (_, index) => ({ id: index + 1 }));
+  const first = paginateAssetCatalog(items, 1, 24);
+  const last = paginateAssetCatalog(items, 99, 24);
+
+  assert.equal(first.items.length, 24);
+  assert.equal(first.totalPages, 2);
+  assert.equal(last.page, 2);
+  assert.equal(last.items.length, 19);
+  assert.deepEqual(last.items.map((item) => item.id), Array.from({ length: 19 }, (_, index) => index + 25));
+});
+
+test('asset center gives title and explicit metadata priority over generic summary wording', () => {
+  const catalog = buildAssetCatalog([
+    {
+      id: 'character-xianzong',
+      kind: 'character',
+      title: '绝世仙宗',
+      summary: '表面上只想过日常生活，能躺则躺。'
+    },
+    {
+      id: 'character-explicit',
+      kind: 'character',
+      title: '未命名角色',
+      summary: '曾在宗门中生活。',
+      metadata: { genre: 'modern' }
+    }
+  ]);
+
+  assert.equal(catalog.find((item) => item.id === 'character-xianzong').genre, 'xianxia');
+  assert.equal(catalog.find((item) => item.id === 'character-explicit').genre, 'modern');
 });
 
 test('asset center groups same-title revisions and links companion worldbooks from one import', () => {

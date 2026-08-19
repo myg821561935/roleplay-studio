@@ -111,6 +111,24 @@ test('community planing wrappers never expose generation plans or replacement CS
   assert.equal(extractRoleplayPresentation('<planning>正在规划').content, '');
 });
 
+test('legacy variable updates and JSON patches never become narrative text', () => {
+  const raw = `丹田里的烛苗仍在暗处一跳一跳。
+
+<UpdateVariable>
+<JSONPatch>
+[]
+</JSONPatch>
+</UpdateVariable>`;
+
+  for (const parsed of [parseRoleplayResponse(raw), extractRoleplayPresentation(raw)]) {
+    assert.equal(parsed.content, '丹田里的烛苗仍在暗处一跳一跳。');
+    assert.equal(parsed.protocolDetected, true);
+    assert.doesNotMatch(parsed.content, /UpdateVariable|JSONPatch|\[\]/i);
+  }
+  assert.equal(parseRoleplayResponse('正文已经完成。\n<UpdateVar').content, '正文已经完成。');
+  assert.equal(extractRoleplayPresentation('<JSONPat').content, '');
+});
+
 test('community content wrappers keep only narrative prose and collapse tool activity', () => {
   const raw = `<thinking>先检索背景资料。</thinking>
 <web_search_results>来源一：庄园记录\n来源二：人员名册</web_search_results>
@@ -152,6 +170,92 @@ test('frontend legacy parser converts control-only output into sidebar data and 
     '主动起身，介入两女之间的对话',
     '继续饮酒，当作无事发生'
   ]);
+  assert.deepEqual(parsed.recommendedActionPresentation, {
+    source: 'model-recommended-actions',
+    title: '',
+    hint: ''
+  });
+});
+
+test('legacy Tianji choice sections become native actions without leaving raw option text in prose', () => {
+  const raw = `她说完，手轻轻一带，门在你面前合上了。\n\n> [天机选项：她关上了门]\n\n- 选项1：去消防楼那道门确认锁的情况\n- 选项2：回监控室，调出昨晚02:47前后的录像\n- 选项3：下楼找张姨，问她消防梯的门什么时候坏的\n- 选项4：自定义行动`;
+
+  for (const parsed of [parseRoleplayResponse(raw), extractRoleplayPresentation(raw)]) {
+    assert.equal(parsed.content, '她说完，手轻轻一带，门在你面前合上了。');
+    assert.deepEqual(parsed.recommendedActions, [
+      '去消防楼那道门确认锁的情况',
+      '回监控室，调出昨晚02:47前后的录像',
+      '下楼找张姨，问她消防梯的门什么时候坏的',
+      '自定义行动'
+    ]);
+    assert.deepEqual(parsed.recommendedActionPresentation, {
+      source: 'community-choice-block',
+      title: '天机选项',
+      hint: '她关上了门'
+    });
+    assert.doesNotMatch(parsed.content, /天机选项|选项1/);
+  }
+});
+
+test('unnumbered Tianji bullet choices become the single native action source', () => {
+  const raw = `夜深人静，巡山弟子的神识正向杂役院扫来。\n\n> [天机选项：异状尚未收束，那道神识正在靠近。]\n- 立刻躺回木板，假装熟睡，赌对方只是例行巡过。\n- 推开后窗，翻入屋后灵田的阴影里。\n- 不躲不藏，径直开门迎上来人。\n- 自定义`;
+
+  for (const parsed of [parseRoleplayResponse(raw), extractRoleplayPresentation(raw)]) {
+    assert.equal(parsed.content, '夜深人静，巡山弟子的神识正向杂役院扫来。');
+    assert.deepEqual(parsed.recommendedActions, [
+      '立刻躺回木板，假装熟睡，赌对方只是例行巡过。',
+      '推开后窗，翻入屋后灵田的阴影里。',
+      '不躲不藏，径直开门迎上来人。',
+      '自定义'
+    ]);
+    assert.deepEqual(parsed.recommendedActionPresentation, {
+      source: 'community-choice-block',
+      title: '天机选项',
+      hint: '异状尚未收束，那道神识正在靠近。'
+    });
+    assert.doesNotMatch(parsed.content, /天机选项|自定义/u);
+  }
+});
+
+test('an incomplete unnumbered Tianji block stays hidden while streaming', () => {
+  const raw = '夜深人静，神识正在靠近。\n\n> [天机选项：异状尚未收束]\n- 立刻躺回木板';
+  const parsed = extractRoleplayPresentation(raw);
+  assert.equal(parsed.content, '夜深人静，神识正在靠近。');
+  assert.deepEqual(parsed.recommendedActions, []);
+  assert.doesNotMatch(parsed.content, /天机选项|立刻躺回/u);
+});
+
+test('model recommendation drafts and camel-case turn frames never leak into saved-message prose', () => {
+  const frame = {
+    spec: 'lra.narrative-turn-frame/v1',
+    scene: { location: '回灵草田', time: '夜', summary: '巡夜灵识离去', presentActors: ['刘一'] },
+    decision: { kind: 'open-state', focus: '是否起身', actor: '刘一', requiresPlayerResponse: false, urgency: 'normal' },
+    evidence: [{ text: '夜色尚深', status: 'confirmed', source: '正文' }],
+    affordances: {},
+    stateDelta: {},
+    panels: {}
+  };
+  const raw = `夜风掠过草叶，巡夜灵识已经远去。\n\n---\n\n**推荐动作（仅供节奏参考，不替玩家决定）**\n\n- 继续躺着，等待气息完全散去。\n- 起身返回院舍。\n- 观察丹田中的异动。\n- 自定义。\n\n<TurnFrame>\n${JSON.stringify(frame)}\n</TurnFrame>`;
+
+  for (const parsed of [parseRoleplayResponse(raw), extractRoleplayPresentation(raw)]) {
+    assert.equal(parsed.content, '夜风掠过草叶，巡夜灵识已经远去。');
+    assert.deepEqual(parsed.recommendedActions, [
+      '继续躺着，等待气息完全散去。',
+      '起身返回院舍。',
+      '观察丹田中的异动。',
+      '自定义。'
+    ]);
+    assert.equal(parsed.recommendedActionPresentation?.source, 'model-recommendation-block');
+    assert.doesNotMatch(parsed.content, /推荐动作|TurnFrame|lra\.narrative-turn-frame|---/i);
+  }
+});
+
+test('model recommendation drafts stay hidden while streaming before the bullet list is complete', () => {
+  const raw = '夜风掠过草叶，巡夜灵识已经远去。\n\n---\n\n**推荐动作（仅供节奏参考，不替玩家决定）**\n\n- 继续躺着';
+  for (const parsed of [parseRoleplayResponse(raw), extractRoleplayPresentation(raw)]) {
+    assert.equal(parsed.content, '夜风掠过草叶，巡夜灵识已经远去。');
+    assert.doesNotMatch(parsed.content, /推荐动作|继续躺着|---/u);
+  }
 });
 
 test('frontend parser discards leaked protocol instructions instead of rendering them as actions', () => {
@@ -205,6 +309,7 @@ E：跳过
       '询问后辈：侧面了解店里的情况',
       '跳过'
     ]);
+    assert.equal(parsed.recommendedActionPresentation?.source, 'community-action-block');
   }
   assert.equal(parseRoleplayResponse('<bginf').content, '');
   assert.equal(extractRoleplayPresentation('<cats').content, '');

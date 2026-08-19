@@ -181,6 +181,7 @@ function createHarness() {
     chatForm: new FakeElement('form'),
     chatInput: new FakeElement('textarea'),
     sendMessageButton: new FakeElement('button'),
+    stopGeneration: new FakeElement('button'),
     composerStatus: new FakeElement('span'),
     rewriteChatInput: new FakeElement('button'),
     continueMessage: new FakeElement('button'),
@@ -203,10 +204,12 @@ function createHarness() {
   const statuses = [];
   const streamingChanges = [];
   let sends = 0;
+  let stops = 0;
   const controller = createComposerController({
     state,
     els,
     onSend: () => { sends += 1; },
+    onStopGeneration: () => { stops += 1; },
     onStreamingChange: (streaming) => streamingChanges.push(streaming),
     setStatus: (_element, message, tone) => statuses.push({ message, tone }),
     documentObject,
@@ -227,7 +230,8 @@ function createHarness() {
     state,
     statuses,
     streamingChanges,
-    getSends: () => sends
+    getSends: () => sends,
+    getStops: () => stops
   };
 }
 
@@ -303,9 +307,14 @@ test('composer controller synchronizes input, resize, streaming and action state
   assert.equal(harness.els.chatInput.disabled, false);
   assert.equal(harness.els.composerStatus.hidden, false);
   assert.equal(harness.els.refreshState.disabled, true);
+  // 停止按钮仅流式期间可见，点击触发 onStopGeneration
+  assert.equal(harness.els.stopGeneration.hidden, false);
+  await harness.els.stopGeneration.emit('click');
+  assert.equal(harness.getStops(), 1);
 
   harness.state.session.messages = [{ role: 'assistant', content: '雨声渐急。' }];
   harness.controller.setStreamingState(false);
+  assert.equal(harness.els.stopGeneration.hidden, true);
   assert.equal(harness.els.continueMessage.disabled, false);
   assert.equal(harness.formatAction.disabled, false);
   assert.deepEqual(harness.streamingChanges, [true, false]);
@@ -324,6 +333,39 @@ test('composer controller synchronizes input, resize, streaming and action state
   assert.equal(harness.els.chatInput.value, '');
   assert.equal(harness.els.sendMessageButton.disabled, true);
   assert.equal(harness.els.rewriteChatInput.disabled, true);
+});
+
+test('composer distinguishes finished prose from the remaining persistence phase', () => {
+  const harness = createHarness();
+
+  harness.controller.setStreamingState(true, '正文已生成，正在同步世界状态与记忆…', 'finalizing');
+
+  assert.equal(harness.state.chatStreamPhase, 'finalizing');
+  assert.equal(harness.els.composerStatus.textContent, '正文已生成 · 正在同步状态');
+  assert.equal(harness.els.chatInput.placeholder, '正文已生成，正在同步状态；可先写下一步...');
+  assert.equal(harness.els.sendMessageButton.title, '正文已生成，正在同步世界状态与记忆');
+
+  harness.controller.setStreamingState(false);
+  assert.equal(harness.state.chatStreamPhase, '');
+  assert.equal(harness.els.composerStatus.hidden, true);
+});
+
+test('composer keeps unsent drafts scoped to the active session', () => {
+  const harness = createHarness();
+  harness.controller.setInputValue('第一部剧本的未发送输入', { focus: false });
+
+  assert.equal(harness.controller.handleSessionChanged({
+    previousSessionId: 'story-a',
+    nextSessionId: 'story-b'
+  }), true);
+  assert.equal(harness.els.chatInput.value, '');
+
+  harness.controller.setInputValue('第二部剧本的未发送输入', { focus: false });
+  harness.controller.handleSessionChanged({
+    previousSessionId: 'story-b',
+    nextSessionId: 'story-a'
+  });
+  assert.equal(harness.els.chatInput.value, '第一部剧本的未发送输入');
 });
 
 test('speaker picker deduplicates candidates and replaces dialog callbacks on reopen', async () => {

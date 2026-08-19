@@ -305,7 +305,7 @@ test('bounded lifecycle applies allowlisted patches and rolls back the whole eve
     currentState: runtime.mvu
   });
   assert.equal(applied.report.status, 'applied');
-  assert.equal(applied.state.values.relationships.guide.trust, 3);
+  assert.equal(applied.state.values.chat.relationships.guide.trust, 3);
 
   const blockedRuntime = {
     lifecycle: {
@@ -334,7 +334,7 @@ test('lifecycle budgets reject excessive event executions without mutating state
       }
     }
   };
-  const state = { enabled: true, values: { variables: { turns: 0 } }, revision: 0 };
+  const state = { enabled: true, values: { chat: { variables: { turns: 0 } }, global: {} }, revision: 0 };
 
   assert.throws(() => executeDeclarativeLifecycle({
     runtime,
@@ -342,11 +342,11 @@ test('lifecycle budgets reject excessive event executions without mutating state
     currentState: state,
     executions: 9
   }), /LIFECYCLE_EXECUTION_BUDGET_EXCEEDED/);
-  assert.equal(state.values.variables.turns, 0);
+  assert.equal(state.values.chat.variables.turns, 0);
 });
 
 test('lifecycle recursion and change budgets fail closed instead of silently truncating', () => {
-  const state = { enabled: true, values: { variables: { turns: 0 } }, revision: 0 };
+  const state = { enabled: true, values: { chat: { variables: { turns: 0 } }, global: {} }, revision: 0 };
   const tooDeep = {
     lifecycle: {
       events: {

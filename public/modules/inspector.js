@@ -40,18 +40,26 @@ export function createInspectorTabSelectSync({
   };
 }
 
+export const WORLD_BOOK_TYPE_OPTIONS = [
+  'world-premise', 'geography', 'history', 'realm', 'rule', 'economy',
+  'faction', 'character', 'location', 'item', 'event', 'quest',
+  'campaign', 'story-node', 'meta', 'memory', 'other'
+];
+
 export const WORLD_BOOK_ENTRY_FIELDS = [
-  { key: 'title', label: '标题', type: 'text', mode: 'simple' },
-  { key: 'type', label: '类型', type: 'text', placeholder: 'memory/faction/location/...', mode: 'simple' },
-  { key: 'content', label: '内容', type: 'textarea', rows: 5, mode: 'simple' },
-  { key: 'keywords', label: '主关键词（逗号分隔）', type: 'csv', mode: 'simple' },
-  { key: 'priority', label: '优先级 (0-100)', type: 'number', mode: 'simple' },
-  { key: 'depth', label: '插入深度', type: 'number', mode: 'simple' },
-  { key: 'regex', label: '正则触发器（逗号分隔）', type: 'csv', mode: 'advanced' },
-  { key: 'secondaryKeywords', label: '次关键词（逗号分隔）', type: 'csv', mode: 'advanced' },
-  { key: 'matchMode', label: '匹配模式', type: 'select', options: ['keyword', 'regex', 'selective'], mode: 'advanced' },
-  { key: 'logic', label: '逻辑', type: 'select', options: ['any', 'all', 'not', 'not all'], mode: 'advanced' },
-  { key: 'position', label: '位置', type: 'select', options: ['after_character', 'before_character', 'at_end', 'at_start'], mode: 'advanced' }
+  { key: 'title', label: '标题', type: 'text', mode: 'simple', helpKey: 'wbFieldTitle' },
+  { key: 'type', label: '类型', type: 'select', options: WORLD_BOOK_TYPE_OPTIONS, allowCustom: true, mode: 'simple', helpKey: 'wbFieldType' },
+  { key: 'content', label: '内容', type: 'textarea', rows: 5, mode: 'simple', helpKey: 'wbFieldContent' },
+  { key: 'keywords', label: '主关键词（逗号分隔）', type: 'csv', mode: 'simple', helpKey: 'wbFieldKeywords' },
+  { key: 'priority', label: '优先级 (0-100)', type: 'number', mode: 'simple', helpKey: 'wbFieldPriority' },
+  { key: 'depth', label: '插入深度', type: 'number', mode: 'simple', helpKey: 'wbFieldDepth' },
+  { key: 'regex', label: '正则触发器（逗号分隔）', type: 'csv', mode: 'advanced', helpKey: 'wbFieldRegex' },
+  { key: 'secondaryKeywords', label: '次关键词（逗号分隔）', type: 'csv', mode: 'advanced', helpKey: 'wbFieldSecondaryKeywords' },
+  { key: 'matchMode', label: '匹配模式', type: 'select', options: ['keyword', 'regex', 'selective'], mode: 'advanced', helpKey: 'wbFieldMatchMode' },
+  { key: 'logic', label: '逻辑', type: 'select', options: ['any', 'all', 'not', 'not all'], mode: 'advanced', helpKey: 'wbFieldLogic' },
+  { key: 'position', label: '位置', type: 'select', options: ['after_character', 'before_character', 'at_end', 'at_start'], mode: 'advanced', helpKey: 'wbFieldPosition' },
+  { key: 'insertionOrder', label: '插入顺序', type: 'number', mode: 'advanced', helpKey: 'wbFieldInsertionOrder' },
+  { key: 'scope', label: '作用域', type: 'select', options: ['prompt', 'world', 'character'], mode: 'advanced', helpKey: 'wbFieldScope' }
 ];
 
 export function getInspectorGroupForTab(tab) {
@@ -145,21 +153,55 @@ function createEditorInput(field, entry) {
     input.value = entry[field.key] || '';
   } else if (field.type === 'select') {
     input = document.createElement('select');
-    field.options.forEach((optionValue) => {
+    const currentValue = String(entry[field.key] || '');
+    const options = Array.isArray(field.options) ? field.options : [];
+    if (field.allowCustom && currentValue && !options.includes(currentValue)) {
+      const customOption = document.createElement('option');
+      customOption.value = currentValue;
+      customOption.textContent = `${currentValue}（自定义）`;
+      input.append(customOption);
+    }
+    options.forEach((optionValue) => {
       const option = document.createElement('option');
       option.value = optionValue;
       option.textContent = optionValue;
-      if (entry[field.key] === optionValue) option.selected = true;
+      if (currentValue === optionValue) option.selected = true;
       input.append(option);
     });
+    if (field.allowCustom) {
+      const customOption = document.createElement('option');
+      customOption.value = '__custom__';
+      customOption.textContent = '自定义…';
+      input.append(customOption);
+      const customInput = document.createElement('input');
+      customInput.type = 'text';
+      customInput.className = 'form-input wb-editor-custom-input is-hidden';
+      customInput.value = currentValue && !options.includes(currentValue) ? currentValue : '';
+      customInput.placeholder = '输入自定义值';
+      const handleSelectChange = () => {
+        const isCustom = input.value === '__custom__';
+        customInput.classList.toggle('is-hidden', !isCustom);
+        if (isCustom) customInput.focus();
+      };
+      input.addEventListener('change', handleSelectChange);
+      if (currentValue && !options.includes(currentValue)) {
+        input.value = currentValue;
+      }
+      input.dataset.customInputKey = field.key;
+      input._customInput = customInput;
+    }
     if (!entry[field.key] && field.key === 'matchMode') input.value = 'keyword';
     if (!entry[field.key] && field.key === 'logic') input.value = 'any';
     if (!entry[field.key] && field.key === 'position') input.value = 'after_character';
+    if (!entry[field.key] && field.key === 'scope') input.value = 'prompt';
   } else {
     input = document.createElement('input');
     input.type = field.type === 'number' ? 'number' : 'text';
     if (field.type === 'csv') input.value = Array.isArray(entry[field.key]) ? entry[field.key].join(', ') : '';
-    else if (field.type === 'number') input.value = entry[field.key] ?? (field.key === 'priority' ? 50 : 4);
+    else if (field.type === 'number') {
+      const fallback = field.key === 'priority' ? 50 : (field.key === 'depth' ? 4 : 0);
+      input.value = entry[field.key] ?? fallback;
+    }
     else input.value = entry[field.key] || '';
     if (field.placeholder) input.placeholder = field.placeholder;
   }
@@ -219,9 +261,19 @@ export function openWorldbookEntryEditor(entry, onDone) {
     label.dataset.field = field.key;
     const span = document.createElement('span');
     span.textContent = field.label;
+    if (field.helpKey) {
+      span.className = 'wb-term';
+      span.dataset.helpKey = field.helpKey;
+      span.setAttribute('role', 'button');
+      span.setAttribute('tabindex', '0');
+      span.setAttribute('aria-label', `${field.label}（点击查看说明）`);
+    }
     label.append(span);
     const input = createEditorInput(field, entry);
     label.append(input);
+    if (input._customInput) {
+      label.append(input._customInput);
+    }
     body.append(label);
     inputs[field.key] = input;
   });
@@ -229,9 +281,9 @@ export function openWorldbookEntryEditor(entry, onDone) {
   const checkboxRow = document.createElement('div');
   checkboxRow.className = 'wb-editor-checkboxes';
   [
-    { key: 'enabled', label: '启用', default: true, mode: 'simple' },
-    { key: 'constant', label: '常驻', default: false, mode: 'simple' },
-    { key: 'caseSensitive', label: '区分大小写', default: false, mode: 'advanced' }
+    { key: 'enabled', label: '启用', default: true, mode: 'simple', helpKey: 'wbFieldEnabled' },
+    { key: 'constant', label: '常驻', default: false, mode: 'simple', helpKey: 'wbFieldConstant' },
+    { key: 'caseSensitive', label: '区分大小写', default: false, mode: 'advanced', helpKey: 'wbFieldCaseSensitive' }
   ].forEach((option) => {
     const label = document.createElement('label');
     label.className = `wb-editor-checkbox is-${option.mode}`;
@@ -240,6 +292,13 @@ export function openWorldbookEntryEditor(entry, onDone) {
     checkbox.checked = entry[option.key] !== undefined ? entry[option.key] : option.default;
     const text = document.createElement('span');
     text.textContent = option.label;
+    if (option.helpKey) {
+      text.className = 'wb-term';
+      text.dataset.helpKey = option.helpKey;
+      text.setAttribute('role', 'button');
+      text.setAttribute('tabindex', '0');
+      text.setAttribute('aria-label', `${option.label}（点击查看说明）`);
+    }
     label.append(checkbox, text);
     checkboxRow.append(label);
     inputs[option.key] = checkbox;
@@ -263,11 +322,16 @@ export function openWorldbookEntryEditor(entry, onDone) {
   confirmButton.addEventListener('click', () => {
     const updated = { ...entry };
     WORLD_BOOK_ENTRY_FIELDS.forEach((field) => {
-      const value = inputs[field.key].value;
+      const input = inputs[field.key];
+      let value = input.value;
+      if (field.allowCustom && value === '__custom__' && input._customInput) {
+        value = input._customInput.value;
+      }
       if (field.type === 'csv') updated[field.key] = String(value).split(',').map((item) => item.trim()).filter(Boolean);
       else if (field.type === 'number') {
         const number = Number(value);
-        updated[field.key] = Number.isFinite(number) ? number : (field.key === 'priority' ? 50 : 4);
+        const fallback = field.key === 'priority' ? 50 : (field.key === 'depth' ? 4 : 0);
+        updated[field.key] = Number.isFinite(number) ? number : fallback;
       } else updated[field.key] = String(value).trim();
     });
     updated.enabled = inputs.enabled.checked;
@@ -291,24 +355,50 @@ export function createWorldbookController({ state, els, typeLabels, prettyJson, 
 
   function createEntryRow(entry, index) {
     const row = document.createElement('div');
-    row.className = 'worldbook-entry-row';
-    if (entry.enabled === false) row.classList.add('disabled');
+    row.className = 'immersive-worldbook-card';
+    if (entry.enabled === false) row.classList.add('is-disabled');
+    if (entry.constant) row.classList.add('is-constant');
 
     const head = document.createElement('div');
-    head.className = 'worldbook-entry-head';
-    const title = document.createElement('span');
-    title.className = 'worldbook-entry-title';
+    head.className = 'immersive-worldbook-card-head';
+
+    const title = document.createElement('strong');
+    title.className = 'immersive-worldbook-card-title';
     title.textContent = entry.title || '未命名条目';
+
+    const metaTop = document.createElement('div');
+    metaTop.className = 'immersive-worldbook-card-meta-top';
     const mode = document.createElement('span');
-    mode.className = 'wb-tag';
-    mode.textContent = entry.constant ? '常驻' : (entry.matchMode || 'keyword');
-    head.append(title, mode);
+    mode.className = 'wb-badge';
+    mode.textContent = entry.constant ? '常驻 (Constant)' : (entry.matchMode || 'keyword');
+    metaTop.append(mode);
+
     if (entry.enabled === false) {
       const disabled = document.createElement('span');
-      disabled.className = 'wb-tag disabled-tag';
+      disabled.className = 'wb-badge disabled-badge';
       disabled.textContent = '已禁用';
-      head.append(disabled);
+      metaTop.append(disabled);
     }
+
+    head.append(title, metaTop);
+
+    const meta = document.createElement('div');
+    meta.className = 'immersive-worldbook-card-meta';
+    const parts = [];
+    if (Array.isArray(entry.keywords) && entry.keywords.length) parts.push(`关键词: ${entry.keywords.slice(0, 3).join('、')}${entry.keywords.length > 3 ? '…' : ''}`);
+    if (Array.isArray(entry.regex) && entry.regex.length) parts.push(`正则: ${entry.regex.slice(0, 2).join(' | ')}`);
+    if (Array.isArray(entry.secondaryKeywords) && entry.secondaryKeywords.length) parts.push(`次关键词: ${entry.secondaryKeywords.slice(0, 2).join('、')}`);
+    parts.push(`优先级: ${entry.priority ?? 50}`);
+    parts.push(`深度: ${entry.depth ?? 4}`);
+    if (entry.logic && entry.logic !== 'any') parts.push(`逻辑: ${entry.logic}`);
+    meta.textContent = parts.join(' · ');
+
+    const preview = document.createElement('p');
+    preview.className = 'immersive-worldbook-card-preview';
+    preview.textContent = String(entry.content || '').trim();
+
+    const actions = document.createElement('div');
+    actions.className = 'immersive-worldbook-card-actions';
     const edit = document.createElement('button');
     edit.type = 'button';
     edit.className = 'ghost-button compact';
@@ -319,25 +409,9 @@ export function createWorldbookController({ state, els, typeLabels, prettyJson, 
     remove.className = 'ghost-button compact';
     remove.textContent = '删除';
     remove.dataset.delEntry = String(index);
-    head.append(edit, remove);
-    row.append(head);
+    actions.append(edit, remove);
 
-    const meta = document.createElement('div');
-    meta.className = 'worldbook-entry-meta';
-    const parts = [];
-    if (Array.isArray(entry.keywords) && entry.keywords.length) parts.push(`关键词: ${entry.keywords.slice(0, 3).join('、')}${entry.keywords.length > 3 ? '…' : ''}`);
-    if (Array.isArray(entry.regex) && entry.regex.length) parts.push(`正则: ${entry.regex.slice(0, 2).join(' | ')}`);
-    if (Array.isArray(entry.secondaryKeywords) && entry.secondaryKeywords.length) parts.push(`次关键词: ${entry.secondaryKeywords.slice(0, 2).join('、')}`);
-    parts.push(`优先级: ${entry.priority ?? 50}`);
-    parts.push(`深度: ${entry.depth ?? 4}`);
-    if (entry.logic && entry.logic !== 'any') parts.push(`逻辑: ${entry.logic}`);
-    meta.textContent = parts.join(' · ');
-    row.append(meta);
-
-    const preview = document.createElement('p');
-    preview.className = 'worldbook-entry-preview';
-    preview.textContent = String(entry.content || '').trim().replace(/\s*\n+\s*/g, ' · ');
-    if (preview.textContent) row.append(preview);
+    row.append(head, meta, preview, actions);
     return row;
   }
 
@@ -421,7 +495,7 @@ export function createWorldbookController({ state, els, typeLabels, prettyJson, 
       count.textContent = `${items.length} 条`;
       summary.append(label, count);
       const body = document.createElement('div');
-      body.className = 'worldbook-entry-group-body';
+      body.className = 'immersive-worldbook-group-grid';
       items.forEach(({ entry, index }) => body.append(createEntryRow(entry, index)));
       group.append(summary, body);
       els.worldbookEntriesList.append(group);

@@ -17,7 +17,6 @@ export function createAppEventsController({
   if (!documentObject || typeof documentObject.addEventListener !== 'function') {
     throw new TypeError('A DOM document with event APIs is required');
   }
-
   let bound = false;
 
   function bindStoryFeatureEvents() {
@@ -38,6 +37,7 @@ export function createAppEventsController({
       bindings.sessionHealth,
       bindings.worldbookWorkspace,
       bindings.presetWorkspace,
+      bindings.promptStudio,
       bindings.promptTemplateCenter,
       bindings.personaWorkspace,
       bindings.authorNoteWorkspace,
@@ -139,6 +139,7 @@ export function createAppEventsController({
     bind(els.macroTestClear, 'click', (event) => call(actions.clearMacroTest, event));
     call(bindings.characterCard);
     call(bindings.groupMembers);
+    call(bindings.timeline);
     bind(els.randomProtagonist, 'click', () => call(actions.randomizeProtagonist));
   }
 
@@ -152,6 +153,7 @@ export function createAppEventsController({
     bind(els.openNewSession, 'click', () => call(actions.openStoryLauncher));
     bind(els.exportSession, 'click', (event) => call(actions.exportCurrentSession, event));
     bind(els.importSession, 'click', () => els.importSessionFile?.click());
+    bind(els.deleteSession, 'click', () => call(actions.deleteCurrentSession));
     bind(els.importSessionFile, 'change', (event) => call(actions.handleImportSessionFile, event));
     bind(els.newSessionForm, 'submit', (event) => call(actions.handleNewSessionSubmit, event));
     bind(els.newSessionCancel, 'click', () => els.newSessionDialog?.close());

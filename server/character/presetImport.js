@@ -107,6 +107,15 @@ export function importSillyTavernPreset(document, { fileName = '' } = {}) {
     generationSettings,
     dependencySignals,
     regexCompatibility: regexPreset?.compatibility || null,
+    // 占位符模块的注入语义已由宏引擎承接（{{charDefinition}} 等），
+    // 此处透出清单供审计与前端展示，标记为「已映射」而非「被丢弃」。
+    placeholderMapping: {
+      supported: ['charDefinition', 'charDescription', 'charPersonality', 'personaDescription',
+        'dialogueExamples', 'worldInfoBefore', 'worldInfoAfter'],
+      resolved: prompts
+        .filter((prompt) => prompt.placeholder)
+        .map((prompt) => ({ id: prompt.id, enabled: prompt.enabled }))
+    },
     counts: {
       prompts: prompts.length,
       enabled: prompts.filter((prompt) => prompt.enabled).length,

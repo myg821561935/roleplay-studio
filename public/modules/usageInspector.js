@@ -138,6 +138,27 @@ export function createUsageInspectorController({
       taskList.append(item);
     });
 
+    const sessionList = documentObject.createElement('div');
+    sessionList.className = 'usage-provider-list usage-session-list';
+    (usage.bySession || []).forEach((row) => {
+      const item = documentObject.createElement('article');
+      item.className = 'usage-row';
+      const title = documentObject.createElement('div');
+      title.className = 'usage-row-title';
+      const label = row.title ? `${row.title}（${row.sessionId}）` : row.sessionId;
+      title.textContent = `会话 · ${label}`;
+      const detail = documentObject.createElement('div');
+      detail.className = 'usage-row-detail';
+      detail.textContent = [
+        `调用 ${row.calls}`,
+        `总 ${formatTokenCount(row.totalTokens)}`,
+        `Prompt ${formatTokenCount(row.promptTokens)}`,
+        `回复 ${formatTokenCount(row.completionTokens)}`
+      ].filter(Boolean).join(' · ');
+      item.append(title, detail);
+      sessionList.append(item);
+    });
+
     const providerList = documentObject.createElement('div');
     providerList.className = 'usage-provider-list';
     (usage.byProvider || []).forEach((row) => {
@@ -186,7 +207,10 @@ export function createUsageInspectorController({
       list.append(item);
     });
 
-    els.usageView.append(summary, taskList, providerList, list);
+    const sections = [summary];
+    if (sessionList.children.length) sections.push(sessionList);
+    sections.push(taskList, providerList, list);
+    els.usageView.append(...sections);
   }
 
   async function loadUsageStats({ silent = false } = {}) {

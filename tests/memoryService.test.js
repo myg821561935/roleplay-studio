@@ -181,12 +181,38 @@ test('retrieveContext combines episodic and vector recall with evidence exclusio
   assert.equal(context.summaryHits.length, 1);
   assert.equal(context.summaryHits[0].summaryLevel, 'scene');
   assert.deepEqual(context.vectorHits.map((item) => item.messageId), ['vector-old']);
-  assert.deepEqual(context.audit, { episodicCount: 1, summaryCount: 1, vectorCount: 1, graphRevision: 7 });
+  assert.deepEqual(context.audit, {
+    episodicCount: 1,
+    summaryCount: 1,
+    vectorCount: 1,
+    graphRevision: 7,
+    graphRelatedEntities: 0,
+    graphActionableRelations: 0
+  });
   assert.equal(session.memory.episodicMemory.retrievalAudit.length, 1);
   assert.equal(session.memory.episodicMemory.retrievalAudit[0].summaryIds.length, 1);
   const searchCall = vectorCalls.find((call) => call.kind === 'search');
   assert.ok(searchCall.input.excludeMessageIds.includes('recent-15'));
   assert.ok(!searchCall.input.excludeMessageIds.includes('old-a'));
+});
+
+test('retrieveContext does not recall a different scene when an explicit active location has no matching evidence', async () => {
+  const session = createSession([
+    message('recent-u', 'user', '我看向周媛。'),
+    message('recent-a', 'assistant', '周媛站在门口。')
+  ]);
+  session.memory.worldState.location = { name: '周媛住处·小区门口' };
+  session.memory.episodicMemory.episodes.push({
+    id: 'episode:office', kind: 'episode', title: '写字楼办公室',
+    summary: '刘一在翠湖天地的办公室遇见周媛。', userIntent: '看手机',
+    sourceMessageIds: ['old-u', 'old-a'], visibility: 'player', confidence: 1,
+    importance: 0.8, status: 'confirmed', revision: 1, createdAt: FIXED_TIME, updatedAt: FIXED_TIME
+  });
+  const service = new MemoryService({ now });
+
+  const context = await service.retrieveContext({ session, userMessage: '我看了一眼手机。' });
+
+  assert.deepEqual(context.episodicHits, []);
 });
 
 test('rebuildRange supersedes memories from an abandoned message branch', () => {

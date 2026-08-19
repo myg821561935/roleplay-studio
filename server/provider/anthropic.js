@@ -40,15 +40,15 @@ export function buildAnthropicRequest({ provider, messages, stream = false }) {
   };
 }
 
-export async function callAnthropic({ provider, messages, fetchImpl = fetch }) {
+export async function callAnthropic({ provider, messages, fetchImpl = fetch, signal = null }) {
   const { url, init } = buildAnthropicRequest({ provider, messages });
-  const response = await fetchImpl(url, init);
+  const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   return readAnthropicResponse(response);
 }
 
-export async function streamAnthropic({ provider, messages, onToken, fetchImpl = fetch }) {
+export async function streamAnthropic({ provider, messages, onToken, fetchImpl = fetch, signal = null }) {
   const { url, init } = buildAnthropicRequest({ provider, messages, stream: true });
-  const response = await fetchImpl(url, init);
+  const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Anthropic stream error ${response.status}: ${text.slice(0, 240)}`);

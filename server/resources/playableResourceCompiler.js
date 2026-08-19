@@ -1,4 +1,6 @@
 import { estimateTokens } from '../agent/token.js';
+import { isWorldBookCharacterProfileEntry } from '../character/characterContentMode.js';
+import { normalizeCalendarProfile } from '../simulation/calendarEngine.js';
 
 export const WORLD_SYSTEMS_SPEC = 'narrative-engine.world-systems/v1';
 
@@ -273,7 +275,32 @@ export function compileStructuredWorldSystems(entries = []) {
       staticContent
     ].filter(Boolean).join(' ');
     const record = createWorldSystemRecord(entry, index);
+    const calendarProfile = normalizeCalendarProfile(
+      entry?.extensions?.local_roleplay_agent?.calendarProfile
+      || entry?.extensions?.calendarProfile
+      || entry?.calendarProfile
+    );
     let mapped = false;
+
+    // Character profiles describe one actor, not the world's factions,
+    // economy or cultivation system. Their prose commonly mentions 宗门、灵石、
+    // 灵根 and 功法, so broad keyword matching would otherwise copy the same
+    // entry into several unrelated world systems.
+    if (isWorldBookCharacterProfileEntry(entry)) {
+      const schedules = extractScheduleSlots(content);
+      systems.population.profiles.push({
+        ...record,
+        schedules
+      });
+      if (schedules.length) systems.population.scheduleRules.push(record);
+      systems.source.mappedCount += 1;
+      return;
+    }
+
+    // Variable protocols and compatibility contracts control the runtime.
+    // They are not lore and must never be projected as places, calendars or
+    // world rules merely because their instructions mention time and location.
+    if (isOperationalWorldBookEntry(entry)) return;
 
     if (/(?:地点|区域|地理|疆域|国家|城镇|城池|州郡|山川|宗门驻地|据点|要塞|墟市)/i.test(signals)) {
       systems.topology.nodes.push({
@@ -309,9 +336,15 @@ export function compileStructuredWorldSystems(entries = []) {
       }
       mapped = true;
     }
+    if (calendarProfile) {
+      // A profile is opt-in, declarative world data. It gives imported and
+      // original worlds the same clock semantics without executing card code.
+      if (!systems.calendar.profile) systems.calendar.profile = calendarProfile;
+      mapped = true;
+    }
     if (/(?:经济|物价|货币|税率|税制|市场|贸易|商会|交易|灵石|白银|飞票)/i.test(signals)) {
       systems.economy.rules.push(record);
-      systems.economy.currencies.push(...extractNamedTerms(`${title}\n${content}`, /[\u4e00-\u9fffA-Za-z0-9·]{1,12}?(?:灵石|银|钱|票|币|金)/g));
+      systems.economy.currencies.push(...extractCurrencyTerms(`${title}\n${content}`));
       if (/(?:市场|墟市|商会|工坊|店铺|拍卖|物价|交易)/i.test(signals)) {
         systems.economy.markets.push(record);
       }
@@ -319,7 +352,7 @@ export function compileStructuredWorldSystems(entries = []) {
     }
     if (/(?:修行|修炼|功法|境界|道途|道脉|破境|反噬|暗伤|刻度|战斗|灵根|心炉|冥契)/i.test(signals)) {
       systems.cultivation.rules.push(record);
-      systems.cultivation.scales.push(...extractNamedTerms(`${title}\n${content}`, /[\u4e00-\u9fffA-Za-z0-9·]{1,16}?(?:值|深度|刻度)/g));
+      systems.cultivation.scales.push(...extractScaleTerms(`${title}\n${content}`));
       if (/(?:道途|道脉|学派|修行体系|功法体系|传承)/i.test(signals)) {
         systems.cultivation.paths.push(record);
       }
@@ -347,6 +380,12 @@ export function compileStructuredWorldSystems(entries = []) {
   systems.cultivation.scales = [...new Set(systems.cultivation.scales)].slice(0, 40);
   systems.cultivation.backlash = uniqueSystemRecords(systems.cultivation.backlash, 40);
   return systems;
+}
+
+function isOperationalWorldBookEntry(entry) {
+  const title = String(entry?.title || entry?.name || '').replace(/\s+/g, ' ').trim();
+  return /^(?:\[?mvu[_ -]?update\]?\s*)?(?:变量更新规则|变量输出格式|变量列表|变量清单)$/iu.test(title)
+    || /^(?:社区卡原生运行契约|社区资源兼容运行契约)$/u.test(title);
 }
 
 export function budgetWorldBookEntries(entries = [], {
@@ -544,10 +583,17 @@ function extractCalendarDayLabel(value) {
   return String(value || '').match(/(?:当前日期|日期|今日|今夜)\s*[：:]\s*([^，。；;\n]{1,80})/)?.[1]?.trim() || '';
 }
 
-function extractNamedTerms(value, pattern) {
-  return (String(value || '').match(pattern) || [])
-    .map((item) => item.trim().replace(/^[与及和的其]+/, ''))
-    .filter((item) => item.length >= 2);
+function extractCurrencyTerms(value) {
+  return String(value || '').match(/(?:极品|上品|中品|下品)?灵石|白银|银两|铜钱|铜币|银币|金币|飞票|钱币|[\u4e00-\u9fffA-Za-z0-9·]{1,8}(?:币|券)/gu) || [];
+}
+
+function extractScaleTerms(value) {
+  return (String(value || '').match(/[\u4e00-\u9fffA-Za-z0-9·]{1,12}?(?:值|深度|刻度)/gu) || [])
+    .map((item) => item.replace(/^[与及和的其]+/u, ''))
+    .filter((item) => {
+      const prefix = item.replace(/(?:值|深度|刻度)$/u, '');
+      return prefix && prefix.length <= 8 && !/[也会将当把被让若则后前时每不需并仍尚其的]/u.test(prefix);
+    });
 }
 
 function uniqueSystemRecords(records, limit) {

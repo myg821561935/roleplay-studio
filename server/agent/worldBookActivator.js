@@ -47,6 +47,7 @@ export function activateWorldBookEntries(args = {}) {
   const entries = [...worldBook, ...memoryCards];
   const messages = Array.isArray(args.messages) ? args.messages : [];
   const includeNames = args.includeNames !== false;
+  const additionalScanText = String(args.additionalScanText || '').trim().slice(0, 1200);
   const chat = buildChat(messages, args.userMessage, {
     userName: args.userName,
     characterName: args.characterName
@@ -154,7 +155,7 @@ export function activateWorldBookEntries(args = {}) {
           score = scoreCard(card, '', matchingDefaults);
         } else if (effectiveDepth > 0) {
           const query = appendWorldBookAdditionalSources(
-            buildScanQuery(chat, effectiveDepth, includeNames),
+            [buildScanQuery(chat, effectiveDepth, includeNames), additionalScanText].filter(Boolean).join('\n'),
             card,
             scanContext
           );
@@ -163,7 +164,7 @@ export function activateWorldBookEntries(args = {}) {
       } else {
         const effectiveDepth = entryScanDepth(card, scanDepth);
         const chatQuery = effectiveDepth > 0 ? buildScanQuery(chat, effectiveDepth, includeNames) : '';
-        const baseQuery = [chatQuery, recursionQuery].filter(Boolean).join('\n');
+        const baseQuery = [chatQuery, additionalScanText, recursionQuery].filter(Boolean).join('\n');
         const query = effectiveDepth > 0
           ? appendWorldBookAdditionalSources(baseQuery, card, scanContext)
           : baseQuery;
@@ -262,6 +263,7 @@ export function activateWorldBookEntries(args = {}) {
       reachedDepth: scanDepth,
       minActivations,
       minActivationsDepthMax,
+      additionalScanTerms: additionalScanText.split(/\n+/u).filter(Boolean),
       recursionSteps: recursionStep,
       recursionDelayLevel: currentRecursionDelayLevel
     },

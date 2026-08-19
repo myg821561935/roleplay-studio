@@ -80,6 +80,29 @@ test('ConfigService preserves compatible group member profiles without unsafe me
   assert.equal(Object.hasOwn(member.extensions, '__proto__'), false);
 });
 
+test('ConfigService preserves valid talkativeness and drops invalid values on group members', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'agent-config-'));
+  const service = new ConfigService(new JsonStore(root));
+
+  await service.saveGroupMembers([
+    { id: 'member-a', name: '阿紫', talkativeness: 0.8 },
+    { id: 'member-b', name: '萧远', talkativeness: 1 },
+    { id: 'member-c', name: '陆沉', talkativeness: 0 },
+    { id: 'member-d', name: '柳青', talkativeness: '废话' },
+    { id: 'member-e', name: '秦烈', talkativeness: 2.5 },
+    { id: 'member-f', name: '白砚' }
+  ]);
+
+  const members = (await service.getAll()).groupMembers;
+  assert.equal(members.find((m) => m.name === '阿紫').talkativeness, 0.8);
+  assert.equal(members.find((m) => m.name === '萧远').talkativeness, 1);
+  // 0 / 非数字 / 超 1 / 缺省：字段被丢弃，选择器侧回落默认 0.5
+  assert.equal('talkativeness' in members.find((m) => m.name === '陆沉'), false);
+  assert.equal('talkativeness' in members.find((m) => m.name === '柳青'), false);
+  assert.equal('talkativeness' in members.find((m) => m.name === '秦烈'), false);
+  assert.equal('talkativeness' in members.find((m) => m.name === '白砚'), false);
+});
+
 test('ConfigService saves provider config without touching prompt modules', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-config-'));
   const service = new ConfigService(new JsonStore(root));

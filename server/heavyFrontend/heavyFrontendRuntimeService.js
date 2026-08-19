@@ -486,6 +486,9 @@ export class HeavyFrontendRuntimeService {
       const entries = await this.store.read(AUDIT_PATH, []);
       entries.push(record);
       await this.store.write(AUDIT_PATH, entries.slice(-5000));
+    }).catch((error) => {
+      // 审计写入失败不应阻塞后续写入，也不应产生未处理的 rejection
+      this.lastAuditError = error?.message || 'AUDIT_WRITE_FAILED';
     });
     return this.auditQueue.then(() => record);
   }

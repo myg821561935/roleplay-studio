@@ -209,3 +209,33 @@ test('fact extraction merges named quests and encountered characters by canonica
   }]);
   assert.deepEqual(next.worldState.quests, [{ name: '西门调查', status: 'resolved', clue: '旧脚印' }]);
 });
+
+test('fact extraction compacts repeated from-to relationship revisions into the current relation', () => {
+  const next = applyFactExtractionResult({
+    worldState: {
+      relationships: [
+        { from: '刘一', to: '周媛', type: '性指导员-被指导者', details: '早期状态' },
+        { from: '刘一', to: '周媛', type: '性指导员-被指导者', details: '上一轮状态' }
+      ]
+    },
+    memoryCards: []
+  }, JSON.stringify({
+    worldState: {
+      relationships: [{
+        from: '刘一',
+        to: '周媛',
+        type: '性指导员-被指导者',
+        details: '当前已确认状态',
+        encountered: true
+      }]
+    }
+  }));
+
+  assert.deepEqual(next.worldState.relationships, [{
+    from: '刘一',
+    to: '周媛',
+    type: '性指导员-被指导者',
+    details: '当前已确认状态',
+    encountered: true
+  }]);
+});

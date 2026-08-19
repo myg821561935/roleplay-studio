@@ -5,6 +5,8 @@ import {
 
 const RECOMMENDED_ACTION_SELECTOR = [
   '.recommendation-button',
+  '.recommendation-custom-input',
+  '.recommendation-custom-submit',
   '.immersive-option-item[data-immersive-option-action]'
 ].join(', ');
 
@@ -275,7 +277,7 @@ export function createConversationActionsController({
     renderQuickRepliesEditor();
   }
 
-  async function useRecommendedAction(action, trigger) {
+  async function useRecommendedAction(action, trigger, options = {}) {
     const text = String(action || '').trim();
     if (!text) return false;
     if (isConversationBusy()) {
@@ -286,26 +288,33 @@ export function createConversationActionsController({
     setActionPending(true);
     trigger?.classList.add('is-expanding');
     trigger?.setAttribute('aria-busy', 'true');
-    setStatus(els.sessionStatus, '正在结合主角与当前场景组织行动...', 'busy');
+    const preserveText = options?.preserveText === true;
+    setStatus(
+      els.sessionStatus,
+      preserveText ? '正在发送你的自定义行动...' : '正在结合主角与当前场景组织行动...',
+      'busy'
+    );
 
-    let expandedAction = buildRecommendedActionFallback(text);
-    try {
-      const payload = await apiRequest('/api/rewrite', {
-        method: 'POST',
-        body: {
-          sessionId: getSessionId(),
-          target: 'recommended-action',
-          text,
-          instruction: '把选定意图写成当前主角在本场景中的完整行动。使用符合角色卡的语气，可加入动作、观察和明确台词；不要新增结果，不要替 NPC 回答。'
-        }
-      });
-      expandedAction = String(payload.text || '').trim() || expandedAction;
-    } catch (error) {
-      setStatus(
-        els.sessionStatus,
-        `角色化改写不可用，已使用简洁行动：${humanizeApiError(error)}`,
-        'busy'
-      );
+    let expandedAction = preserveText ? text : buildRecommendedActionFallback(text);
+    if (!preserveText) {
+      try {
+        const payload = await apiRequest('/api/rewrite', {
+          method: 'POST',
+          body: {
+            sessionId: getSessionId(),
+            target: 'recommended-action',
+            text,
+            instruction: '把选定意图写成当前主角在本场景中的完整行动。使用符合角色卡的语气，可加入动作、观察和明确台词；不要新增结果，不要替 NPC 回答。'
+          }
+        });
+        expandedAction = String(payload.text || '').trim() || expandedAction;
+      } catch (error) {
+        setStatus(
+          els.sessionStatus,
+          `角色化改写不可用，已使用简洁行动：${humanizeApiError(error)}`,
+          'busy'
+        );
+      }
     }
 
     setComposerInputValue(expandedAction);

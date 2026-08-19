@@ -48,11 +48,11 @@ test('custom story drafts normalize bounded fields and resource selections', () 
   assert.equal(draft.customBaseline.premise.length, 5000);
 });
 
-test('custom story creation stays blocked until the inspected script hashes are approved', () => {
+test('third-party scripts run isolated in the sandbox and no longer gate creation', () => {
   const state = {
     customStoryDraft: createCustomStoryDraft({
       basePackId: 'xuanhuan',
-      title: '审核测试卷'
+      title: '沙箱测试卷'
     }),
     customStoryComposition: {
       key: 'ready',
@@ -88,30 +88,35 @@ test('custom story creation stays blocked until the inspected script hashes are 
 
   const pending = controller.getCustomStoryReadiness();
   assert.equal(pending.canInspect, true);
-  assert.equal(pending.canCreate, false);
-  assert.equal(pending.pendingScriptRules.length, 1);
-  assert.match(pending.guidance, /逐项批准/);
-
-  state.customStoryDraft.compatibilityReview = {
-    fingerprint: 'sha256:stale-review',
-    approvedScriptHashes: ['sha256:script-one'],
-    acknowledgeCompatibility: false
-  };
-  assert.equal(controller.getCustomStoryReadiness().canCreate, false);
-
-  state.customStoryDraft.compatibilityReview = {
-    fingerprint: 'sha256:review-one',
-    approvedScriptHashes: ['sha256:script-one'],
-    acknowledgeCompatibility: false
-  };
-  const approved = controller.getCustomStoryReadiness();
-  assert.equal(approved.canCreate, true);
-  assert.equal(approved.pendingScriptRules.length, 0);
+  // 第三方脚本在隔离沙箱中执行，无需人工审批，因此不阻塞创建
+  assert.equal(pending.canCreate, true);
+  assert.equal(pending.pendingScriptRules.length, 0);
   assert.deepEqual(controller.buildCustomPackRequest().compatibilityReview, {
     fingerprint: 'sha256:review-one',
     approvedScriptHashes: ['sha256:script-one'],
     acknowledgeCompatibility: false
   });
+
+  // 兼容确认仍是独立的创建门槛
+  state.customStoryComposition.report.communityCompatibility.counts = { missing: 1, review: 0, degraded: 0 };
+  state.customStoryComposition.report.compatibilityReview = {
+    fingerprint: 'sha256:blocked-review',
+    counts: { missing: 1, review: 0, degraded: 0 },
+    rules: [],
+    sourceRuntimeBlocked: true,
+    safeDerivativeAvailable: true,
+    blockers: [{ id: 'tavern-helper', label: '酒馆助手运行时' }],
+    requiresScriptApproval: false,
+    requiresCompatibilityAcknowledgement: true
+  };
+  assert.equal(controller.getCustomStoryReadiness().canCreate, false);
+
+  state.customStoryDraft.compatibilityReview = {
+    fingerprint: 'sha256:blocked-review',
+    approvedScriptHashes: [],
+    acknowledgeCompatibility: true
+  };
+  assert.equal(controller.getCustomStoryReadiness().canCreate, true);
 });
 
 test('custom story creation requires explicit approval for a safe derivative of a blocked source runtime', () => {
@@ -641,4 +646,31 @@ test('custom baseline draft keeps the selected visual pack and safe defaults', (
     visualPackId: 'neutral'
   });
   assert.equal(createCustomBaselineDraft({ visualPackId: 'lingyi' }).visualPackId, 'lingyi');
+});
+
+test('quickLaunchCharacterStory creates and opens an independent story from a character card directly', async () => {
+  let createdPack = null;
+  const state = {
+    resourceLibrary: [
+      { id: 'char-1', kind: 'character', title: '苏凌雪', payload: { name: '苏凌雪', genre: '仙侠' } },
+      { id: 'wb-1', kind: 'worldbook', title: '灵虚宗秘典', payload: { name: '灵虚宗秘典' }, source: { kind: 'character-card', id: 'char-1' } }
+    ]
+  };
+  const controller = createCustomStoryBuilderController({
+    state,
+    els: {},
+    apiRequest: async (url, options) => {
+      if (url === '/api/resource-library/packs') {
+        createdPack = options.body;
+        return { pack: { id: 'pack-quick-1', ...options.body } };
+      }
+      return {};
+    },
+    createAndOpenStoryProject: async (pack) => ({ project: { title: pack.title }, session: { id: 'session-quick-1' } })
+  });
+
+  const result = await controller.quickLaunchCharacterStory('char-1');
+  assert.equal(result.project.title, '苏凌雪的故事');
+  assert.equal(createdPack.characterResourceId, 'char-1');
+  assert.equal(createdPack.creationMode, STORY_IMPORT_MODES.INDEPENDENT);
 });

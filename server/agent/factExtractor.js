@@ -1,6 +1,7 @@
 import { createDefaultMemory } from './memoryUpdater.js';
 import { normalizeFactCards, worldBookIdentity } from './factCards.js';
 import { buildNarrativeMaintenanceAnchor, normalizeNarrativeMode } from './narrativeControl.js';
+import { syncCharacterRegistry } from './characterRegistry.js';
 
 export function buildFactExtractionPrompt({ worldState, messages, narrativeContext, canonicalContext = '' }) {
   const transcript = messages.map((message) => `${message.role}: ${message.content}`).join('\n');
@@ -13,7 +14,8 @@ export function buildFactExtractionPrompt({ worldState, messages, narrativeConte
         '事实优先级固定为：角色卡与已启用世界书 > 用户明确确认的事实与行动 > 不冲突的既有会话事实 > 模型生成的摘要、World State 和预设补充。低优先级内容与高优先级来源冲突时必须舍弃，不能把两个互斥版本同时保留。',
         '只提取对后续创作稳定有用的新事实：人物状态、地点、关系、任务、阵营、物品、伤势、承诺、旗标、资源权属、制度职位和未清债务。',
         '不要补充对话中没有确认的设定。',
-        'characters 只登记已经实际登场、与主角互动或被可靠确认的人物；仅在世界书名单中出现、尚未见面的角色不得标记 encountered=true。每名本幕登场角色都应使用角色卡或世界书中的规范名称写入 characters，并同步维护 relationships。',
+        'characters 只登记已经实际登场、与主角互动或被可靠确认的人物；仅在世界书名单中出现、尚未见面的角色不得标记 encountered=true。每名本幕登场角色都应使用角色卡或世界书中的规范名称写入 characters，并同步维护 relationships。relationships 每项固定使用 {"from":"人物A","to":"人物B","type":"关系类型","details":"当前可观察状态","encountered":true}；同一对人物与同一关系类型只更新当前项，不要重复追加历史版本。',
+        '已确认但尚未到期的预约、会合或承诺，写入 obligations，并尽量保留明确的日期/星期和参与人物；它们是背景时间线，不得自动写成 quests 的唯一主线，也不得仅因“尚未回复”就写入 flags.pendingDecisions。只有玩家本轮明确要处理、约定已到期，或出现独立且可观察的即时后果时，才可成为当前任务或待决事项。',
         '隐藏身份、秘密、幕后动机和未公开物品不得写入 worldState、memoryCards 或动态 worldBook，也不得写成主角已知状态；除非正文中已经发生了可观察的揭露。原始角色卡和世界书会继续承担导演侧约束。',
         'memoryCards 用于给创作者审阅；worldBook 用于可被关键词触发的动态世界书条目。',
         '如果新事实需要长期按关键词注入，请同时写入 worldBook。worldBook 条目至少包含 title、keywords、content、depth；depth 表示插入深度，通常为 6。',
@@ -33,10 +35,14 @@ export function buildFactExtractionPrompt({ worldState, messages, narrativeConte
   ];
 }
 
-export function applyFactExtractionResult(memory, content, { narrativeContext } = {}) {
+export function applyFactExtractionResult(memory, content, {
+  narrativeContext,
+  allowWorldStatePatch = true,
+  registryContext = {}
+} = {}) {
   const next = structuredClone(memory || createDefaultMemory());
   const payload = parseFactExtractionResult(content);
-  if (payload.worldState && typeof payload.worldState === 'object') {
+  if (allowWorldStatePatch && payload.worldState && typeof payload.worldState === 'object') {
     const patch = sanitizeWorldStatePatch(payload.worldState, next.worldState, narrativeContext);
     next.worldState = mergeWorldState(next.worldState || createDefaultMemory().worldState, patch);
   }
@@ -58,7 +64,7 @@ export function applyFactExtractionResult(memory, content, { narrativeContext } 
       });
   }
   next.lastFactExtractionError = '';
-  return next;
+  return syncCharacterRegistry(next, registryContext);
 }
 
 export function parseFactExtractionResult(content) {
@@ -203,9 +209,9 @@ function canAutoPromoteWorldBookEntry(entry, narrativeContext) {
 function mergeArrays(current, patch, field = '') {
   const existing = Array.isArray(current) ? current : [];
   const incoming = Array.isArray(patch) ? patch : [];
-  const merged = [...existing];
-  const indexes = new Map(merged.map((item, index) => [worldStateArrayKey(field, item), index]));
-  incoming.forEach((item) => {
+  const merged = [];
+  const indexes = new Map();
+  [...existing, ...incoming].forEach((item) => {
     const key = worldStateArrayKey(field, item);
     if (!indexes.has(key)) {
       indexes.set(key, merged.length);
@@ -224,7 +230,13 @@ function mergeArrays(current, patch, field = '') {
 function worldStateArrayKey(field, value) {
   if (!isPlainObject(value)) return stableKey(value);
   if (field === 'characters') return `character:${stringValue(value.name || value.character) || stableKey(value)}`;
-  if (field === 'relationships') return `relationship:${stringValue(value.name || value.character || value.target) || stableKey(value)}`;
+  if (field === 'relationships') {
+    const from = stringValue(value.from || value.source);
+    const to = stringValue(value.to || value.target || value.character);
+    const type = stringValue(value.type || value.relation || value.relationship);
+    if (from && to) return `relationship:${from}|${to}|${type || 'default'}`;
+    return `relationship:${stringValue(value.name || value.character || value.target) || stableKey(value)}`;
+  }
   if (field === 'quests') return `quest:${stringValue(value.id || value.title || value.name) || stableKey(value)}`;
   if (field === 'factions') return `faction:${stringValue(value.id || value.name) || stableKey(value)}`;
   if (field === 'resourceLedger') return `resource:${stringValue(value.id || value.item) || stableKey(value)}`;

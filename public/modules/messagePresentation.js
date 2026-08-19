@@ -1,4 +1,13 @@
 import { extractRoleplayPresentation } from './roleplayResponse.js';
+import {
+  buildSpeakerPortraitMap,
+  resolveSpeakerCharacter
+} from './characterPresentation.js';
+import { renderAgentActionCards } from './agentActionCards.js';
+import { filterLegacyRuntimeFallbackActions } from './recommendedActionFilters.js';
+import { chooseRecommendedActionPresentation } from './recommendedActionPresentation.js';
+import { createRecommendedActionsViewNode } from './recommendedActionsView.js';
+import { normalizeRoleplayPanelsForPresentation } from './roleplayPanelsPresentation.js';
 
 const WEB_SEARCH_TOOL_NAMES = new Set(['websearch', 'visitlinks', 'web search', 'visit links']);
 
@@ -37,6 +46,8 @@ export function createMessagePresentationController({
   getLightFrontendContext = () => ({}),
   renderMessageContent = () => {},
   extractPresentation = extractRoleplayPresentation,
+  canSpeakMessages = () => false,
+  isMessageSpeaking = () => false,
   documentObject = globalThis.document
 } = {}) {
   function createMessageNode(message = {}) {
@@ -44,6 +55,7 @@ export function createMessagePresentationController({
     const role = message.role === 'user' ? 'user' : 'assistant';
     article.className = `message ${role}`;
     if (message.excluded) article.classList.add('excluded');
+    if (message.aborted === true && role === 'assistant') article.classList.add('is-aborted');
     const toolActivity = getWebSearchToolActivity(message);
     if (toolActivity) article.classList.add('message-auxiliary');
 
@@ -51,37 +63,53 @@ export function createMessagePresentationController({
       ? extractPresentation(message.content)
       : null;
     const displaySpeaker = toolActivity ? '检索工具' : (message.speaker || presentation?.speaker);
-    const meta = createMessageMeta(message, role, displaySpeaker);
+    if (displaySpeaker && role === 'assistant') {
+      article.classList.add('has-speaker');
+    }
+    const emotion = presentation?.emotion || message.emotion || '';
+    const meta = createMessageMeta(message, role, displaySpeaker, emotion);
     const content = documentObject.createElement('div');
     content.className = 'message-content';
+    const rawVisibleContent = toolActivity ? '' : (presentation ? presentation.content : (message.content || ''));
+
     renderMessageContent({
       container: content,
-      visibleContent: toolActivity ? '' : (presentation ? presentation.content : (message.content || '')),
+      visibleContent: renderAgentActionCards(rawVisibleContent),
       role,
-      context: { role, ...getLightFrontendContext() },
+      context: {
+        role,
+        ...getLightFrontendContext(),
+        speaker: displaySpeaker || '',
+        portraitBySpeaker: buildSpeakerPortraitMap(state.config)
+      },
       messageId: message.id
     });
 
     article.append(meta, content);
+    const mergedRoleplayPanels = normalizeRoleplayPanelsForPresentation({
+      ...(presentation?.panels || {}),
+      ...(message.roleplayPanels || {}),
+      ...(toolActivity ? { toolActivity } : {})
+    }, { message, presentation });
     const communityPanels = role === 'assistant'
-      ? createCommunityPanelsNode({
-        ...(presentation?.panels || {}),
-        ...(message.roleplayPanels || {}),
-        ...(toolActivity ? { toolActivity } : {})
-      })
+      ? createCommunityPanelsNode(mergedRoleplayPanels)
       : null;
     if (communityPanels) article.append(communityPanels);
-    article.append(createMessageTools(message, role));
-    const recommendedActions = Array.isArray(message.recommendedActions) && message.recommendedActions.length
-      ? message.recommendedActions
-      : presentation?.recommendedActions;
-    const actions = createRecommendedActionsNode(recommendedActions);
+    const presentationActions = presentation?.recommendedActions;
+    const recommendation = chooseRecommendedActionPresentation(message, { ...presentation, recommendedActions: presentationActions });
+    const actions = createRecommendedActionsNode(
+      filterLegacyRuntimeFallbackActions(recommendation.actions),
+      recommendation.presentation,
+      message,
+      mergedRoleplayPanels
+    );
     if (actions) article.append(actions);
+    article.append(createMessageTools(message, role));
 
     return article;
   }
 
-  function createMessageMeta(message, role, displaySpeaker) {
+  function createMessageMeta(message, role, displaySpeaker, emotion = '') {
     const meta = documentObject.createElement('div');
     meta.className = 'message-meta';
 
@@ -98,12 +126,11 @@ export function createMessagePresentationController({
     time.textContent = formatTime(message.createdAt);
     if (message.createdAt) time.dateTime = message.createdAt;
 
-    const mainCharacter = state.config?.characterCard || {};
-    const canUseMainPortrait = role === 'assistant'
-      && Boolean(displaySpeaker)
-      && displaySpeaker === mainCharacter.name;
-    const avatar = canUseMainPortrait
-      ? createCharacterPortraitImage(mainCharacter, 'message-avatar', mainCharacter.name)
+    const speakerCharacter = role === 'assistant'
+      ? resolveSpeakerCharacter(state.config, displaySpeaker)
+      : null;
+    const avatar = speakerCharacter
+      ? createCharacterPortraitImage(speakerCharacter, 'message-avatar', speakerCharacter.name, { emotion })
       : null;
     if (avatar) {
       meta.classList.add('has-portrait');
@@ -114,6 +141,15 @@ export function createMessagePresentationController({
     meta.append(roleText);
     if (swipeSwitcher) meta.append(swipeSwitcher);
     meta.append(createUsageBadge(message.usage), time);
+
+    // 中止留存的 partial 回合：显示中止徽章，提示可通过「续写回复」继续
+    if (message.aborted === true && role === 'assistant') {
+      const abortedBadge = documentObject.createElement('span');
+      abortedBadge.className = 'aborted-badge';
+      abortedBadge.textContent = '已中止';
+      abortedBadge.title = '生成被手动停止，正文为未完成内容；可使用「续写回复」继续';
+      meta.append(abortedBadge);
+    }
 
     if (message.bookmarked && message.bookmarkLabel) {
       const bookmark = documentObject.createElement('span');
@@ -185,8 +221,17 @@ export function createMessagePresentationController({
     }
     wrap.append(
       createToolButton('toggleVisibility', message.id, message.excluded ? '包含' : '排除'),
-      createToolButton('toggleBookmark', message.id, message.bookmarked ? '取消书签' : '加书签')
+      createToolButton('toggleBookmark', message.id, message.bookmarked ? '取消书签' : '加书签'),
+      createToolButton('forkTimeline', message.id, '分支')
     );
+    // 朗读按钮：仅语音可用时展示，朗读中显示停止态
+    if (canSpeakMessages()) {
+      const speaking = isMessageSpeaking(message.id);
+      const speakButton = createToolButton('speakMessage', message.id, speaking ? '停止朗读' : '朗读');
+      speakButton.classList.add('speak-button');
+      if (speaking) speakButton.classList.add('is-speaking');
+      wrap.append(speakButton);
+    }
     return wrap;
   }
 
@@ -199,47 +244,22 @@ export function createMessagePresentationController({
     return button;
   }
 
-  function createRecommendedActionsNode(actions) {
-    const normalizedActions = Array.isArray(actions)
-      ? actions.map((action) => String(action || '').trim()).filter(Boolean)
-      : [];
-    if (!normalizedActions.length) return null;
-
-    const wrap = documentObject.createElement('div');
-    wrap.className = 'recommended-actions narrative-choice-panel';
-    const header = documentObject.createElement('header');
-    header.className = 'recommended-actions-header';
-    const heading = documentObject.createElement('strong');
-    heading.className = 'recommended-actions-label';
-    heading.textContent = '下一步怎么走';
-    const hint = documentObject.createElement('span');
-    hint.textContent = '点击后会结合当前角色与场景组织行动并发送';
-    header.append(heading, hint);
-
-    const list = documentObject.createElement('div');
-    list.className = 'recommended-actions-list';
-    normalizedActions.forEach((text, index) => {
-      const button = documentObject.createElement('button');
-      button.type = 'button';
-      button.className = 'recommendation-button';
-      button.dataset.recommendedAction = text;
-      const number = documentObject.createElement('span');
-      number.className = 'recommendation-number';
-      number.textContent = String(index + 1).padStart(2, '0');
-      const copy = documentObject.createElement('span');
-      copy.className = 'recommendation-copy';
-      copy.textContent = text;
-      button.append(number, copy);
-      list.append(button);
+  function createRecommendedActionsNode(actions, actionPresentation = null, message = {}, roleplayPanels = {}) {
+    return createRecommendedActionsViewNode({
+      actions,
+      actionPresentation,
+      message,
+      roleplayPanels,
+      characterCard: state.config?.characterCard,
+      session: state.session,
+      documentObject
     });
-
-    wrap.append(header, list);
-    return wrap;
   }
 
   function createCommunityPanelsNode(panels = {}) {
     const definitions = [
       { key: 'sceneStatus', label: '场景信息', icon: '◷' },
+      { key: 'runtimeNotice', label: '运行提示', icon: '△' },
       { key: 'communityComment', label: '咪咪点评', icon: '🐱' },
       { key: 'toolActivity', label: '检索记录', icon: '⌕' },
       {

@@ -59,10 +59,18 @@ import {
   getScriptGovernanceSnapshot
 } from '../security/scriptGovernance.js';
 import { TAVERN_COMPATIBILITY_CONTRACT_VERSION } from '../compat/compatibilityPolicy.js';
+import { buildInteractionConflictReport } from '../agent/interactionContract.js';
 
 const RESOURCE_KINDS = new Set(['character', 'worldbook', 'prompt', PROMPT_BUNDLE_KIND]);
 
-function createPackCompatibilityReview({ base = {}, selected = [], communityCompatibility = {}, lightFrontend = {} } = {}) {
+function createPackCompatibilityReview({
+  base = {},
+  selected = [],
+  communityCompatibility = {},
+  lightFrontend = {},
+  promptModules = [],
+  roleplayMode = 'dm'
+} = {}) {
   const governance = getScriptGovernanceSnapshot({ config: { lightFrontend } });
   const counts = {
     missing: Number(communityCompatibility?.counts?.missing || 0),
@@ -99,6 +107,7 @@ function createPackCompatibilityReview({ base = {}, selected = [], communityComp
       recommendation: String(item?.recommendation || ''),
       evidence: Array.isArray(item?.evidence) ? item.evidence.map(String).slice(0, 6) : []
     }));
+  const interaction = buildInteractionConflictReport({ roleplayMode, promptModules });
   const canonical = {
     contractVersion: TAVERN_COMPATIBILITY_CONTRACT_VERSION,
     base: {
@@ -115,7 +124,16 @@ function createPackCompatibilityReview({ base = {}, selected = [], communityComp
       contentHash: rule.contentHash
     })).sort((left, right) => left.scriptId.localeCompare(right.scriptId)),
     blockers: blockers.map((item) => item.id).sort(),
-    differences: differences.map((item) => item.id).sort()
+    differences: differences.map((item) => item.id).sort(),
+    interaction: {
+      roleplayMode: interaction.roleplayMode,
+      signals: [
+        interaction.semantics.requestsPlayerWriting ? 'player-writing' : '',
+        interaction.semantics.protectsPlayerAgency ? 'player-agency' : '',
+        interaction.semantics.requestsMoreDialogue ? 'dialogue-density' : ''
+      ].filter(Boolean),
+      conflicts: interaction.conflicts.map((item) => item.type).sort()
+    }
   };
   return {
     contractVersion: TAVERN_COMPATIBILITY_CONTRACT_VERSION,
@@ -126,6 +144,7 @@ function createPackCompatibilityReview({ base = {}, selected = [], communityComp
     safeDerivativeAvailable: counts.missing > 0,
     blockers,
     differences,
+    interaction,
     requiresScriptApproval: rules.length > 0,
     requiresCompatibilityAcknowledgement: counts.missing > 0
       || counts.degraded > 0
@@ -147,7 +166,9 @@ function inspectImportedContentPackCompatibility(bundle = {}) {
       base: { manifest: isRecord(bundle.manifest) ? bundle.manifest : {} },
       selected: [],
       communityCompatibility,
-      lightFrontend
+      lightFrontend,
+      promptModules: content.promptModules || [],
+      roleplayMode: 'dm'
     })
   };
 }
@@ -164,6 +185,7 @@ function applyPackCompatibilityReview(lightFrontend, input, review, now) {
       sourceRuntimeBlocked: false,
       disabledCapabilities: [],
       compatibilityDifferences: [],
+      interaction: structuredClone(review.interaction),
       reviewedAt: ''
     };
   }
@@ -210,6 +232,7 @@ function applyPackCompatibilityReview(lightFrontend, input, review, now) {
       ? structuredClone(review.blockers || [])
       : [],
     compatibilityDifferences: structuredClone(review.differences || []),
+    interaction: structuredClone(review.interaction),
     reviewedAt
   };
 }
@@ -1279,7 +1302,9 @@ export class ResourceLibraryService {
       base,
       selected,
       communityCompatibility,
-      lightFrontend
+      lightFrontend,
+      promptModules,
+      roleplayMode: input.roleplayMode || 'dm'
     });
     const compatibilityReviewRecord = applyPackCompatibilityReview(
       lightFrontend,
@@ -1372,7 +1397,17 @@ export class ResourceLibraryService {
   }
 
   async inspectPackComposition(input = {}, { basePack = null, resourceOverrides = new Map() } = {}) {
-    const { character, worldBooks, prompts } = await this.resolvePackResources(input, { resourceOverrides });
+    const overrides = resourceOverrides instanceof Map ? resourceOverrides : new Map();
+    const resolved = await this.resolvePackResources(input, { resourceOverrides: overrides });
+    const selected = [];
+    for (const resource of resolved.selected) {
+      selected.push(overrides.has(resource.id)
+        ? structuredClone(resource)
+        : await this.ensureCurrentRevision(resource));
+    }
+    const character = selected.find((item) => item.id === input.characterResourceId && item.kind === 'character');
+    const worldBooks = selected.filter((item) => item.kind === 'worldbook');
+    const prompts = selected.filter((item) => item.kind === 'prompt' || item.kind === PROMPT_BUNDLE_KIND);
     const includeBaseContent = input.includeBaseContent !== false;
     const baseInheritanceMode = basePack
       ? this.storyComposition.normalizeBaseInheritanceMode(input.baseInheritanceMode, includeBaseContent)
@@ -1403,7 +1438,6 @@ export class ResourceLibraryService {
         .filter(Boolean)
         .map((item) => item.diagnostics?.communityCompatibility)
     );
-    const selected = [character, ...worldBooks, ...prompts].filter(Boolean);
     const lightFrontend = mergeLightFrontendRuntimes([
       baseInheritanceMode === 'full' ? base.lightFrontend || {} : {},
       ...selected.flatMap((item) => {
@@ -1416,7 +1450,9 @@ export class ResourceLibraryService {
       base,
       selected,
       communityCompatibility,
-      lightFrontend
+      lightFrontend,
+      promptModules: promptComposition.modules,
+      roleplayMode: input.roleplayMode || 'dm'
     });
     const playableWorldBook = compilePlayableWorldBook(composition.entries);
     const playableCharacter = character?.payload
@@ -2242,17 +2278,7 @@ function scoreOpeningEntry(entry, title, content) {
 }
 
 function customOpeningSidebarTabs(genre, protagonist = {}) {
-  if (protagonist.mode === 'scenario-role') {
-    return ['主角信息', '互动角色', '世界规则', '关系与势力', '故事线索'];
-  }
-  const tabsByGenre = {
-    xianxia: ['主角信息', '互动角色', '世界规则', '关系与势力', '故事线索'],
-    lingyi: ['调查者档案', '互动角色', '禁忌规则', '线索证物', '事件进度'],
-    mingmo: ['主角文书', '互动角色', '银粮账目', '关系与势力', '故事线索'],
-    yingxiongzhi: ['人物档案', '互动角色', '剧情节点', '旧账关系', '江湖传闻'],
-    xuanhuan: ['主角信息', '互动角色', '世界规则', '关系与势力', '故事线索']
-  };
-  return tabsByGenre[genre] || tabsByGenre.xuanhuan;
+  return ['当前态势', '决策线索', '角色档案', '人物网络', '成长轨迹', '叙事记忆', '世界规则'];
 }
 
 function createCharacterStageBackground(characterCard, resourceTitle = '') {

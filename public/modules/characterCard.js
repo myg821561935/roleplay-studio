@@ -5,6 +5,12 @@ import {
   renderResourceOptionGroup,
   RESOURCE_PRESET_KEYS
 } from './resourcePresetCatalog.js';
+import {
+  getCardAssetLabel,
+  getCardAssetPreviewUrl,
+  isCardAssetPreviewable,
+  normalizeCardAssets
+} from './cardAssets.js';
 
 const PRESET_KEY_PACK_MAPPINGS = [
   ['yingxiongzhi', 'yingxiongzhi'],
@@ -101,6 +107,7 @@ export function createCharacterCardController({
   getContentPackGenreTitle = (packId) => packId,
   createCharacterCardTemplate = () => ({}),
   createCharacterPortraitImage = () => null,
+  // createCharacterPortraitImage(pack.characterPortrait, 'story-card-portrait')
   promptAction = (...args) => globalThis.prompt?.(...args),
   confirmAction = (...args) => globalThis.confirm?.(...args),
   documentRef = globalThis.document
@@ -200,15 +207,125 @@ export function createCharacterCardController({
   function createCharacterOverviewSection(title, value, options = {}) {
     const text = formatCharacterOverviewValue(value);
     if (!text || !documentRef) return null;
-    const section = documentRef.createElement('details');
-    section.className = 'character-overview-section';
-    section.open = Boolean(options.open);
-    const summary = documentRef.createElement('summary');
+    const section = documentRef.createElement('div');
+    section.className = 'immersive-character-section';
+    const summary = documentRef.createElement('h5');
     summary.textContent = title;
     const content = documentRef.createElement('p');
     content.textContent = text;
     section.append(summary, content);
     return section;
+  }
+
+  // V3 creator_notes_multilingual：按语言代码分组展示。
+  // 常见语言代码映射为中文标签，未覆盖的保留原代码。
+  const LANGUAGE_LABELS = {
+    en: 'English',
+    zh: '中文',
+    'zh-CN': '中文（简体）',
+    'zh-TW': '中文（繁體）',
+    ja: '日本語',
+    ko: '한국어',
+    es: 'Español',
+    fr: 'Français',
+    de: 'Deutsch',
+    ru: 'Русский'
+  };
+
+  function createMultilingualCreatorNotesSection(multilingualNotes) {
+    if (!multilingualNotes || !documentRef) return null;
+    const entries = Object.entries(multilingualNotes)
+      .map(([lang, text]) => [lang, String(text || '').trim()])
+      .filter(([, text]) => text);
+    if (!entries.length) return null;
+    const section = documentRef.createElement('div');
+    section.className = 'immersive-character-section character-multilingual-notes';
+    const summary = documentRef.createElement('h5');
+    summary.textContent = '多语言注释';
+    section.append(summary);
+    entries.forEach(([lang, text]) => {
+      const block = documentRef.createElement('div');
+      block.className = 'character-multilingual-note';
+      const label = documentRef.createElement('span');
+      label.className = 'character-multilingual-note-lang';
+      label.textContent = LANGUAGE_LABELS[lang] || lang;
+      const content = documentRef.createElement('p');
+      content.textContent = text;
+      block.append(label, content);
+      section.append(block);
+    });
+    return section;
+  }
+
+  // V3 assets：图片类素材生成预览缩略图（外链经 /api/proxy-image 安全代理），
+  // 非图片类仅列出名称与类型；拒绝 data:/javascript: 等非代理 URI。
+  function createCardAssetsSection(assets) {
+    const normalized = normalizeCardAssets(assets);
+    if (!normalized.length || !documentRef) return null;
+    const section = documentRef.createElement('div');
+    section.className = 'immersive-character-section character-assets';
+    const summary = documentRef.createElement('h5');
+    summary.textContent = `卡内素材（${normalized.length}）`;
+    section.append(summary);
+    const grid = documentRef.createElement('div');
+    grid.className = 'character-assets-grid';
+    normalized.slice(0, 24).forEach((asset) => {
+      const item = documentRef.createElement('figure');
+      item.className = 'character-asset-item';
+      const previewUrl = getCardAssetPreviewUrl(asset);
+      if (previewUrl && isCardAssetPreviewable(asset)) {
+        const image = documentRef.createElement('img');
+        image.className = 'character-asset-thumb';
+        image.src = previewUrl;
+        image.alt = asset.name;
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        // 代理失败（外链失效/被 SSRF 策略拦截）时降级为占位块，不产生裂图
+        image.addEventListener('error', () => {
+          image.remove();
+          renderAssetFallback(item, asset);
+        });
+        item.append(image);
+      } else {
+        renderAssetFallback(item, asset);
+      }
+      const caption = documentRef.createElement('figcaption');
+      caption.className = 'character-asset-caption';
+      const typeLabel = documentRef.createElement('span');
+      typeLabel.textContent = getCardAssetLabel(asset.type);
+      const nameText = documentRef.createElement('span');
+      nameText.textContent = asset.name;
+      caption.append(typeLabel, nameText);
+      item.append(caption);
+      grid.append(item);
+    });
+    section.append(grid);
+    return section;
+  }
+
+  function renderAssetFallback(item, asset) {
+    if (item.querySelector('.character-asset-fallback')) return;
+    const placeholder = documentRef.createElement('div');
+    placeholder.className = 'character-asset-fallback';
+    placeholder.textContent = getCardAssetLabel(asset.type);
+    item.prepend(placeholder);
+  }
+
+  // 卡片规范版本标签（chara_card_v2 / chara_card_v3 等）
+  const SPEC_LABELS = {
+    chara_card_v2: 'V2 卡',
+    chara_card_v3: 'V3 卡',
+    'yaml-character-card': 'YAML 卡'
+  };
+
+  function createSpecBadge(sourceSpec) {
+    const spec = String(sourceSpec || '').trim();
+    const label = SPEC_LABELS[spec.toLowerCase()] || (spec ? spec : '');
+    if (!label || !documentRef) return null;
+    const badge = documentRef.createElement('span');
+    badge.className = 'character-spec-badge';
+    badge.textContent = label;
+    return badge;
   }
 
   function renderCharacterOverview(characterCard = getCharacterCard() || {}) {
@@ -220,6 +337,11 @@ export function createCharacterCardController({
     const exampleDialog = card.exampleDialog || card.mes_example || [];
     const firstMessage = card.firstMessage || card.first_mes || '';
     const creatorNotes = card.creatorNotes || card.creator_notes || '';
+    // V3 规范：creator_notes_multilingual 是 { lang: notes } 映射。
+    // 当存在多语言注释时，以语言标签分组展示；否则回退到单一 creatorNotes。
+    const multilingualNotes = isPlainObject(card.creatorNotesMultilingual)
+      ? card.creatorNotesMultilingual
+      : (isPlainObject(card.creator_notes_multilingual) ? card.creator_notes_multilingual : null);
     const systemPrompt = card.systemPrompt || card.system_prompt || '';
     const postHistory = card.postHistoryInstructions || card.post_history_instructions || '';
     ui.overview.replaceChildren();
@@ -232,6 +354,8 @@ export function createCharacterCardController({
     const name = documentRef.createElement('strong');
     name.textContent = card.name || '未命名角色';
     headingText.append(eyebrow, name);
+    const specBadge = createSpecBadge(card.sourceSpec || card.spec);
+    if (specBadge) headingText.append(specBadge);
     const profile = documentRef.createElement('div');
     profile.className = 'character-overview-profile';
     const portrait = createCharacterPortraitImage(card, 'character-overview-portrait', card.name);
@@ -282,14 +406,23 @@ export function createCharacterCardController({
       ui.overview.append(tagList);
     }
 
+    const sectionsWrapper = documentRef.createElement('div');
+    sectionsWrapper.className = 'immersive-character-body';
+
     [
       createCharacterOverviewSection('人物设定', card.description, { open: true }),
       createCharacterOverviewSection('性格与行为', card.personality),
       createCharacterOverviewSection('当前处境', card.scenario),
       createCharacterOverviewSection('开场白', firstMessage),
       createCharacterOverviewSection('叙事约束', [systemPrompt, postHistory]),
-      createCharacterOverviewSection('创作者说明', creatorNotes)
-    ].filter(Boolean).forEach((section) => ui.overview.append(section));
+      createCharacterOverviewSection('创作者说明', creatorNotes),
+      // V3 多语言注释：当卡片声明了 creator_notes_multilingual 时，按语言分组展示。
+      createMultilingualCreatorNotesSection(multilingualNotes),
+      // V3 assets：卡内素材列表（图片经安全代理预览，非图片仅列出）
+      createCardAssetsSection(card.assets)
+    ].filter(Boolean).forEach((section) => sectionsWrapper.append(section));
+
+    ui.overview.append(sectionsWrapper);
   }
 
   async function saveCharacterCard() {

@@ -88,7 +88,11 @@ export async function handleStoryProjectRoutes({
     try {
       result = await contentLifecycleService.deleteProject(
         decodeURIComponent(storyProjectRoute[1]),
-        { confirmDetach: body.confirmDetach === true }
+        {
+          confirmDetach: body.confirmDetach === true,
+          confirmDelete: body.confirmDelete === true,
+          deleteSessions: body.deleteSessions === true
+        }
       );
     } catch (error) {
       if (error.code === 'CONTENT_DELETE_CONFIRMATION_REQUIRED') {

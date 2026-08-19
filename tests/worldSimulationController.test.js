@@ -72,7 +72,8 @@ function createHarness({
     },
     documentObject: {
       activeElement: null,
-      querySelectorAll: () => advanceButtons
+      querySelectorAll: () => advanceButtons,
+      getElementById: (id) => (id === 'simulation-minimap' ? createElement() : null)
     },
     queueMicrotaskFn: (callback) => scheduled.push(callback)
   });

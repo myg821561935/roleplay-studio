@@ -9,11 +9,13 @@ export function summarizeSessionUsage(session = {}) {
 
 export function summarizeAllUsage(sessions = []) {
   const rows = sessions.flatMap((session) => usageRowsFromSession(session));
-  return buildUsageSummary({
+  const summary = buildUsageSummary({
     scope: 'all',
     sessionId: '',
     rows
   });
+  summary.bySession = aggregateBySession(sessions);
+  return summary;
 }
 
 function usageRowsFromSession(session = {}) {
@@ -156,6 +158,34 @@ function compareRecentUsage(a, b) {
   const bt = Date.parse(b.createdAt || '') || 0;
   if (bt !== at) return bt - at;
   return String(b.messageId).localeCompare(String(a.messageId));
+}
+
+function aggregateBySession(sessions = []) {
+  const groups = new Map();
+  for (const session of sessions) {
+    if (!isPlainObject(session)) continue;
+    const sessionId = String(session.id || 'main');
+    const title = String(session.title || '');
+    const rows = usageRowsFromSession(session);
+    const totals = rows.reduce((acc, row) => {
+      acc.calls += 1;
+      acc.promptTokens += row.promptTokens;
+      acc.completionTokens += row.completionTokens;
+      acc.totalTokens += row.totalTokens;
+      return acc;
+    }, { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+    if (!groups.has(sessionId)) {
+      groups.set(sessionId, { sessionId, title, ...totals });
+    } else {
+      const existing = groups.get(sessionId);
+      existing.calls += totals.calls;
+      existing.promptTokens += totals.promptTokens;
+      existing.completionTokens += totals.completionTokens;
+      existing.totalTokens += totals.totalTokens;
+      if (!existing.title && title) existing.title = title;
+    }
+  }
+  return Array.from(groups.values()).sort((a, b) => b.totalTokens - a.totalTokens || b.calls - a.calls);
 }
 
 function createEmptyTotals() {

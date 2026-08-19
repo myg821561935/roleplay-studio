@@ -52,6 +52,9 @@ class FakeElement {
     this.textContent = '';
     this.innerHTML = '';
     this.hidden = false;
+    this.disabled = false;
+    this.dataset = {};
+    this.attributes = new Map();
     this.focusCount = 0;
   }
 
@@ -92,6 +95,10 @@ class FakeElement {
 
   focus() {
     this.focusCount += 1;
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
   }
 }
 
@@ -148,6 +155,7 @@ function createHarness({
   const streamingChanges = [];
   const requests = [];
   const restoredInputs = [];
+  const replacedSessions = [];
   let renderCount = 0;
   let inspectorCount = 0;
   let targetRenderCount = 0;
@@ -162,15 +170,20 @@ function createHarness({
       return fetchImpl(...args);
     },
     getSessionId: () => state.session.id,
-    replaceSession: (session) => {
+    replaceSession: (session, options) => {
+      replacedSessions.push({ session, options });
       state.session = session;
       return session;
     },
     renderMessages: () => { renderCount += 1; },
     refreshInspector: () => { inspectorCount += 1; },
-    setStreamingState: (streaming, message) => {
+    setStreamingState: (streaming, message, phase) => {
       state.chatStreaming = Boolean(streaming);
-      streamingChanges.push({ streaming: Boolean(streaming), message });
+      streamingChanges.push({
+        streaming: Boolean(streaming),
+        message,
+        ...(phase ? { phase } : {})
+      });
     },
     clearComposerInput: () => { els.chatInput.value = ''; },
     setComposerInputValue: (value, options) => {
@@ -194,6 +207,7 @@ function createHarness({
     controller,
     els,
     requests,
+    replacedSessions,
     restoredInputs,
     state,
     statuses,
@@ -222,15 +236,19 @@ test('SSE helpers parse CRLF, chunk boundaries and a trailing completion event',
   assert.equal(originalOpeningStatus({ title: '第一幕' }), '正在依据设定生成第一幕...');
 
   const tokens = [];
+  const phases = [];
   const payload = await readSseResponse(createSseResponse([
     'event: token\r\ndata: {"content":"雨"}\r\n',
     '\r\nevent: token\ndata: {"content":"声"}\n\n',
+    'event: phase\ndata: {"phase":"finalizing"}\n\n',
     'event: done\ndata: {"session":{"id":"main"}}'
   ]), {
-    onToken: async (token) => tokens.push(token)
+    onToken: async (token) => tokens.push(token),
+    onPhase: async (phase) => phases.push(phase)
   });
 
   assert.deepEqual(tokens, ['雨', '声']);
+  assert.deepEqual(phases, ['finalizing']);
   assert.deepEqual(payload, { session: { id: 'main' } });
 });
 
@@ -291,6 +309,7 @@ test('send lifecycle streams a preview, applies the session and synchronizes com
     pendingQuickReply: { content: '推门', hiddenFromChat: true },
     fetchImpl: async () => createSseResponse([
       'event: token\ndata: {"content":"雨声"}\n\n',
+      'event: phase\ndata: {"phase":"finalizing"}\n\n',
       `event: done\ndata: ${JSON.stringify({ session: newSession })}\n\n`
     ])
   });
@@ -317,6 +336,7 @@ test('send lifecycle streams a preview, applies the session and synchronizes com
   assert.match(harness.els.messages.children[1].querySelector('.message-content').innerHTML, /雨声/);
   assert.deepEqual(harness.streamingChanges, [
     { streaming: true, message: '正在依据设定生成第一幕...' },
+    { streaming: true, message: '正文已生成，正在同步世界状态与记忆…', phase: 'finalizing' },
     { streaming: false, message: undefined }
   ]);
   assert.deepEqual(harness.counts(), {
@@ -326,6 +346,24 @@ test('send lifecycle streams a preview, applies the session and synchronizes com
     restoreCount: 2,
     targetRenderCount: 1
   });
+});
+
+test('stream preview replaces community choice prose with one disabled native action panel', () => {
+  const harness = createHarness({ fetchImpl: async () => { throw new Error('unused'); } });
+  const preview = harness.controller.appendStreamingPreview('我压住气息。');
+
+  harness.controller.updateStreamingPreview(preview, `夜深人静，神识正在靠近。\n\n> [天机选项：异状尚未收束]\n- 立刻躺回木板，假装熟睡。\n- 推开后窗，藏进灵田阴影。\n- 不躲不藏，径直开门。\n- 自定义`);
+
+  assert.doesNotMatch(preview.contentNode.innerHTML, /天机选项|立刻躺回/u);
+  const panel = preview.node.querySelector('.recommended-actions');
+  assert.ok(panel);
+  assert.equal(panel.dataset.actionSource, 'community-choice-block');
+  assert.deepEqual(
+    panel.querySelectorAll('.recommendation-button').map((button) => button.dataset.recommendedAction),
+    ['立刻躺回木板，假装熟睡。', '推开后窗，藏进灵田阴影。', '不躲不藏，径直开门。']
+  );
+  assert.equal(panel.querySelector('.recommendation-custom-input').disabled, true);
+  assert.equal(panel.querySelector('.recommendation-custom-submit').disabled, true);
 });
 
 test('preview setup failures restore the draft and input instead of leaving streaming stuck', async () => {
@@ -392,6 +430,141 @@ test('a second send is rejected while the first stream keeps the next draft inta
   await firstSend;
   assert.equal(harness.els.chatInput.value, '第二步草稿');
   assert.equal(harness.state.chatStreaming, false);
+});
+
+test('stopGeneration returns false when no stream is active', () => {
+  const harness = createHarness({ fetchImpl: async () => { throw new Error('unused'); } });
+  assert.equal(harness.controller.stopGeneration(), false);
+});
+
+test('stopGeneration aborts the in-flight request and the abort signal reaches fetch', async () => {
+  let observedSignal = null;
+  let abortListener = null;
+  const harness = createHarness({
+    fetchImpl: async (path, options = {}) => {
+      observedSignal = options.signal || null;
+      abortListener = new Promise((resolve) => {
+        observedSignal?.addEventListener('abort', () => resolve(observedSignal.reason || 'aborted'));
+      });
+      // 挂起直到 abort 触发
+      return abortListener.then(() => {
+        const abortError = new Error('The operation was aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      });
+    }
+  });
+  harness.els.chatInput.value = '夜探沈府。';
+
+  const sendPromise = harness.controller.sendMessage();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(observedSignal instanceof AbortSignal, 'fetch 应收到 abort signal');
+
+  assert.equal(harness.controller.stopGeneration(), true);
+  const payload = await sendPromise;
+
+  assert.equal(payload, null);
+  assert.equal(harness.state.chatStreaming, false);
+  assert.deepEqual(harness.statuses.at(-1), {
+    element: 'session',
+    message: '已停止生成',
+    tone: 'busy'
+  });
+  // 输入草稿在停止后不清空（与失败恢复语义一致）
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test('an aborted SSE error with partialMessageId refreshes the session and keeps the partial turn', async () => {
+  const partialSession = {
+    id: 'story/session',
+    messages: [
+      { role: 'user', content: '夜探沈府。' },
+      { role: 'assistant', content: '夜色沉沉，更夫的梆子声由远及近', aborted: true }
+    ],
+    memory: { rollingSummary: '新摘要' }
+  };
+  const fetchCalls = [];
+  const harness = createHarness({
+    fetchImpl: async (path, options = {}) => {
+      fetchCalls.push({ path, method: options.method || 'POST' });
+      if (String(path).startsWith('/api/sessions/')) {
+        return new Response(JSON.stringify({ session: partialSession }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      return createSseResponse([
+        'event: token\ndata: {"content":"夜色沉沉"}\n\n',
+        'event: error\ndata: {"error":"GENERATION_ABORTED","aborted":true,"partialMessageId":"assistant-123"}\n\n'
+      ]);
+    }
+  });
+  harness.els.chatInput.value = '夜探沈府。';
+
+  const payload = await harness.controller.sendMessage();
+
+  assert.equal(payload, null);
+  // SSE 失败后追加了会话刷新请求
+  const refreshCall = fetchCalls.find((call) => call.path.startsWith('/api/sessions/'));
+  assert.ok(refreshCall, '应请求刷新会话以取回 partial 回合');
+  assert.equal(refreshCall.method, 'GET');
+  // 会话被替换为含 aborted 消息的服务端版本
+  assert.deepEqual(harness.state.session.messages.at(-1), {
+    role: 'assistant',
+    content: '夜色沉沉，更夫的梆子声由远及近',
+    aborted: true
+  });
+  assert.deepEqual(harness.statuses.at(-1), {
+    element: 'session',
+    message: '已停止生成，已保留未完成的正文',
+    tone: 'busy'
+  });
+  assert.equal(harness.state.chatStreaming, false);
+});
+
+test('a generic SSE abort without retained partial keeps the stop-only status', async () => {
+  const harness = createHarness({
+    fetchImpl: async () => createSseResponse([
+      'event: error\ndata: {"error":"GENERATION_ABORTED"}\n\n'
+    ])
+  });
+  harness.els.chatInput.value = '夜探沈府。';
+
+  const payload = await harness.controller.sendMessage();
+
+  assert.equal(payload, null);
+  assert.deepEqual(harness.statuses.at(-1), {
+    element: 'session',
+    message: '已停止生成',
+    tone: 'busy'
+  });
+});
+
+test('a completed stream from a previous session cannot overwrite the newly selected story', async () => {
+  let resolveFetch;
+  const responsePromise = new Promise((resolve) => {
+    resolveFetch = resolve;
+  });
+  const harness = createHarness({ fetchImpl: async () => responsePromise });
+  harness.els.chatInput.value = '第一部剧本的行动';
+
+  const pending = harness.controller.sendMessage();
+  harness.state.session = {
+    id: 'story/other',
+    messages: [{ role: 'assistant', content: '第二部剧本的内容' }],
+    memory: { rollingSummary: '第二部摘要' }
+  };
+  harness.state.chatStreaming = true;
+
+  resolveFetch(createSseResponse(
+    'event: done\ndata: {"session":{"id":"story/session","messages":[],"memory":{}}}\n\n'
+  ));
+  await pending;
+
+  assert.equal(harness.state.session.id, 'story/other');
+  assert.equal(harness.replacedSessions.length, 0);
+  assert.equal(harness.counts().renderCount, 0);
+  assert.equal(harness.state.chatStreaming, true);
 });
 
 test('continue validates concurrency and last-message role before streaming', async () => {

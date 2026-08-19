@@ -9,6 +9,8 @@ import {
   isPackStartBlocked
 } from './packCompatibility.js';
 import { createStoryPackCardView } from './storyPackCard.js';
+import { createStoryProjectLibraryViewController } from './storyProjectLibraryView.js';
+import { createStoryDeletionController } from './storyDeletion.js';
 
 export const STORY_CATALOG_VIEW_KEY = 'localRoleplayStoryCatalogView';
 export const STORY_CATALOG_CATEGORY_KEY = 'localRoleplayStoryCatalogCategory';
@@ -171,83 +173,26 @@ export function createStoryCatalogController({
     }
   }
 
-  async function deleteStoryProject(projectId) {
-    const project = (state.storyProjects || []).find((item) => item.id === projectId);
-    if (!project) return false;
-    try {
-      const preview = await apiRequest(
-        `/api/story-projects/${encodeURIComponent(projectId)}/deletion-impact`
-      );
-      const impact = preview.impact || {};
-      const sessionCount = Array.isArray(impact.sessions) ? impact.sessions.length : 0;
-      const missingCount = Array.isArray(impact.missingSessionIds) ? impact.missingSessionIds.length : 0;
-      const sessionNote = sessionCount
-        ? `\n\n${sessionCount} 个会话会先转为独立快照，剧情、角色、世界书和消息不变。`
-        : '\n\n当前没有关联会话。';
-      const missingNote = missingCount
-        ? `\n另有 ${missingCount} 个历史存档编号已不存在，将只保留在本地备份中。`
-        : '';
-      if (!confirmAction(
-        `从书架删除《${project.title || '未命名故事'}》？${sessionNote}${missingNote}\n\n删除前会自动创建本地安全备份。`
-      )) {
-        return false;
-      }
-      const result = await apiRequest(`/api/story-projects/${encodeURIComponent(projectId)}`, {
-        method: 'DELETE',
-        body: { confirmDetach: true }
-      });
-      state.storyProjects = (state.storyProjects || []).filter((item) => item.id !== projectId);
-      renderStoryProjects();
-      const backupNote = result.backup?.id ? ` 本地备份：${result.backup.id}。` : '';
-      setStatus(els.storyLauncherStatus, `故事已删除，关联会话已转为独立快照。${backupNote}`, 'ok');
-      return true;
-    } catch (error) {
-      setStatus(els.storyLauncherStatus, `删除失败：${humanizeApiError(error)}`, 'error');
-      return false;
-    }
-  }
-
-  async function deleteStoryPack(packId) {
-    const pack = (state.contentPacks || []).find((item) => item.id === packId && item.custom === true);
-    if (!pack) return false;
-    try {
-      const preview = await apiRequest(
-        `/api/resource-library/packs/${encodeURIComponent(packId)}/deletion-impact`
-      );
-      const impact = preview.impact || {};
-      const projectCount = Array.isArray(impact.projects) ? impact.projects.length : 0;
-      const sessionCount = Array.isArray(impact.sessions) ? impact.sessions.length : 0;
-      const dependencyNote = projectCount || sessionCount
-        ? `\n\n影响范围：${projectCount} 个故事、${sessionCount} 个会话。故事会标记为“素材已解绑”，会话会转为独立快照。`
-        : '\n\n当前没有关联故事或会话。';
-      if (!confirmAction(
-        `移除本地剧本《${pack.title || pack.id}》？${dependencyNote}\n\n角色卡、世界书原素材和消息都会保留，操作前会自动创建本地安全备份。`
-      )) {
-        return false;
-      }
-      const result = await apiRequest(`/api/resource-library/packs/${encodeURIComponent(packId)}`, {
-        method: 'DELETE',
-        body: { confirmDetach: true }
-      });
-      state.contentPacks = (state.contentPacks || []).filter((item) => item.id !== packId);
-      const detachedProjects = new Map(
-        (result.detachedProjects || []).map((project) => [project.id, project])
-      );
-      state.storyProjects = (state.storyProjects || []).map((project) => (
-        detachedProjects.get(project.id) || project
-      ));
-      renderStoryCatalogFilters();
-      renderStoryPackGrid();
-      renderStoryProjects();
-      setStoryLauncherBackground(state.contentPacks[0]);
-      const backupNote = result.backup?.id ? ` 本地备份：${result.backup.id}。` : '';
-      setStatus(els.storyLauncherStatus, `本地剧本已移除，关联会话已转为独立快照。${backupNote}`, 'ok');
-      return true;
-    } catch (error) {
-      setStatus(els.storyLauncherStatus, `删除失败：${humanizeApiError(error)}`, 'error');
-      return false;
-    }
-  }
+  const {
+    deleteContinueStory,
+    deleteStoryPack,
+    deleteStoryProject
+  } = createStoryDeletionController({
+    state,
+    els,
+    apiRequest,
+    confirmAction,
+    selectSession,
+    loadState,
+    setStatus,
+    humanizeApiError,
+    getMostRecentSessionSummary,
+    renderStoryProjects,
+    renderStoryContinuePanel,
+    renderStoryCatalogFilters,
+    renderStoryPackGrid,
+    setStoryLauncherBackground
+  });
 
   function renderStoryCatalogFilters() {
     if (!els.storyCategoryFilter) return;
@@ -316,86 +261,151 @@ export function createStoryCatalogController({
     const pack = (state.contentPacks || [])
       .find((item) => item.id === (summary.packId || summary.basePackId));
     const packTitle = pack?.title || summary.packId || '旧版会话';
-    if (els.storyContinueTitle) els.storyContinueTitle.textContent = summary.title || summary.id;
+    const visual = getContentPackVisualPreset(getStoryPackVisualId(pack || summary.packId));
+    const stageBackground = getStoryStageBackground(pack);
+    const bgUrl = stageBackground?.url || visual.backgroundImage || '/assets/xianxia-stage.png';
+
+    const coverElem = typeof els.storyContinuePanel?.querySelector === 'function'
+      ? els.storyContinuePanel.querySelector('.continue-cover-img')
+      : null;
+    if (coverElem) {
+      coverElem.style.backgroundImage = `url("${bgUrl}")`;
+    }
+
+    if (els.storyContinueTitle) els.storyContinueTitle.textContent = summary.title || packTitle || summary.id;
+
+    const chapterElem = typeof els.storyContinuePanel?.querySelector === 'function'
+      ? els.storyContinuePanel.querySelector('#story-continue-chapter')
+      : null;
+    if (chapterElem) {
+      chapterElem.textContent = summary.lastChapter || summary.sceneTitle || '继续上次进度';
+    }
+
+    const percentElem = typeof els.storyContinuePanel?.querySelector === 'function'
+      ? els.storyContinuePanel.querySelector('#story-continue-percent')
+      : null;
+    if (percentElem) {
+      const msgCount = Number(summary.messageCount || 1);
+      const computedPercent = Math.min(95, Math.max(15, msgCount * 8));
+      percentElem.textContent = `${computedPercent}%`;
+    }
+
     if (els.storyContinueMeta) {
       els.storyContinueMeta.textContent = [
         packTitle,
         `${Number(summary.messageCount || 0)} 条消息`,
-        formatStoryDate(summary.updatedAt)
+        summary.updatedAt ? formatStoryDate(summary.updatedAt) : ''
       ].filter(Boolean).join(' · ');
     }
-    if (els.continueLastStory) els.continueLastStory.dataset.sessionId = summary.id;
+
+    if (els.continueLastStory) {
+      els.continueLastStory.dataset.sessionId = summary.id;
+    }
+    if (els.deleteContinueStory) {
+      els.deleteContinueStory.dataset.sessionId = summary.id;
+      els.deleteContinueStory.hidden = summary.id === 'main';
+    }
   }
 
   function renderStoryProjects() {
     if (!els.storyProjectList) return;
     const projects = Array.isArray(state.storyProjects) ? state.storyProjects : [];
-    if (els.storyProjectCount) els.storyProjectCount.textContent = String(projects.length);
+    if (els.storyProjectCount) {
+      els.storyProjectCount.textContent = String(projects.length);
+    }
     els.storyProjectList.replaceChildren?.();
     if (typeof els.storyProjectList.replaceChildren !== 'function') {
       els.storyProjectList.textContent = '';
     }
     if (!projects.length) {
-      const empty = documentObject.createElement('p');
-      empty.className = 'story-empty-copy';
-      empty.textContent = '从右侧选择一个剧本，建立第一卷。旧会话仍可从“继续上次故事”进入。';
+      const empty = documentObject.createElement('div');
+      empty.className = 'story-project-empty';
+      empty.textContent = '暂无存档记录，开局后将自动沉淀卷宗。';
       els.storyProjectList.append(empty);
       return;
     }
-
     const fragment = documentObject.createDocumentFragment();
     projects.forEach((project) => {
-      const detached = project.lifecycleState === 'detached'
-        || project.lifecycle?.state === 'detached'
-        || project.canCreateSession === false;
+      const pack = (state.contentPacks || []).find((item) => item.id === project.basePackId);
+      const detached = project.lifecycleState === 'detached' || project.detached === true;
+      const visual = getContentPackVisualPreset(getStoryPackVisualId(pack || project.basePackId));
+      const bgUrl = visual.backgroundImage || '/assets/xianxia-stage.png';
+
+      const canOpen = project.canOpen !== false && (!detached || Boolean(project.activeSessionId));
+      const titleText = detached
+        ? (project.activeSessionId ? '继续已有独立存档' : '原剧本素材已移除，不能创建新卷')
+        : (project.activeSessionId ? '继续故事' : '开启新卷');
+
       const item = documentObject.createElement('article');
       item.className = 'story-project-item';
       item.classList.toggle('is-detached', detached);
+      item.dataset.openStoryProject = project.id;
+      item.title = titleText;
+      item.disabled = !canOpen;
+
+      // 缩略图
+      const thumb = documentObject.createElement('div');
+      thumb.className = 'story-project-thumb';
+      thumb.style.backgroundImage = `url("${bgUrl}")`;
+
+      // 头部信息
+      const header = documentObject.createElement('div');
+      header.className = 'story-project-header';
+      const title = documentObject.createElement('strong');
+      title.className = 'story-project-name';
+      title.textContent = project.title || '未命名故事';
+      const statusSpan = documentObject.createElement('span');
+      statusSpan.className = 'story-project-status';
+      statusSpan.textContent = detached ? '素材已解绑' : (project.status || '连载中');
+      header.append(title, statusSpan);
+
+      // 文字信息
       const copy = documentObject.createElement('div');
       copy.className = 'story-project-copy';
-      const title = documentObject.createElement('strong');
-      title.textContent = project.title || '未命名故事';
-      const meta = documentObject.createElement('span');
-      meta.textContent = [
-        project.basePackTitle || project.basePackId,
-        detached ? '素材已解绑' : '',
-        `${Number(project.sessionCount || 0)} 个存档`,
-        formatStoryDate(project.updatedAt)
-      ].filter(Boolean).join(' · ');
-      copy.append(title, meta);
 
+      const chapter = documentObject.createElement('span');
+      chapter.className = 'story-project-chapter';
+      chapter.textContent = project.currentChapter || '尚未记录章节';
+
+      const time = documentObject.createElement('span');
+      time.className = 'story-project-time';
+      time.textContent = formatStoryDate(project.updatedAt) || '时间未记录';
+
+      copy.append(header, chapter, time);
+
+      // 右侧操作
       const actions = documentObject.createElement('div');
       actions.className = 'story-project-actions';
-      const edit = documentObject.createElement('button');
-      edit.type = 'button';
-      edit.className = 'story-project-tool';
-      edit.dataset.editStoryProject = project.id;
-      edit.setAttribute('aria-label', `编辑${project.title || '故事'}`);
-      edit.title = '编辑名称和说明';
-      edit.textContent = '✎';
-      const remove = documentObject.createElement('button');
-      remove.type = 'button';
-      remove.className = 'story-project-tool danger';
-      remove.dataset.deleteStoryProject = project.id;
-      remove.setAttribute('aria-label', `删除${project.title || '故事'}`);
-      remove.title = '从书架删除';
-      remove.textContent = '×';
-      const open = documentObject.createElement('button');
-      open.type = 'button';
-      open.className = 'story-project-open';
-      open.dataset.openStoryProject = project.id;
-      open.setAttribute('aria-label', `打开${project.title || '故事'}`);
-      open.disabled = detached && !project.activeSessionId;
-      open.title = project.activeSessionId
-        ? (detached ? '继续已有独立存档' : '继续故事')
-        : detached ? '原剧本素材已移除，不能创建新卷' : '创建第一卷';
-      open.textContent = open.disabled ? '—' : '›';
-      actions.append(edit, remove, open);
-      item.append(copy, actions);
+
+      const editButton = documentObject.createElement('button');
+      editButton.type = 'button';
+      editButton.className = 'story-project-more-btn';
+      editButton.dataset.editStoryProject = project.id;
+      editButton.textContent = '编辑';
+      editButton.title = `编辑《${project.title || '未命名故事'}》`;
+      editButton.setAttribute('aria-label', editButton.title);
+
+      const deleteButton = documentObject.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.className = 'story-project-delete-btn';
+      deleteButton.dataset.deleteStoryProject = project.id;
+      deleteButton.textContent = '删除';
+      deleteButton.title = `删除《${project.title || '未命名故事'}》`;
+      deleteButton.setAttribute('aria-label', deleteButton.title);
+
+      actions.append(editButton, deleteButton);
+
+      item.append(thumb, copy, actions);
       fragment.append(item);
     });
     els.storyProjectList.append(fragment);
   }
+
+  const storyProjectLibraryView = createStoryProjectLibraryViewController({
+    els,
+    renderStoryProjects,
+    setTimeoutImpl
+  });
 
   function renderStoryPackGrid() {
     if (!els.storyPackGrid) return;
@@ -627,6 +637,9 @@ export function createStoryCatalogController({
     els.continueLastStory?.addEventListener('click', () => {
       void continueLastStory();
     });
+    els.deleteContinueStory?.addEventListener('click', () => {
+      void deleteContinueStory();
+    });
     els.storyPackSearch?.addEventListener('input', renderStoryPackGrid);
     els.storyCategoryFilter?.addEventListener('click', (event) => {
       const button = event.target.closest('[data-story-category]');
@@ -648,6 +661,7 @@ export function createStoryCatalogController({
     els.storyPackGrid?.addEventListener('pointerover', previewStoryPackFromEvent);
     els.storyPackGrid?.addEventListener('focusin', previewStoryPackFromEvent);
     els.storyProjectList?.addEventListener('click', handleStoryProjectClick);
+    storyProjectLibraryView.bindEvents();
   }
 
   return {
@@ -656,6 +670,7 @@ export function createStoryCatalogController({
     continueLastStory,
     continueStoryProject,
     createAndOpenStoryProject,
+    deleteContinueStory,
     createStoryPackCard,
     deleteStoryPack,
     deleteStoryProject,
@@ -670,6 +685,7 @@ export function createStoryCatalogController({
     renderStoryPackGrid,
     renderStoryProjects,
     saveStoryEdit,
+    setAllStoriesView: storyProjectLibraryView.setActive,
     setStoryCatalogCategory,
     setStoryCatalogView,
     setStoryLauncherBackground,

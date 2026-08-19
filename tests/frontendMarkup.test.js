@@ -12,7 +12,8 @@ const FRONTEND_STYLE_FILES = [
   'workbench-shell.css',
   'immersive.css',
   'workbench.css',
-  'reading-modes.css'
+  'reading-modes.css',
+  'reader-ui.css'
 ];
 
 async function readFrontendCss() {
@@ -191,7 +192,9 @@ ${await readFile('public/modules/messagePresentation.js', 'utf8')}`;
   assert.match(app, /function createCharacterPortraitImage/);
   assert.match(app, /function getPendingImportPortraitDataUrl/);
   assert.match(app, /createCharacterPortraitImage\(\s*pack\.characterPortrait,\s*'story-card-portrait'/);
-  assert.match(app, /createCharacterPortraitImage\(mainCharacter, 'message-avatar'/);
+  assert.match(app, /resolveSpeakerCharacter\(state\.config, displaySpeaker\)/);
+  assert.match(app, /createCharacterPortraitImage\(speakerCharacter, 'message-avatar'/);
+  assert.match(app, /buildSpeakerPortraitMap\(state\.config\)/);
   assert.match(app, /createCharacterPortraitImage\(card, 'character-overview-portrait'/);
   assert.match(app, /className = 'import-character-portrait'/);
   assert.match(app, /sessionId: getCurrentSessionId\(\)/);
@@ -208,6 +211,7 @@ test('story bookshelf starts new projects before entering the guided opening', a
   const html = await readFile('public/index.html', 'utf8');
   const app = `${await readFile('public/app.js', 'utf8')}
 ${await readFile('public/modules/storyCatalog.js', 'utf8')}
+${await readFile('public/modules/storyDeletion.js', 'utf8')}
 ${await readFile('public/modules/storyOpening.js', 'utf8')}
 ${await readFile('public/modules/journeySetup.js', 'utf8')}
 ${await readFile('public/modules/openingWorkflow.js', 'utf8')}
@@ -220,7 +224,10 @@ ${await readFile('public/modules/resourceWorkbench.js', 'utf8')}`;
   assert.match(html, /id="open-story-launcher"/);
   assert.match(html, /id="story-launcher"/);
   assert.match(html, /id="continue-last-story"/);
+  assert.match(html, /id="delete-continue-story"[^>]+删除当前运行进度/);
   assert.match(html, /id="story-project-list"/);
+  assert.match(html, /id="view-all-stories-btn"[^>]+aria-pressed="false"/);
+  assert.match(html, /id="view-all-stories-label">查看全部故事/);
   assert.match(html, /id="story-pack-grid"/);
   assert.match(html, /id="story-category-filter"/);
   assert.match(html, /id="story-view-grid"/);
@@ -313,6 +320,8 @@ ${await readFile('public/modules/resourceWorkbench.js', 'utf8')}`;
   assert.match(css, /\.story-launcher\s*\{/);
   assert.match(css, /\.story-launcher-layout\s*\{[\s\S]*grid-template-columns:/);
   assert.match(css, /\.story-pack-grid\s*\{[\s\S]*overflow-y:\s*auto/);
+  assert.match(css, /\.story-project-item:hover\s*\{\s*border-color:\s*var\(--accent\);\s*\}\s*\.story-project-copy\s*\{/);
+  assert.match(css, /\.story-pack-grid\.is-list-view \.story-card-body\s*\{[\s\S]*background:\s*var\(--panel-raised\)/);
   assert.match(css, /\.story-custom-builder\s*\{[\s\S]*grid-template-columns:/);
   assert.match(css, /\.story-custom-steps\s*\{[\s\S]*grid-template-columns:/);
   assert.match(css, /\.story-custom-step-panel\[hidden\]\s*\{[\s\S]*display:\s*none/);
@@ -331,6 +340,9 @@ ${await readFile('public/modules/resourceWorkbench.js', 'utf8')}`;
   assert.match(css, /\.story-pack-grid\.is-list-view\s*\{[\s\S]*grid-template-columns:\s*1fr/);
   assert.match(css, /\.story-script-card\s*\{[\s\S]*background-image:\s*var\(--story-card-image\)/);
   assert.match(css, /\.story-project-actions\s*\{/);
+  assert.match(css, /\.story-project-actions\s*\{[\s\S]*white-space:\s*nowrap/);
+  assert.match(css, /\.story-project-item\s*\{[\s\S]*grid-template-columns:\s*48px minmax\(0, 1fr\) auto/);
+  assert.match(css, /\.story-launcher\.is-project-library-view \.story-project-list\s*\{[\s\S]*grid-template-columns:/);
   assert.match(css, /\.story-card-manage\s*\{/);
   assert.match(css, /\.story-edit-dialog\s*\{/);
   assert.match(css, /@media \(max-width: 820px\)[\s\S]*\.story-launcher\s*\{[\s\S]*overflow-y:\s*auto/);
@@ -395,7 +407,7 @@ ${await readFile('public/modules/appEvents.js', 'utf8')}`;
   assert.match(html, /id="background-status"/);
   assert.match(html, /舞台背景：未设置/);
   assert.match(html, /阅读模式独立于剧本，剧本只提供舞台背景/);
-  assert.match(html, /<span>阅读模式<\/span>/);
+  assert.match(html, /aria-label="阅读模式"/);
   assert.match(html, /清除背景/);
   assert.match(visualStage, /url:\s*'\/assets\/xuanhuan-luoyan-stage\.png'/);
   assert.match(visualStage, /url:\s*'\/assets\/lingyi-yongan-stage\.png'/);
@@ -549,7 +561,7 @@ ${await readFile('public/modules/appEvents.js', 'utf8')}`;
   assert.match(html, /aria-controls="provider-panel" aria-expanded="false"/);
   assert.match(html, /id="inspector-panel" class="panel inspector-panel collapsed"/);
   assert.match(html, /aria-controls="inspector-panel" aria-expanded="false"/);
-  assert.match(html, /<details id="mcp-panel" class="worldbook-entries-panel"/);
+  assert.match(html, /<details id="mcp-panel" class="provider-tool-panel"/);
   assert.match(html, /id="provider-reasoning-mode"[\s\S]*自动 · 显式思维链预设时关闭/);
   assert.match(html, /仅对 DeepSeek 官方 OpenAI 接口生效/);
   assert.match(html, /<\/details>\s*<\/div>\s*<\/aside>\s*<section class="panel chat-panel"/);
@@ -610,8 +622,8 @@ test('world book browser groups large lore libraries with search and readable pr
   assert.match(app, /worldbookTypeFilter\?\.addEventListener\('change', renderWorldbookEntries\)/);
   assert.match(css, /\.worldbook-browser-toolbar\s*\{/);
   assert.match(css, /\.worldbook-entry-group-summary\s*\{/);
-  assert.match(css, /\.worldbook-entry-preview\s*\{/);
-  assert.match(css, /-webkit-line-clamp:\s*3/);
+  assert.match(css, /\.immersive-worldbook-card-preview\s*\{/);
+  assert.match(css, /-webkit-line-clamp:\s*4/);
 });
 
 test('inspector controls stay usable in narrow drawers', async () => {
@@ -805,6 +817,10 @@ test('immersive sidebar shell is wired and hidden by default', async () => {
     'public/modules/openingWorkflow.js',
     'public/modules/immersiveDossier.js',
     'public/modules/immersiveLedgers.js',
+    'public/modules/immersiveGrowthLedger.js',
+    'public/modules/immersiveMemoryLedger.js',
+    'public/modules/immersiveSituationLedger.js',
+    'public/modules/immersiveCharacterArchiveActions.js',
     'public/modules/immersiveSidebar.js'
   ].map((file) => readFile(file, 'utf8')))).join('\n');
   const css = await readFrontendCss();
@@ -824,7 +840,7 @@ test('immersive sidebar shell is wired and hidden by default', async () => {
   assert.match(app, /const deduplicated = new Map\(\)/);
   assert.match(app, /record\.item \|\| record\.subject \|\| record\.id/);
   assert.match(app, /record\.description \|\| record\.progress \|\| record\.notes/);
-  assert.match(app, /势力\|事件\|进度/);
+  assert.match(app, /当前态势.*决策线索.*角色档案.*人物网络.*成长轨迹.*叙事记忆.*世界规则/s);
   assert.match(app, /导演注记/);
   assert.match(app, /function renderImmersiveDirectorNotes/);
   assert.match(app, /record\.limits \|\| record\.restrictions/);
@@ -872,6 +888,15 @@ test('immersive visual direction makes the stage feel game-like instead of gener
   assert.match(css, /\.composer::before\s*\{[\s\S]*background:\s*linear-gradient\(90deg,\s*transparent,\s*rgba\(129,\s*212,\s*202,\s*0\.44\),\s*transparent\);/);
   assert.match(css, /\.stage-actions\s*\{[\s\S]*background:\s*rgba\(2,\s*8,\s*10,\s*0\.34\);/);
   assert.match(css, /\.immersive-sidebar-tab\s*\{[\s\S]*min-width:\s*42px;[\s\S]*border-radius:\s*14px 5px 5px 14px;/);
+});
+
+test('interaction drawer inherits the active reading palette instead of the legacy dark overlay', async () => {
+  const css = await readFrontendCss();
+
+  assert.match(css, /:root\[data-theme\]\s+\.immersive-sidebar-content\s*\{[\s\S]*border-color:\s*var\(--reading-border\);[\s\S]*background:\s*color-mix\(in srgb, var\(--panel\) 95%, transparent\);[\s\S]*color:\s*var\(--reading-content\);/);
+  assert.match(css, /:root\[data-theme\]\s+\.immersive-sidebar-tab\.active,[\s\S]*background:\s*color-mix\(in srgb, var\(--accent\) 11%, var\(--panel-raised\)\);/);
+  assert.match(css, /:root\[data-theme\]\s+\.immersive-relationship-graph\s*\{[\s\S]*color-mix\(in srgb, var\(--panel-deep\) 92%, transparent\);/);
+  assert.match(css, /:root\[data-theme="eye-care"\]\s+\.immersive-sidebar-content\s*\{[\s\S]*background:\s*rgba\(248, 241, 232, 0\.97\);/);
 });
 
 test('narrow workbench switches to single-stage mode before panels crush the chat', async () => {
@@ -931,7 +956,8 @@ test('roleplay control output stays out of chat and legacy actions render as cho
   const presentation = await readFile('public/modules/messagePresentation.js', 'utf8');
   const parser = await readFile('public/modules/roleplayResponse.js', 'utf8');
 
-  assert.match(presentation, /visibleContent: toolActivity \? '' : \(presentation \? presentation\.content : \(message\.content \|\| ''\)\)/);
+  assert.match(presentation, /const rawVisibleContent = toolActivity \? '' : \(presentation \? presentation\.content : \(message\.content \|\| ''\)\);/);
+  assert.match(presentation, /visibleContent: renderAgentActionCards\(rawVisibleContent\),/);
   assert.doesNotMatch(presentation, /presentation\?\.content \|\| message\.content/);
   assert.match(presentation, /isWebSearchToolMessage/);
   assert.match(presentation, /toolActivity/);
@@ -946,14 +972,16 @@ test('roleplay control output stays out of chat and legacy actions render as cho
 
 test('immersive world rules expose structured topology, factions, calendar, economy and cultivation systems', async () => {
   const app = await readFile('public/modules/immersiveSidebar.js', 'utf8');
+  const worldRules = await readFile('public/modules/immersiveWorldRules.js', 'utf8');
 
-  assert.match(app, /function getImmersiveWorldSystemGroups\(systems,/);
-  assert.match(app, /地点拓扑/);
-  assert.match(app, /人物与日程/);
-  assert.match(app, /势力演化/);
-  assert.match(app, /历法与天候/);
-  assert.match(app, /经济铁律/);
-  assert.match(app, /修行刻度与反噬/);
+  assert.match(app, /from '\.\/immersiveWorldRules\.js'/);
+  assert.match(worldRules, /function getImmersiveWorldSystemGroups\(systems,/);
+  assert.match(worldRules, /地点拓扑/);
+  assert.match(worldRules, /人物与日程/);
+  assert.match(worldRules, /势力演化/);
+  assert.match(worldRules, /历法与天候/);
+  assert.match(worldRules, /经济铁律/);
+  assert.match(worldRules, /修行刻度与反噬/);
 });
 
 test('character preset library covers more genre-matched roles', async () => {
@@ -1168,9 +1196,11 @@ test('frontend exposes the full-screen narrative asset center', async () => {
   assert.match(assetLibrary, /method: 'PATCH'/);
   assert.match(assetCenter, /export function buildAssetCatalog/);
   assert.match(assetCenter, /export function filterAssetCatalog/);
+  assert.match(assetCenter, /export function paginateAssetCatalog/);
   assert.match(assetCenter, /data-asset-action = 'favorite'|action === 'favorite'/);
   assert.match(assetCenter, /function applyBatchMetadata/);
-  assert.match(assetCenter, /function createCharacterProfilePanel/);
+  assert.match(assetCenter, /function createPreviewPanel/);
+  assert.match(assetCenter, /function createEvaluationPanel/);
   assert.match(assetCenter, /function createVersionPanel/);
   assert.match(assetCenter, /function createWorldbookManagementPanel/);
   assert.match(assetCenter, /function createPromptManagementPanel/);
@@ -1179,6 +1209,9 @@ test('frontend exposes the full-screen narrative asset center', async () => {
   assert.match(html, /data-asset-import-kind="character"/);
   assert.match(html, /data-asset-import-kind="worldbook"/);
   assert.match(html, /data-asset-import-kind="prompt"/);
+  assert.equal((html.match(/id="asset-center-detail"/g) || []).length, 1);
+  assert.equal((html.match(/id="asset-center-status"/g) || []).length, 1);
+  assert.equal((html.match(/id="asset-center-organize"/g) || []).length, 1);
 
   assert.match(css, /\.asset-center\s*\{/);
   assert.match(css, /\.asset-center-layout\s*\{/);
@@ -1202,17 +1235,22 @@ test('narrative workspace separates reading, choices and structured character do
   const app = (await Promise.all([
     'public/app.js',
     'public/modules/messagePresentation.js',
+    'public/modules/recommendedActionsView.js',
     'public/modules/conversationActions.js',
     'public/modules/immersiveDossier.js',
     'public/modules/immersiveLedgers.js',
+    'public/modules/immersiveGrowthLedger.js',
+    'public/modules/immersiveMemoryLedger.js',
+    'public/modules/immersiveSituationLedger.js',
     'public/modules/immersiveSidebar.js'
   ].map((file) => readFile(file, 'utf8')))).join('\n');
   const css = await readFrontendCss();
 
   assert.match(app, /function renderImmersiveProtagonistCard/);
   assert.match(app, /function renderImmersiveIntelligenceLedger/);
-  assert.match(app, /function renderImmersiveProgressLedger/);
+  assert.match(app, /function renderImmersiveGrowthLedger/);
   assert.match(app, /function renderImmersiveMemoryLedger/);
+  assert.match(app, /function renderImmersiveSituationLedger/);
   assert.match(app, /梦入神机\|梦如神机/);
   assert.match(app, /神府造化\|神机造化/);
   assert.match(app, /function parseImmersiveStatusFields/);
@@ -1229,7 +1267,8 @@ test('narrative workspace separates reading, choices and structured character do
   assert.match(css, /\.immersive-ledger-section,/);
   assert.match(css, /\.immersive-progress-facts\s*\{/);
   assert.match(css, /\.immersive-memory-row\s*\{/);
-  assert.match(css, /\.recommended-actions-list\s*\{[\s\S]*grid-template-columns:\s*repeat\(2/);
+  assert.match(css, /\.recommended-actions-list\s*\{[\s\S]*display:\s*grid/);
+  assert.match(css, /\.recommendation-custom-row\s*\{/);
   assert.match(css, /\.recommendation-button\.is-expanding\s*\{/);
   assert.match(css, /\.message\s*\{[\s\S]*width:\s*min\(100%,\s*960px\)/);
 });
@@ -1268,4 +1307,42 @@ test('independent heavy frontends expose a separate reviewed and isolated operat
   assert.match(controller, /maxOutputTokensPerCall/);
   assert.match(css, /\.heavy-frontend-review-badge\.approved/);
   assert.match(css, /\.heavy-frontend-player-usage/);
+});
+
+test('reader header keeps global status exposed to users and assistive technology', async () => {
+  const html = await readFile('public/index.html', 'utf8');
+  const readerCss = await readFile('public/styles/reader-ui.css', 'utf8');
+
+  assert.match(html, /<output id="app-status" class="product-status" aria-live="polite" aria-atomic="true">/);
+  assert.match(readerCss, /\.product-tagline\s*\{\s*display:\s*none !important;/);
+  assert.doesNotMatch(readerCss, /\.product-identity p,\s*\.product-tagline/);
+  assert.match(readerCss, /#app-status\s*\{[\s\S]*display:\s*inline-flex/);
+});
+
+test('reader choices stay native, legible action cards instead of raw option lists', async () => {
+  const parser = await readFile('public/modules/roleplayResponse.js', 'utf8');
+  const presentation = await readFile('public/modules/messagePresentation.js', 'utf8');
+  const actionsView = await readFile('public/modules/recommendedActionsView.js', 'utf8');
+  const readerCss = await readFile('public/styles/reader-ui.css', 'utf8');
+
+  assert.match(parser, /LEGACY_CHOICE_HEADING_PATTERN/);
+  assert.match(parser, /extractLegacyRecommendedActions/);
+  assert.match(presentation, /from '\.\/recommendedActionsView\.js'/);
+  assert.match(actionsView, /from '\.\/actionPanelPresentation\.js'/);
+  assert.match(actionsView, /resolveActionPanelPresentation\(characterCard, session\)/);
+  assert.match(actionsView, /heading\.textContent = presentation\.title/);
+  assert.match(actionsView, /recommendation-custom-input/);
+  assert.match(readerCss, /\.recommended-actions-list\s*\{[\s\S]*display:\s*grid/);
+  assert.match(readerCss, /\.recommendation-number\s*\{[\s\S]*display:\s*inline-flex/);
+});
+
+test('reader rail owns the right edge in creative and immersive modes', async () => {
+  const html = await readFile('public/index.html', 'utf8');
+  const readerCss = await readFile('public/styles/reader-ui.css', 'utf8');
+
+  assert.match(html, /data-work-mode="debug"[^>]*aria-label="打开调试与检查工作台"/);
+  assert.match(
+    readerCss,
+    /:root\[data-work-mode="creative"\] \.inspector-panel,[\s\S]*:root\[data-work-mode="immersive"\] \.inspector-panel\s*\{[\s\S]*display:\s*none\s*!important;/
+  );
 });

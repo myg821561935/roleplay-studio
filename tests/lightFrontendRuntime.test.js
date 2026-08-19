@@ -42,7 +42,7 @@ test('extracts safe regex, text quick replies and MVU seed from community extens
   assert.deepEqual(runtime.quickReplies[1].patch.operations, [
     { op: 'set', path: 'variables.mood', value: 'angry' }
   ]);
-  assert.deepEqual(runtime.mvu.values, { favor: 10, flags: { met: true } });
+  assert.deepEqual(runtime.mvu.values, { chat: { favor: 10, flags: { met: true } }, global: {} });
   assert.equal(runtime.diagnostics.some((item) => item.code === 'command-quick-reply-disabled'), false);
 });
 
@@ -106,6 +106,22 @@ test('SillyTavern regex placement and prompt/display modes retain their original
   assert.doesNotMatch(display, /<div>|<strong>/);
 });
 
+test('static HTML display replacements never expose embedded stylesheet source as prose', () => {
+  const runtime = normalizeLightFrontendRuntime({
+    regexTransforms: [{
+      pattern: '<state/>',
+      replacement: '<details><summary>状态完成</summary><div>已更新</div></details><style>.neko-complete{display:none}@keyframes neko-happy{to{opacity:1}}</style>',
+      placement: 2,
+      markdownOnly: true
+    }]
+  });
+
+  const display = applyLightFrontendDisplayTransforms('<state/>', runtime);
+  assert.match(display, /状态完成/);
+  assert.match(display, /已更新/);
+  assert.doesNotMatch(display, /neko-complete|@keyframes|display\s*:/i);
+});
+
 test('executable regex replacements are flagged for sandboxed rendering instead of being dropped', () => {
   const runtime = normalizeLightFrontendRuntime({
     regexTransforms: [{
@@ -166,7 +182,7 @@ test('MVU patches are versioned and support only declarative operations', () => 
 
   assert.deepEqual(first, {
     enabled: true,
-    values: { favor: 5, flags: { met: true } },
+    values: { chat: { favor: 5, flags: { met: true } }, global: {} },
     revision: 1
   });
   assert.throws(
@@ -187,7 +203,7 @@ test('merged runtimes deduplicate controls and browser expansion uses a small ma
   const replies = getLightFrontendQuickReplies(runtime);
 
   assert.equal(replies.length, 1);
-  assert.deepEqual(runtime.mvu.values, { favor: 1, scene: '客栈' });
+  assert.deepEqual(runtime.mvu.values, { chat: { favor: 1, scene: '客栈' }, global: {} });
   assert.equal(expandQuickReply(runtime.quickReplies[0], { char: '沈观澜' }), '沈观澜继续');
   assert.equal(expandLightFrontendQuickReply(replies[0], { char: '沈观澜' }), '沈观澜继续');
 });
@@ -239,7 +255,7 @@ test('community adapter namespaces map declarative data but keep executable mark
     }
   });
 
-  assert.equal(runtime.mvu.values.favor, 8);
+  assert.equal(runtime.mvu.values.chat.favor, 8);
   assert.equal(runtime.quickReplies[0].template, '询问旧案');
   assert.equal(runtime.regexTransforms.length, 1);
   assert.equal(runtime.panels[0].fields[0].template, '<%= mvu.favor %>');

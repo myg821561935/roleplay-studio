@@ -6,14 +6,9 @@ import {
   normalizeResponseLength,
   normalizeRoleplayMode
 } from './sessionSettingModes.js';
-export {
-  NARRATIVE_MODES,
-  RESPONSE_LENGTH_MODES,
-  ROLEPLAY_MODES,
-  normalizeNarrativeMode,
-  normalizeResponseLength,
-  normalizeRoleplayMode
-} from './sessionSettingModes.js';
+import { createCardRuntimeSettingController } from './cardRuntimeSetting.js';
+import { renderSessionPromptIntegrity } from './promptIntegrityIndicator.js';
+export { NARRATIVE_MODES, RESPONSE_LENGTH_MODES, ROLEPLAY_MODES, normalizeNarrativeMode, normalizeResponseLength, normalizeRoleplayMode } from './sessionSettingModes.js';
 export function createSessionSettingsController({
   state = {},
   els = {},
@@ -29,12 +24,16 @@ export function createSessionSettingsController({
   let settingsWriteTail = Promise.resolve();
   let pendingWriteCount = 0;
   const settingsCache = new Map();
-
-  function getProviders() {
-    const config = state.config?.providers || {};
-    return Array.isArray(config.providers) ? config.providers : [];
-  }
-
+  const cardRuntimeSettingController = createCardRuntimeSettingController({
+    els,
+    getSettings: () => state.session?.settings || {},
+    beginOperation,
+    endOperation,
+    saveSettingsPatch,
+    renderSessionSettings,
+    setStatus,
+    humanizeApiError
+  });
   function renderNarrativeMode(mode = state.session?.settings?.narrativeMode) {
     const narrativeMode = normalizeNarrativeMode(mode);
     (els.narrativeModeButtons || []).forEach((button) => {
@@ -43,15 +42,13 @@ export function createSessionSettingsController({
       button.setAttribute('aria-pressed', String(active));
     });
   }
-
   function renderSessionSettings() {
     if (!els.sessionProvider) return;
     const providersConfig = state.config?.providers || {};
-    const providers = getProviders();
+    const providers = Array.isArray(providersConfig.providers) ? providersConfig.providers : [];
     const activeProviderId = String(providersConfig.activeProviderId || providers[0]?.id || '').trim();
     const selectedProviderId = String(state.session?.settings?.providerId || '').trim();
     const selectedProvider = providers.find((provider) => provider.id === selectedProviderId);
-
     els.sessionProvider.innerHTML = '';
     const followOption = documentObject.createElement('option');
     followOption.value = '';
@@ -63,7 +60,6 @@ export function createSessionSettingsController({
       option.textContent = provider.model ? `${provider.id} · ${provider.model}` : provider.id;
       els.sessionProvider.append(option);
     });
-
     els.sessionProvider.value = selectedProvider ? selectedProviderId : '';
     const currentLabel = selectedProvider
       ? (selectedProvider.model ? `${selectedProvider.id} · ${selectedProvider.model}` : selectedProvider.id)
@@ -76,8 +72,9 @@ export function createSessionSettingsController({
     if (els.sessionRoleplayMode) {
       els.sessionRoleplayMode.value = normalizeRoleplayMode(state.session?.settings?.roleplayMode);
     }
+    renderSessionPromptIntegrity({ state, element: els.sessionPromptIntegrity });
+    cardRuntimeSettingController.render();
   }
-
   function syncOperationState() {
     if (els.saveSessionSettings) els.saveSessionSettings.disabled = operationPending;
     (els.narrativeModeButtons || []).forEach((button) => {
@@ -85,8 +82,8 @@ export function createSessionSettingsController({
     });
     if (els.sessionResponseLength) els.sessionResponseLength.disabled = operationPending;
     if (els.sessionRoleplayMode) els.sessionRoleplayMode.disabled = operationPending;
+    cardRuntimeSettingController.syncOperationState(operationPending);
   }
-
   function beginOperation() {
     if (operationPending) {
       setStatus(els.sessionSettingsStatus, '上一项会话设置仍在保存', 'busy');
@@ -96,12 +93,10 @@ export function createSessionSettingsController({
     syncOperationState();
     return true;
   }
-
   function endOperation() {
     operationPending = false;
     syncOperationState();
   }
-
   function saveSettingsPatch(settingsPatch) {
     if (!settingsPatch || typeof settingsPatch !== 'object' || Array.isArray(settingsPatch)) {
       return Promise.reject(new Error('SESSION_SETTINGS_PATCH_INVALID'));
@@ -221,13 +216,13 @@ export function createSessionSettingsController({
       endOperation();
     }
   }
-
   function bindEvents() {
     if (eventsBound) return;
     eventsBound = true;
     els.saveSessionSettings?.addEventListener('click', () => { void saveSessionProvider(); });
     els.sessionResponseLength?.addEventListener('change', () => { void saveResponseLength(); });
     els.sessionRoleplayMode?.addEventListener('change', () => { void saveRoleplayMode(); });
+    cardRuntimeSettingController.bindEvents();
     (els.narrativeModeButtons || []).forEach((button) => {
       button.addEventListener('click', () => { void saveNarrativeMode(button.dataset.narrativeMode); });
     });

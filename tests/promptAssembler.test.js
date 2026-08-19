@@ -63,6 +63,14 @@ test('assemblePrompt includes modules, state, summary, matched world book, and r
   assert.match(result.messages[0].content, /# 沉浸式呈现契约/);
   assert.match(result.messages[0].content, /<special_status>/);
   assert.match(result.messages[0].content, /<recommended_actions>/);
+  assert.match(result.messages[0].content, /必须在回复正文之后给出 3 个行动建议/);
+  assert.match(result.messages[0].content, /不要把“自定义”作为第四个伪选项/);
+  assert.match(result.messages[0].content, /当前决策节点/);
+  assert.match(result.messages[0].content, /叙述中的比喻、光影、衣饰、声调和动作修辞不是独立线索/);
+  assert.match(result.messages[0].content, /不得用“观察周围”/);
+  assert.match(result.messages[0].content, /玩家主角：李青/);
+  assert.match(result.messages[0].content, /当前演绎角色：沈观澜/);
+  assert.match(result.messages[0].content, /本轮玩家已明确的行动或问题：我要去镇武司附近打探消息/);
   assert.match(result.messages[0].content, /角色卡与当前已启用世界书.*最高事实源/);
   assert.ok(result.messages.some(m => /镇武司负责约束江湖武人/.test(m.content)));
   assert.match(result.messages[0].content, /云州城/);
@@ -75,7 +83,7 @@ test('assemblePrompt includes modules, state, summary, matched world book, and r
   assert.equal(result.sections.roleplayMode, 'dm');
   assert.match(result.messages[0].content, /# 角色扮演流派（标准 DM 叙事流）/);
   assert.match(result.messages.at(-2).content, /# 本轮正文篇幅与推进契约（标准推进）/);
-  assert.match(result.messages.at(-2).content, /1200-2000 个中文字符/);
+  assert.match(result.messages.at(-2).content, /900-1400 个中文字符/);
 });
 
 test('assemblePrompt forwards World Info name and minimum-activation settings to the runtime', () => {
@@ -137,6 +145,112 @@ test('assemblePrompt applies a native roleplay mode independently of route stabi
   assert.match(result.messages[0].content, /# 角色扮演流派（导演 \/ 共创流）/);
   assert.equal(result.sections.narrativeMode, 'strict');
   assert.equal(result.sections.roleplayMode, 'director');
+});
+
+test('mind-influence cards preserve gradual conflict instead of instant personality deletion', () => {
+  const result = assemblePrompt({
+    promptModules: [],
+    characterCard: {
+      name: '催眠都市',
+      scenario: '主角能够施加催眠暗示。',
+      postHistoryInstructions: '受影响者会服从明确的指导指令。',
+      enabled: true
+    },
+    worldBook: [{
+      id: 'hypnosis-rules',
+      title: '催眠规则',
+      content: '催眠影响认知，但必须保留角色原本的性格。',
+      constant: true,
+      enabled: true
+    }],
+    memory: {
+      worldState: {
+        characters: [{ name: '沈悦', status: '催眠等级：Lv.1' }]
+      },
+      memoryCards: []
+    },
+    messages: [],
+    userMessage: '我要求她先回答一个问题。'
+  });
+
+  const progression = result.messages.find((message) => /# 心智渐变与本心冲突契约/.test(message.content));
+  assert.ok(progression);
+  assert.match(progression.content, /当前世界状态已明确记录影响等级为「Lv\.1」/);
+  assert.match(progression.content, /外在动作仍不得被写成心悦诚服或人格已被抹除/);
+  assert.match(progression.content, /每回合最多推进一个可观察的心理节拍/);
+  assert.equal(result.sections.psychologicalProgression.applies, true);
+  assert.equal(result.sections.psychologicalProgression.knownStage, 'Lv.1');
+});
+
+test('assemblePrompt keeps the ensemble time guard after the core prompt is budgeted', () => {
+  const result = assemblePrompt({
+    promptModules: [{ id: 'large', title: '大型预设', enabled: true, content: '文风约束。'.repeat(1800) }],
+    characterCard: { name: '剧情容器', enabled: true },
+    worldBook: [],
+    memory: {
+      simulation: { calendar: { weekdayNumber: 1 } },
+      worldState: {
+        protagonist: { name: '刘一' },
+        characters: [{ name: '周媛', role: '同事', encountered: true }, { name: '沈悦', role: '教师', encountered: true }],
+        obligations: [{ from: '刘一', to: '周媛', type: '周五赴约', details: '周五下班后在地铁站会合。' }]
+      },
+      characterRegistry: {
+        records: [
+          { name: '刘一', kind: 'protagonist', profile: {} },
+          { name: '周媛', kind: 'discovered-npc', profile: { role: '同事' } },
+          { name: '沈悦', kind: 'discovered-npc', profile: { role: '教师' } }
+        ]
+      },
+      memoryCards: []
+    },
+    messages: [
+      { role: 'assistant', content: '周媛发来消息。' },
+      { role: 'assistant', content: '周媛仍在等待。' },
+      { role: 'assistant', content: '周媛的约定尚未到期。' },
+      { role: 'user', content: '继续在街上走走' }
+    ],
+    userMessage: '',
+    activationContext: { generationType: 'continue' },
+    options: { maxPromptTokens: 2600, recentPairs: 2 }
+  });
+
+  const ensembleMessage = result.messages.find((message) => /# 群像与时间调度契约 v1/.test(message.content));
+  assert.ok(ensembleMessage);
+  assert.match(ensembleMessage.content, /周媛的周五（约 4 个世界日后）/);
+  assert.match(ensembleMessage.content, /焦点冷却：周媛/);
+  assert.equal(result.sections.narrativeEnsemble.focusCooldown.name, '周媛');
+});
+
+test('continuation keeps the latest real player utterance despite newer hidden continue signals', () => {
+  const messages = [
+    { role: 'user', content: '我把钥匙交给沈观澜，请她先检查暗门。' },
+    { role: 'assistant', content: '沈观澜接过钥匙，停在暗门前。' },
+    ...Array.from({ length: 6 }, (_, index) => [
+      { role: 'user', content: '（请继续推进剧情）', hiddenFromChat: true },
+      { role: 'assistant', content: `暗门后的回声第 ${index + 1} 次发生变化。` }
+    ]).flat()
+  ];
+  const result = assemblePrompt({
+    promptModules: [{ id: 'more-dialogue', title: '对话增多', enabled: true, content: '增加 NPC 对白。' }],
+    characterCard: { name: '沈观澜', enabled: true },
+    worldBook: [],
+    memory: { memoryCards: [] },
+    messages,
+    userMessage: '',
+    activationContext: { generationType: 'continue' },
+    options: { maxPromptTokens: 4000, recentPairs: 2, roleplayMode: 'dm' }
+  });
+
+  const allContent = result.messages.map((message) => message.content).join('\n');
+  assert.match(allContent, /我把钥匙交给沈观澜，请她先检查暗门/);
+  assert.match(allContent, /最近真实玩家输入：我把钥匙交给沈观澜，请她先检查暗门/);
+  assert.match(allContent, /只推进一个世界反馈节拍/);
+  assert.equal(result.messages.some((message) => (
+    message.role === 'user' && message.content === '（请继续推进剧情）'
+  )), false);
+  assert.equal(result.sections.historyBudget.latestUserAnchorIncluded, true);
+  assert.equal(result.sections.interactionContract.semantics.requestsMoreDialogue, true);
+  assert.ok(result.tokenEstimate <= 4000);
 });
 
 test('assemblePrompt injects the validated relationship subgraph', () => {
@@ -230,7 +344,7 @@ test('community preset budgeting preserves variable setup and output protocol in
       },
       {
         id: 'decorative', title: '可选装饰', enabled: true, extensions: presetExtension(4),
-        content: '次要装饰。'.repeat(900)
+        content: '次要装饰。'.repeat(40)
       }
     ],
     characterCard: { name: '测试角色', enabled: true },
@@ -244,6 +358,34 @@ test('community preset budgeting preserves variable setup and output protocol in
   assert.deepEqual(result.sections.promptModules.slice(0, 3), ['vars', 'output', 'body']);
   assert.ok(result.messages.some((message) => /<dream_plot>/.test(message.content)));
   assert.equal(result.sections.promptVariableWrites.appliedCount, 4);
+});
+
+test('coherence-sensitive community preset is suppressed instead of retaining a broken variable fragment', () => {
+  const presetExtension = (sequence) => ({
+    sillyTavernPreset: { presetTitle: '变量依赖预设', sourceFormat: 'sillytavern-preset', sequence }
+  });
+  const result = assemblePrompt({
+    promptModules: Array.from({ length: 19 }, (_, index) => ({
+      id: `variable-${index}`,
+      title: `变量段 ${index}`,
+      enabled: true,
+      content: index === 18
+        ? '{{getvar::story.voice}}最终输出必须带特殊标记。'
+        : `{{setvar::story.voice::第${index}段}}`,
+      extensions: presetExtension(index)
+    })),
+    characterCard: { name: '测试角色', enabled: true },
+    worldBook: [],
+    memory: { memoryCards: [] },
+    messages: [],
+    userMessage: '继续。',
+    options: { maxPromptTokens: 8000 }
+  });
+
+  const allContent = result.messages.map((message) => message.content).join('\n');
+  assert.doesNotMatch(allContent, /最终输出必须带特殊标记/);
+  assert.equal(result.sections.communityPresetIntegrity.preflightSuppressed.length, 1);
+  assert.equal(result.sections.communityPresetIntegrity.preflightSuppressed[0].reason, 'module-limit-would-split-variable-chain');
 });
 
 test('prompt budgeting protects the last two complete turns before optional community preset modules', () => {
@@ -356,9 +498,38 @@ test('scenario-container cards bind personality to worldbook NPCs instead of the
   assert.match(result.messages[0].content, /# 多角色场景卡/);
   assert.match(result.messages[0].content, /不是可直接发言的单一角色/);
   assert.doesNotMatch(result.messages[0].content, /日常能躺则躺/);
+  assert.doesNotMatch(result.messages[0].content, /某位长老正在突破/);
   assert.doesNotMatch(result.messages[0].content, /本轮可用角色：绝世仙宗/);
   assert.match(result.messages[0].content, /本轮可用角色：丝苻/);
+  assert.ok(result.messages.some((message) => /# 多角色压缩索引/.test(message.content)));
+  assert.deepEqual(result.sections.castIndex.names, ['丝苻', '竹青', '瑶台']);
   assert.ok(result.messages.some((message) => /丝苻身穿红色长袍/.test(message.content)));
+});
+
+test('scenario-container root scenario is never promoted to a global opening fact', () => {
+  const result = assemblePrompt({
+    promptModules: [],
+    characterCard: {
+      name: '绝世仙宗',
+      scenario: '某位单独 NPC 正在渡劫，这是导入残留字段。',
+      firstMessage: '刘一在杂役院醒来。',
+      enabled: true
+    },
+    worldBook: [
+      { id: 'diling', title: '地伶_基础信息', keywords: ['地伶'], content: '地伶是真传弟子。', enabled: true },
+      { id: 'luoyu', title: '洛玉_人物档案', keywords: ['洛玉'], content: '洛玉负责执法。', enabled: true },
+      { id: 'yaotai', title: '瑶台_角色设定', keywords: ['瑶台'], content: '瑶台修炼寒功。', enabled: true }
+    ],
+    memory: { worldState: { protagonist: { name: '刘一' } }, memoryCards: [] },
+    messages: [],
+    userMessage: '继续。'
+  });
+  const allContent = result.messages.map((message) => message.content).join('\n');
+
+  assert.equal(result.sections.characterContentMode, 'scenario-container');
+  assert.match(allContent, /主角锚点：刘一/);
+  assert.doesNotMatch(allContent, /某位单独 NPC 正在渡劫/);
+  assert.doesNotMatch(allContent, /开局条件：/);
 });
 
 test('community preset governance reports conflicting exclusive variables', () => {
@@ -394,7 +565,7 @@ test('near-turn response contract wins over a shorter preset unless the user ask
     memory: { memoryCards: [] },
     messages: [],
     userMessage: '继续处理眼前冲突。',
-    options: { responseLength: 'long' }
+    options: { responseLength: 'long', roleplayMode: 'director' }
   });
 
   assert.ok(result.messages.some((message) => /300-500 字/.test(message.content)));
@@ -467,7 +638,8 @@ test('assemblePrompt injects the persistent narrative route before story content
     options: { narrativeMode: 'stable' }
   });
 
-  assert.match(result.messages[0].content, /^# 叙事路线锁（稳定模式）/);
+  assert.match(result.messages[0].content, /^# 默认保护层（不可由预设静默覆盖）/);
+  assert.match(result.messages[0].content, /# 叙事路线锁（稳定模式）/);
   assert.match(result.messages[0].content, /纯荒野探险取代修行和宗门\/家族主线/);
   assert.equal(result.sections.narrativeMode, 'stable');
   assert.equal(result.sections.narrativeGenre, 'xianxia');
@@ -962,6 +1134,47 @@ test('assemblePrompt reserves room for triggered world simulation entries and bl
   assert.ok(result.sections.worldBookBudget.usedTokens <= 120);
 });
 
+test('assemblePrompt keeps protagonist and rule anchors ahead of equally-ranked presentation entries', () => {
+  const result = assemblePrompt({
+    promptModules: [],
+    characterCard: { name: '场景容器', role: '个人创作主角', enabled: true },
+    worldBook: [{
+      id: 'style',
+      title: '叙事文风',
+      content: '保持抒情。'.repeat(80),
+      constant: true,
+      priority: 80,
+      insertionOrder: 1,
+      enabled: true
+    }, {
+      id: 'protagonist',
+      title: '主角',
+      content: '刘一是唯一由玩家控制的主角。'.repeat(20),
+      constant: true,
+      priority: 80,
+      insertionOrder: 20,
+      enabled: true
+    }, {
+      id: 'world-rule',
+      title: '世界规则',
+      content: '能力与后果必须遵守既定规则。'.repeat(20),
+      constant: true,
+      priority: 80,
+      insertionOrder: 30,
+      enabled: true
+    }],
+    memory: { worldState: { protagonist: { name: '刘一' } }, memoryCards: [] },
+    messages: [],
+    userMessage: '继续。',
+    options: { maxWorldBookTokens: 180, maxConstantWorldBookEntryTokens: 56 }
+  });
+
+  assert.ok(result.sections.injectedCardIds.includes('protagonist'));
+  assert.ok(result.sections.injectedCardIds.includes('world-rule'));
+  assert.ok(result.messages.some((message) => /刘一是唯一由玩家控制/.test(message.content)));
+  assert.match(result.messages.map((message) => message.content).join('\n'), /刘一：当前主角/);
+});
+
 test('assemblePrompt budgets constant world book entries by authored priority and insertion order', () => {
   const result = assemblePrompt({
     promptModules: [],
@@ -1223,6 +1436,69 @@ test('assemblePrompt threads generation, character, and additional-source contex
   assert.deepEqual(result.sections.worldBookActivation.suppressed.generationTypeIds, ['normal-note']);
   assert.equal(result.sections.worldBookActivation.context.generationType, 'continue');
   assert.ok(result.messages.some((message) => /继续追踪冷月印/.test(message.content)));
+});
+
+test('assemblePrompt falls back to character card character_book.token_budget when maxWorldBookTokens is unset', () => {
+  // SillyTavern V2 规范：character_book.token_budget 限制世界书注入总 token。
+  // 当用户未显式配置 maxWorldBookTokens 时，应回退到卡片作者声明的预算。
+  const largeContent = '世界书条目内容。'.repeat(120);
+  const result = assemblePrompt({
+    promptModules: [],
+    characterCard: {
+      name: '带预算卡',
+      enabled: true,
+      extensions: {
+        local_roleplay_agent: {
+          worldBook: { tokenBudget: 100 }
+        }
+      }
+    },
+    worldBook: [{
+      id: 'budget-card',
+      title: '预算条目',
+      content: largeContent,
+      constant: true,
+      priority: 80,
+      insertionOrder: 1,
+      enabled: true
+    }],
+    memory: { worldState: {}, memoryCards: [] },
+    messages: [],
+    userMessage: '继续。',
+    options: { maxConstantWorldBookEntryTokens: 100 }
+  });
+  assert.ok(result.sections.worldBookBudget.usedTokens <= 100, '世界书总 token 不应超过卡片声明的 token_budget');
+});
+
+test('assemblePrompt prefers explicit maxWorldBookTokens over card token_budget', () => {
+  const largeContent = '世界书条目内容。'.repeat(120);
+  const result = assemblePrompt({
+    promptModules: [],
+    characterCard: {
+      name: '带预算卡',
+      enabled: true,
+      extensions: {
+        local_roleplay_agent: {
+          worldBook: { tokenBudget: 100 }
+        }
+      }
+    },
+    worldBook: [{
+      id: 'budget-card',
+      title: '预算条目',
+      content: largeContent,
+      constant: true,
+      priority: 80,
+      insertionOrder: 1,
+      enabled: true
+    }],
+    memory: { worldState: {}, memoryCards: [] },
+    messages: [],
+    userMessage: '继续。',
+    options: { maxWorldBookTokens: 200, maxConstantWorldBookEntryTokens: 200 }
+  });
+  assert.ok(result.sections.worldBookBudget.usedTokens <= 200);
+  assert.ok(result.sections.worldBookBudget.maxTokens <= 200);
 });
 
 function cardFixture(patch = {}) {

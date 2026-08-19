@@ -149,5 +149,6 @@ Agent = 角色与世界资产 + Prompt 装配 + 模型调用
 - 动作协议：[`docs/action-protocol-v1.md`](docs/action-protocol-v1.md)
 - 分层记忆系统：[`docs/memory-system-v1.md`](docs/memory-system-v1.md)
 - 剧情知识图谱：[`docs/knowledge-graph-v1.md`](docs/knowledge-graph-v1.md)
+- 剧情图谱工程契约：[`docs/graph-engineering-contract-v1.md`](docs/graph-engineering-contract-v1.md)
 
 `local-roleplay-agent` 继续作为仓库名、npm 包名和历史数据兼容标识；产品展示名称统一为 **Narrative Roleplay Engine / 叙界**。本地优先是部署与隐私特性，不再作为品牌名的一部分。

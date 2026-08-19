@@ -40,15 +40,15 @@ export function buildGeminiRequest({ provider, messages, stream = false }) {
   };
 }
 
-export async function callGemini({ provider, messages, fetchImpl = fetch }) {
+export async function callGemini({ provider, messages, fetchImpl = fetch, signal = null }) {
   const { url, init } = buildGeminiRequest({ provider, messages });
-  const response = await fetchImpl(url, init);
+  const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   return readGeminiResponse(response);
 }
 
-export async function streamGemini({ provider, messages, onToken, fetchImpl = fetch }) {
+export async function streamGemini({ provider, messages, onToken, fetchImpl = fetch, signal = null }) {
   const { url, init } = buildGeminiRequest({ provider, messages, stream: true });
-  const response = await fetchImpl(url, init);
+  const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`Gemini stream error ${response.status}: ${text.slice(0, 240)}`);

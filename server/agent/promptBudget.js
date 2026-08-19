@@ -1,4 +1,8 @@
 import { estimateTokens } from './token.js';
+import {
+  isContinuationSignal,
+  isMeaningfulUserMessage
+} from './interactionContract.js';
 
 const NOOP_PROMPT_MARKERS = [
   '本占位不参与运行',
@@ -29,9 +33,14 @@ const WORLD_STATE_IDENTITY_KEYS = new Set([
 const PROTECTED_MESSAGE_KINDS = new Set([
   'current-user',
   'response-contract',
+  'interaction-contract',
+  'psychological-progression-contract',
+  'cast-index',
   'character-anchor',
   'author-note',
   'history-recent',
+  'history-user-anchor',
+  'hard-facts-tail',
   'worldbook-anchor'
 ]);
 
@@ -199,59 +208,93 @@ export function selectRecentMessagesForPrompt(messages = [], {
   maxTokens,
   minCompleteTurns = 0
 } = {}) {
-  const source = (Array.isArray(messages) ? messages : []).filter((message) => !message?.excluded);
+  const rawSource = (Array.isArray(messages) ? messages : []).filter((message) => !message?.excluded);
+  const latestMeaningfulUserSourceIndex = findLatestMeaningfulUserIndex(rawSource);
+  const source = rawSource.map((message, index) => {
+    const continuation = String(message?.role || '').toLowerCase() === 'user'
+      && (message?.kind === 'continuation' || isContinuationSignal(message?.content));
+    return {
+      ...message,
+      _historySourceIndex: index,
+      ...(continuation ? {
+        content: '[玩家请求：不代替玩家作出重大决定，只继续一个世界反馈节拍]',
+        _promptContinuation: true
+      } : {})
+    };
+  });
+  const units = buildPromptHistoryUnits(source);
   const countLimit = Number.isFinite(Number(maxMessages)) && Number(maxMessages) >= 0
     ? Math.floor(Number(maxMessages))
     : source.length;
-  const candidates = source.slice(-countLimit);
-  const requiredIndexes = collectRecentCompleteTurnIndexes(candidates, minCompleteTurns);
+  const recentUnits = [];
+  let recentMessageCount = 0;
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    const unit = units[index];
+    if (countLimit === 0) break;
+    if (recentUnits.length && recentMessageCount + unit.messages.length > countLimit) break;
+    recentUnits.unshift(unit);
+    recentMessageCount += unit.messages.length;
+  }
+  const anchorUnit = units.find((unit) => unit.messages.some((message) => (
+    message._historySourceIndex === latestMeaningfulUserSourceIndex
+  )));
+  if (anchorUnit && !recentUnits.includes(anchorUnit)) recentUnits.unshift(anchorUnit);
+  const requiredUnits = new Set(recentUnits
+    .filter((unit) => unit.complete)
+    .slice(-Math.max(0, Math.floor(Number(minCompleteTurns) || 0)))
+    .map((unit) => unit.id));
+  if (anchorUnit) requiredUnits.add(anchorUnit.id);
+  const protectUnit = (unit) => unit.messages.map((message) => ({
+    ...message,
+    _promptTurnId: unit.id,
+    ...(requiredUnits.has(unit.id) ? { _promptProtected: true } : {}),
+    ...(message._historySourceIndex === latestMeaningfulUserSourceIndex
+      ? { _promptAnchor: 'latest-user' }
+      : {})
+  }));
   const budget = normalizeOptionalBudget(maxTokens);
   if (!budget) {
-    const selected = candidates.map((message, index) => (
-      requiredIndexes.has(index) ? { ...message, _promptProtected: true } : message
-    ));
+    const selected = recentUnits.flatMap(protectUnit);
     return {
       messages: selected,
       report: {
         maxTokens: null,
         usedTokens: estimateMessageTokens(selected),
-        omittedCount: source.length - selected.length,
-        protectedCount: requiredIndexes.size,
-        protectedTurns: Math.floor(requiredIndexes.size / 2),
+        omittedCount: Math.max(0, source.length - selected.length),
+        protectedCount: selected.filter((message) => message._promptProtected).length,
+        protectedTurns: [...requiredUnits].filter((id) => units.find((unit) => unit.id === id)?.complete).length,
+        latestUserAnchorIncluded: latestMeaningfulUserSourceIndex >= 0,
+        atomicTurnCount: recentUnits.filter((unit) => unit.complete).length,
         overflowTokens: 0
       }
     };
   }
-
-  const selected = [];
+  const selectedUnits = [];
   let usedTokens = 0;
-  for (let index = candidates.length - 1; index >= 0; index--) {
-    const message = candidates[index];
-    const tokens = estimateTokens(`${message?.role || 'user'}: ${message?.content || ''}`);
-    const required = requiredIndexes.has(index);
+  for (let index = recentUnits.length - 1; index >= 0; index -= 1) {
+    const unit = recentUnits[index];
+    const protectedMessages = protectUnit(unit);
+    const tokens = estimateMessageTokens(protectedMessages);
+    const required = requiredUnits.has(unit.id);
     if (usedTokens + tokens <= budget || required) {
-      selected.push(required ? { ...message, _promptProtected: true } : message);
+      selectedUnits.unshift(protectedMessages);
       usedTokens += tokens;
       continue;
     }
-    if (!selected.length) {
-      const content = limitTextToTokenBudget(message?.content, Math.max(1, budget - 4));
-      if (content) {
-        selected.push({ ...message, content });
-        usedTokens += estimateTokens(`${message?.role || 'user'}: ${content}`);
-      }
-    }
-    break;
+    // Optional history is admitted or omitted as a complete user→assistant unit.
+    // Never keep an action without its result, or a result without its action.
   }
-  selected.reverse();
+  const selected = selectedUnits.flat();
   return {
     messages: selected,
     report: {
       maxTokens: budget,
       usedTokens,
       omittedCount: Math.max(0, source.length - selected.length),
-      protectedCount: requiredIndexes.size,
-      protectedTurns: Math.floor(requiredIndexes.size / 2),
+      protectedCount: selected.filter((message) => message._promptProtected).length,
+      protectedTurns: [...requiredUnits].filter((id) => units.find((unit) => unit.id === id)?.complete).length,
+      latestUserAnchorIncluded: selected.some((message) => message._promptAnchor === 'latest-user'),
+      atomicTurnCount: selectedUnits.filter((unit) => unit.length === 2).length,
       overflowTokens: Math.max(0, usedTokens - budget)
     }
   };
@@ -263,6 +306,7 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
   const sourcePromptModuleIds = collectPromptModuleIds(source);
   if (!budget) return {
     messages: stripPromptMetadata(source),
+    messageInspection: inspectPromptMessages(source),
     report: {
       maxTokens: null,
       beforeTokens: estimateMessageTokens(source),
@@ -277,6 +321,7 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
   if (beforeTokens <= budget) {
     return {
       messages: stripPromptMetadata(source),
+      messageInspection: inspectPromptMessages(source),
       report: {
         maxTokens: budget,
         beforeTokens,
@@ -319,10 +364,18 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
       || left._index - right._index
     ));
   const removed = new Set();
+  const processedHistoryTurns = new Set();
   let currentTokens = beforeTokens;
   for (const message of removable) {
     if (currentTokens <= budget) break;
-    const messageTokens = estimateTokens(`${message.role || 'user'}: ${message.content || ''}`);
+    const historyTurnId = message._promptKind === 'history' ? String(message._promptTurnId || '') : '';
+    if (historyTurnId && processedHistoryTurns.has(historyTurnId)) continue;
+    const removalGroup = historyTurnId
+      ? source.filter((candidate) => candidate._promptTurnId === historyTurnId)
+      : [message];
+    if (removalGroup.some((candidate) => PROTECTED_MESSAGE_KINDS.has(candidate._promptKind))) continue;
+    if (historyTurnId) processedHistoryTurns.add(historyTurnId);
+    const messageTokens = estimateMessageTokens(removalGroup);
     const overflow = currentTokens - budget;
     if (message._promptKind === 'worldbook' && messageTokens - overflow >= 160) {
       const targetContentTokens = Math.max(80, messageTokens - overflow - 4);
@@ -338,9 +391,9 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
       omittedKinds['preset-critical-truncated'] = (omittedKinds['preset-critical-truncated'] || 0) + 1;
       continue;
     }
-    removed.add(message._index);
+    removalGroup.forEach((candidate) => removed.add(candidate._index));
     currentTokens -= messageTokens;
-    omittedKinds[message._promptKind] = (omittedKinds[message._promptKind] || 0) + 1;
+    omittedKinds[message._promptKind] = (omittedKinds[message._promptKind] || 0) + removalGroup.length;
   }
 
   const kept = source.filter((message) => !removed.has(message._index));
@@ -369,7 +422,7 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
 
   if (currentTokens > budget) {
     currentTokens = truncateProtectedMessagesToBudget(kept, {
-      kinds: ['history-recent', 'worldbook-anchor'],
+      kinds: ['history-recent', 'history-user-anchor', 'worldbook-anchor', 'cast-index', 'psychological-progression-contract'],
       budget,
       omittedKinds
     });
@@ -380,6 +433,7 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
 
   return {
     messages: stripPromptMetadata(kept),
+    messageInspection: inspectPromptMessages(kept),
     report: {
       maxTokens: budget,
       beforeTokens,
@@ -389,6 +443,21 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
       omittedPromptModuleIds: sourcePromptModuleIds.filter((id) => !retainedPromptModuleIdSet.has(id))
     }
   };
+}
+
+function inspectPromptMessages(messages = []) {
+  return (Array.isArray(messages) ? messages : []).map((message, index) => ({
+    order: index + 1,
+    role: String(message?.role || 'system'),
+    kind: String(message?._promptKind || 'message'),
+    moduleId: String(message?._promptModuleId || ''),
+    bundleKey: String(message?._promptBundleKey || ''),
+    depth: Number.isFinite(Number(message?._promptDepth)) ? Number(message._promptDepth) : null,
+    trigger: String(message?._promptTrigger || ''),
+    turnId: String(message?._promptTurnId || ''),
+    tokenEstimate: estimateTokens(`${message?.role || 'system'}: ${message?.content || ''}`),
+    content: String(message?.content || '')
+  }));
 }
 
 export function limitTextToTokenBudget(value, maxTokens) {
@@ -450,6 +519,7 @@ export function promptModuleRuntimePriority(module, index = 0, total = 1) {
   if (/活人感|人物塑造|角色塑造|characterization/.test(label)) score += 220;
   if (/反全知|视角约束|perspective/.test(label)) score += 180;
   if (/增加对白|对白|dialogue/.test(label)) score += 160;
+  if (/抢话|别抢话|对话增多|互动要求|控制权|player[-_ ]?agency|auto[-_ ]?player/.test(label)) score += 320;
   if (/文风|style|字数|篇幅/.test(label)) score += 80;
   if (/思维链|\bcot\b|thinking|reasoning|草稿/.test(label)) score -= 260;
   if (/schema\s*初始化|变量初始化/.test(label)) score += 70;
@@ -520,25 +590,41 @@ function detectExclusivePromptModuleConflicts(modules) {
     }));
 }
 
-function collectRecentCompleteTurnIndexes(messages, requestedTurns) {
-  const target = Math.max(0, Math.floor(Number(requestedTurns) || 0));
-  const selected = new Set();
-  let assistantIndex = -1;
-  let completedTurns = 0;
-  for (let index = messages.length - 1; index >= 0 && completedTurns < target; index -= 1) {
-    const role = String(messages[index]?.role || '').toLowerCase();
-    if (assistantIndex < 0 && role === 'assistant') {
-      assistantIndex = index;
+function buildPromptHistoryUnits(messages) {
+  const units = [];
+  let pendingUser = null;
+  const pushStandaloneUser = () => {
+    if (!pendingUser) return;
+    units.push({ id: `turn-${pendingUser._historySourceIndex}`, messages: [pendingUser], complete: false });
+    pendingUser = null;
+  };
+  for (const message of messages) {
+    const role = String(message?.role || '').toLowerCase();
+    if (role === 'user') {
+      pushStandaloneUser();
+      pendingUser = message;
       continue;
     }
-    if (assistantIndex >= 0 && role === 'user') {
-      selected.add(index);
-      selected.add(assistantIndex);
-      assistantIndex = -1;
-      completedTurns += 1;
+    if (role === 'assistant' && pendingUser) {
+      units.push({
+        id: `turn-${pendingUser._historySourceIndex}-${message._historySourceIndex}`,
+        messages: [pendingUser, message],
+        complete: true
+      });
+      pendingUser = null;
+      continue;
     }
+    units.push({ id: `turn-${message._historySourceIndex}`, messages: [message], complete: false });
   }
-  return selected;
+  pushStandaloneUser();
+  return units;
+}
+
+function findLatestMeaningfulUserIndex(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isMeaningfulUserMessage(messages[index])) return index;
+  }
+  return -1;
 }
 
 function truncateProtectedMessagesToBudget(messages, { kinds, budget, omittedKinds }) {

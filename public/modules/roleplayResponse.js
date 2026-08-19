@@ -17,6 +17,14 @@ const TOOL_ACTIVITY_BLOCKS = ['web_search', 'web_search_results', 'search_result
 const COMMUNITY_PANEL_BLOCKS = ['bginfor', 'catsay', 'dream_scene', 'dream_summary', 'dream_discuss', 'dream_big_discuss'];
 const STATUS_PANEL_BLOCKS = ['CharacterStatus'];
 const COMMUNITY_ACTION_BLOCKS = ['w2g', 'dream_option'];
+// Historical messages can still contain Tavern Helper / MVU state envelopes.
+// They must be re-parsed as hidden control data before display regex rules run,
+// otherwise community "variable complete" skins turn them into visible HTML/CSS.
+const STATE_UPDATE_BLOCKS = ['UpdateVariable', 'UpdateVariablevariable', 'JSONPatch'];
+const LEGACY_CHOICE_HEADING_PATTERN = /^\s*(?:>\s*)?[【\[]\s*(?:(?:天机|互动|剧情|行动|抉择|下一步)\s*)?(?:选项|行动)\s*(?:[：:][^】\]]*)?[】\]]\s*$/u;
+const LEGACY_CHOICE_LINE_PATTERN = /^\s*(?:[-*•·]\s*)?(?:(?:选项|行动)\s*)?(?:[A-FＡ-Ｆ]|\d{1,2})\s*(?:[:：.、)）-]\s*)(.+?)\s*$/iu;
+const MODEL_RECOMMENDATION_HEADING_PATTERN = /^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*推荐(?:动作|行动|选项)\s*(?:[（(][^）)]{0,80}[）)])?\s*(?:\*\*|__)?\s*[：:]?\s*$/u;
+const MODEL_RECOMMENDATION_LINE_PATTERN = /^\s*[-*•·]\s+(.+?)\s*$/u;
 const PRESENTATION_BLOCKS = [
   ...ROLEPLAY_BLOCKS,
   ...ANALYSIS_BLOCKS,
@@ -24,19 +32,26 @@ const PRESENTATION_BLOCKS = [
   ...TOOL_ACTIVITY_BLOCKS,
   ...COMMUNITY_PANEL_BLOCKS,
   ...STATUS_PANEL_BLOCKS,
-  ...COMMUNITY_ACTION_BLOCKS
+  ...COMMUNITY_ACTION_BLOCKS,
+  ...STATE_UPDATE_BLOCKS
 ];
-const CONTROL_BLOCK_START = /<(?:recommended_actions|lra-actions|lra-mvu-patch|mvu_patch)\b|```(?:lra-actions|lra-mvu-patch)\b/i;
+const CONTROL_BLOCK_START = /<(?:recommended_actions|turn[_-]?frame|lra-actions|lra-mvu-patch|mvu_patch|updatevariable(?:variable)?|jsonpatch)\b|```(?:lra-turn-frame|lra-actions|lra-mvu-patch)\b/i;
 const CONTROL_PREFIXES = [
   ...PRESENTATION_BLOCKS.map((tag) => `<${String(tag).toLowerCase()}`),
   ...TRANSPARENT_WRAPPERS.map((tag) => `<${String(tag).toLowerCase()}`),
   '<recommended_actions',
+  '<turn_frame',
+  '<turnframe',
+  '<turn-frame',
   '<lra-actions',
   '<lra-mvu-patch',
   '<mvu_patch',
   '```lra-actions',
+  '```lra-turn-frame',
   '```lra-mvu-patch'
 ];
+const STREAM_MODEL_RECOMMENDATION_START = /(?:^|\n)\s*(?:-{3,}\s*\n+)?\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*推荐(?:动作|行动|选项)\s*(?:[（(][^）)\n]{0,80}[）)])?\s*(?:\*\*|__)?\s*[：:]?\s*(?:\n|$)/u;
+const STREAM_LEGACY_CHOICE_START = /(?:^|\n)\s*(?:>\s*)?[【\[]\s*(?:(?:天机|互动|剧情|行动|抉择|下一步)\s*)?(?:选项|行动)\s*(?:[：:][^】\]\n]*)?[】\]]\s*(?:\n|$)/u;
 
 export function extractRoleplayPresentation(rawContent) {
   const source = String(rawContent || '');
@@ -44,7 +59,8 @@ export function extractRoleplayPresentation(rawContent) {
     return { content: '', speaker: '', protocolDetected: true, panels: {}, recommendedActions: [] };
   }
   const normalizedSource = unwrapTransparentBlocks(source);
-  const presentationSource = stripRecommendedActionBlocks(normalizedSource);
+  const legacyChoices = extractLegacyRecommendedActions(normalizedSource);
+  const presentationSource = stripRecommendedActionBlocks(legacyChoices.content);
   const protocolDetected = [...PRESENTATION_BLOCKS, ...TRANSPARENT_WRAPPERS]
     .some((tag) => new RegExp(`<${escapeRegExp(tag)}(?=[\\s>/])`, 'i').test(source));
   const plotBlocks = extractBlocks(presentationSource, 'plot', { includePartial: true });
@@ -65,11 +81,19 @@ export function extractRoleplayPresentation(rawContent) {
   return {
     content,
     speaker,
+    emotion: extractEmotion(normalizedSource),
     protocolDetected,
     recommendedActions: sanitizeRecommendedActions([
       ...extractRecommendedActions(normalizedSource),
-      ...extractCommunityActions(normalizedSource)
+      ...extractCommunityActions(normalizedSource),
+      ...legacyChoices.actions
     ], 6),
+    recommendedActionPresentation: legacyChoices.presentation
+      || (extractRecommendedActions(normalizedSource).length >= 2
+        ? { source: 'model-recommended-actions', title: '', hint: '' }
+        : extractCommunityActions(normalizedSource).length >= 2
+          ? { source: 'community-action-block', title: '', hint: '' }
+          : null),
     panels: compactPanels({
       directorNotes,
       sceneStatus: cleanPanelText([
@@ -121,6 +145,60 @@ function extractCommunityActions(source) {
     .map((line) => line.match(/^\s*(?:[A-FＡ-Ｆ]|\d{1,2})\s*[:：.)、-]\s*(.+?)\s*$/i)?.[1] || '')
     .map((line) => line.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim())
     .filter(Boolean));
+}
+
+function extractLegacyRecommendedActions(source) {
+  const lines = String(source || '').split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) => (
+    LEGACY_CHOICE_HEADING_PATTERN.test(line)
+    || MODEL_RECOMMENDATION_HEADING_PATTERN.test(line)
+  ));
+  if (headingIndex < 0) return { content: String(source || ''), actions: [], presentation: null };
+  const modelRecommendation = MODEL_RECOMMENDATION_HEADING_PATTERN.test(lines[headingIndex]);
+
+  const actions = [];
+  let cursor = headingIndex + 1;
+  while (cursor < lines.length) {
+    const line = lines[cursor];
+    if (!line.trim()) {
+      cursor += 1;
+      continue;
+    }
+    const match = line.match(LEGACY_CHOICE_LINE_PATTERN)
+      || line.match(MODEL_RECOMMENDATION_LINE_PATTERN);
+    if (!match) break;
+    actions.push(match[1]);
+    cursor += 1;
+  }
+
+  const normalizedActions = sanitizeRecommendedActions(actions, 6);
+  if (normalizedActions.length < 2) return { content: String(source || ''), actions: [], presentation: null };
+  let blockStart = headingIndex;
+  while (blockStart > 0 && !lines[blockStart - 1].trim()) blockStart -= 1;
+  if (blockStart > 0 && /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/u.test(lines[blockStart - 1])) blockStart -= 1;
+  return {
+    content: [...lines.slice(0, blockStart), ...lines.slice(cursor)]
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim(),
+    actions: normalizedActions,
+    presentation: modelRecommendation
+      ? { source: 'model-recommendation-block', title: '', hint: '' }
+      : parseLegacyChoicePresentation(lines[headingIndex])
+  };
+}
+
+function parseLegacyChoicePresentation(line) {
+  const heading = String(line || '').replace(/^\s*>\s*/u, '').trim();
+  const inner = heading.replace(/^[【\[]\s*/u, '').replace(/\s*[】\]]$/u, '').trim();
+  const separator = inner.search(/[：:]/u);
+  const rawTitle = (separator >= 0 ? inner.slice(0, separator) : inner).trim();
+  const hint = separator >= 0 ? inner.slice(separator + 1).trim() : '';
+  return {
+    source: 'community-choice-block',
+    title: rawTitle || '天机选项',
+    hint
+  };
 }
 
 function parseRecommendedActions(value) {
@@ -200,6 +278,12 @@ function stripProtocolBlocks(source) {
 
 function unwrapTransparentBlocks(source) {
   let result = String(source || '');
+  // emotion 标签是元数据，在解析链路最前面剥离，避免流式过程中 visible 内容跳变
+  // 先剥离完整闭合的 emotion 标签，再剥离未闭合的半截 emotion 开头（流式 buffer 中常见）
+  result = result
+    .replace(/<emotion\b[^>]*>[\s\S]*?<\/emotion\s*>/gi, '')
+    .replace(/<emotion\b[^>]*>[\s\S]*$/i, '')
+    .replace(/<emotion\b[^>]*>$/i, '');
   TRANSPARENT_WRAPPERS.forEach((tag) => {
     result = result
       .replace(new RegExp(`<${tag}\\b[^>]*>`, 'ig'), '')
@@ -212,6 +296,10 @@ function truncateControlBlocks(source) {
   const text = String(source || '');
   const match = text.match(CONTROL_BLOCK_START);
   let cutIndex = match ? Number(match.index) : text.length;
+  const recommendationMatch = text.match(STREAM_MODEL_RECOMMENDATION_START);
+  if (recommendationMatch) cutIndex = Math.min(cutIndex, Number(recommendationMatch.index));
+  const legacyChoiceMatch = text.match(STREAM_LEGACY_CHOICE_START);
+  if (legacyChoiceMatch) cutIndex = Math.min(cutIndex, Number(legacyChoiceMatch.index));
   const lower = text.toLowerCase();
   for (const prefix of CONTROL_PREFIXES) {
     for (let length = 1; length < prefix.length; length += 1) {
@@ -265,4 +353,13 @@ function looksLikePartialProtocolPrefix(source) {
   const value = String(source || '').trimStart().toLowerCase();
   if (!value) return false;
   return CONTROL_PREFIXES.some((start) => start.startsWith(value));
+}
+
+const EMOTION_PATTERN = /<emotion\b[^>]*>\s*([\s\S]*?)\s*<\/emotion\s*>/i;
+
+function extractEmotion(source) {
+  const match = String(source || '').match(EMOTION_PATTERN);
+  if (!match) return '';
+  const emotion = match[1].trim().toLowerCase();
+  return emotion.slice(0, 30);
 }

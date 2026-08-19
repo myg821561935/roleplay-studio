@@ -79,3 +79,19 @@ test('action history replays from baseline after a regenerated reply', () => {
   assert.deepEqual(replayed.memory.worldState.protagonist.inventory, ['密信']);
   assert.equal(replayed.results.get('a1').status, 'accepted');
 });
+
+test('action history never replays an assistant result excluded by narrative repair', () => {
+  const initial = seededMemory();
+  const messages = [{
+    id: 'a-invalid',
+    role: 'assistant',
+    contextExcluded: true,
+    actionEnvelope: {
+      actions: [{ type: 'state.append', path: 'protagonist.inventory', value: '幻觉钥匙' }]
+    }
+  }];
+
+  const replayed = replayActionHistory({ memory: initial, messages });
+  assert.deepEqual(replayed.memory.worldState.protagonist.inventory, []);
+  assert.equal(replayed.results.has('a-invalid'), false);
+});

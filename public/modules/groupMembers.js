@@ -79,7 +79,7 @@ export function createGroupMembersController({
       const empty = documentObject.createElement('div');
       empty.className = 'empty-state';
       empty.style.padding = '12px';
-      empty.textContent = '暂无群聊成员，点击「+ 添加成员」创建。';
+      empty.textContent = '暂无互动角色，点击「+ 添加角色」创建。';
       els.groupMembersList.append(empty);
       return;
     }

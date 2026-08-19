@@ -18,19 +18,73 @@ export function formatSessionOptionLabel(sessionId, summaries = []) {
 export function createSessionController({
   els,
   apiRequest,
+  storage = null,
   getCurrentSessionId,
   setCurrentSessionId,
   loadState,
   setStatus,
   humanizeApiError
 }) {
+  let sessionSearchQuery = '';
+  let lastSessionIds = [];
+  let lastSummaries = [];
+  let searchInputBound = false;
+
+  function ensureSessionSearchInput(sessionIds) {
+    if (!els.sessionSelect || !els.sessionSelect.parentElement) return;
+    const showSearch = sessionIds.length > 8;
+    const existing = els.sessionSelect.parentElement.querySelector('.session-search-input');
+    if (!showSearch) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (existing) return;
+    const input = document.createElement('input');
+    input.type = 'search';
+    input.className = 'session-search-input form-input compact';
+    input.placeholder = '搜索会话…';
+    input.setAttribute('aria-label', '搜索会话');
+    input.value = sessionSearchQuery;
+    if (!searchInputBound) {
+      searchInputBound = true;
+      input.addEventListener('input', (event) => {
+        sessionSearchQuery = String(event.target.value || '').trim().toLowerCase();
+        renderSessionSelect(lastSessionIds, lastSummaries);
+        const node = els.sessionSelect.parentElement.querySelector('.session-search-input');
+        if (node) {
+          node.focus();
+          const len = node.value.length;
+          try { node.setSelectionRange(len, len); } catch { /* ignore */ }
+        }
+      });
+    }
+    els.sessionSelect.parentElement.insertBefore(input, els.sessionSelect);
+  }
+
   function renderSessionSelect(sessions, summaries = []) {
     if (!els.sessionSelect) return;
-    els.sessionSelect.innerHTML = '';
     const currentSessionId = getCurrentSessionId();
     const sessionIds = Array.from(new Set(['main', currentSessionId, ...(Array.isArray(sessions) ? sessions : [])]))
       .filter(Boolean);
-    for (const sessionId of sessionIds) {
+    lastSessionIds = sessionIds;
+    lastSummaries = summaries;
+    ensureSessionSearchInput(sessionIds);
+
+    els.sessionSelect.innerHTML = '';
+    const query = sessionSearchQuery;
+    const filteredIds = sessionIds.filter((sessionId) => {
+      if (!query) return true;
+      const label = formatSessionOptionLabel(sessionId, summaries).toLowerCase();
+      return label.includes(query) || String(sessionId).toLowerCase().includes(query);
+    });
+    if (!filteredIds.length && query) {
+      const option = document.createElement('option');
+      option.disabled = true;
+      option.textContent = '无匹配会话';
+      els.sessionSelect.appendChild(option);
+      return;
+    }
+    for (const sessionId of filteredIds) {
       const option = document.createElement('option');
       option.value = sessionId;
       option.textContent = formatSessionOptionLabel(sessionId, summaries);
@@ -133,7 +187,28 @@ export function createSessionController({
     }
   }
 
+  async function deleteCurrentSession() {
+    const currentSessionId = getCurrentSessionId();
+    if (!currentSessionId || currentSessionId === 'main') {
+      setStatus(els.appStatus, '默认会话不可删除', 'error');
+      return;
+    }
+    const label = formatSessionOptionLabel(currentSessionId, []);
+    if (!window.confirm(`确认删除会话「${label}」？\n此操作不可撤销，建议先导出备份。`)) return;
+
+    try {
+      await apiRequest(`/api/sessions/${encodeURIComponent(currentSessionId)}`, { method: 'DELETE' });
+      setCurrentSessionId('main');
+      storage?.removeItem?.('localRoleplaySessionId');
+      await loadState();
+      setStatus(els.appStatus, '会话已删除', 'ok');
+    } catch (error) {
+      setStatus(els.appStatus, `删除失败：${humanizeApiError(error)}`, 'error');
+    }
+  }
+
   return {
+    deleteCurrentSession,
     exportCurrentSession,
     handleImportSessionFile,
     handleNewSessionSubmit,

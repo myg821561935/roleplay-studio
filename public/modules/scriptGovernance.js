@@ -1,5 +1,5 @@
-import { renderSafeMarkdown } from '../markdown.js';
 import { applyLightFrontendDisplayTransforms } from './lightFrontend.js';
+import { renderNarrativeMarkdown } from './narrativeText.js';
 import {
   applySandboxTransforms,
   assessScriptRisk,
@@ -173,7 +173,11 @@ export function createScriptGovernanceController({
       role,
       context
     });
-    container.innerHTML = renderSafeMarkdown(displayContent);
+    container.innerHTML = renderNarrativeMarkdown(displayContent, {
+      role,
+      speaker: context?.speaker || '',
+      portraitBySpeaker: context?.portraitBySpeaker || {}
+    });
 
     if (blockedAssessments.length) {
       const blocked = documentObject.createElement('div');

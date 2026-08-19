@@ -101,7 +101,10 @@ export function replayActionHistory({ memory, messages, now = () => new Date() }
   const checkpointIndex = checkpointId ? safeMessages.findIndex((message) => message?.id === checkpointId) : -1;
   const replayMessages = checkpointIndex >= 0 ? safeMessages.slice(checkpointIndex + 1) : safeMessages;
   for (const message of replayMessages) {
-    if (message?.role !== 'assistant' || !message.actionEnvelope) continue;
+    if (message?.role !== 'assistant'
+      || message?.contextExcluded === true
+      || message?.excluded === true
+      || !message.actionEnvelope) continue;
     const adjudicated = adjudicateActionEnvelope({ memory: next, envelope: message.actionEnvelope, now });
     Object.assign(next, adjudicated.memory);
     results.set(message.id, adjudicated.result);

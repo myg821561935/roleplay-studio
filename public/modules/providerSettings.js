@@ -309,6 +309,8 @@ export function createProviderSettingsController({
       baseUrl: String(els.providerBaseUrl?.value || '').trim(),
       apiKey: resolveApiKeyForSave(),
       model: resolveSelectedProviderModel(),
+      ttsModel: String(els.providerTtsModel?.value || '').trim(),
+      sttModel: String(els.providerSttModel?.value || '').trim(),
       temperature: Number(els.providerTemperature?.value || 0.9),
       maxTokens: Number(els.providerMaxTokens?.value || 2000),
       reasoningMode: normalizeProviderReasoningMode(els.providerReasoningMode?.value),
@@ -323,6 +325,18 @@ export function createProviderSettingsController({
     const activeId = providersConfig.activeProviderId || providers[0]?.id || '';
     const provider = providers.find((item) => item.id === activeId) || providers[0] || {};
 
+    if (!provider.id && !providers.length) {
+      els.providerPreset.value = 'deepseek';
+      applyProviderPreset('deepseek');
+      els.providerApiKey.value = '';
+      setStatus(
+        els.providerStatus,
+        '已套用 DeepSeek 模板，填入 API Key 后点“测试连接”或“保存接口”即可开始',
+        ''
+      );
+      return;
+    }
+
     els.providerPreset.value = resolveProviderPreset(provider);
     els.providerKind.value = normalizeProviderKind(provider.kind);
     els.providerId.value = provider.id || activeId || 'local';
@@ -330,6 +344,8 @@ export function createProviderSettingsController({
     els.providerApiKey.value = provider.apiKey ? MASKED_PROVIDER_SECRET : '';
     els.providerTemperature.value = normalizeProviderNumber(provider.temperature, 0.9);
     els.providerMaxTokens.value = normalizeProviderNumber(provider.maxTokens, 2000);
+    if (els.providerTtsModel) els.providerTtsModel.value = String(provider.ttsModel || '');
+    if (els.providerSttModel) els.providerSttModel.value = String(provider.sttModel || '');
     if (els.providerReasoningMode) els.providerReasoningMode.value = normalizeProviderReasoningMode(provider.reasoningMode);
     els.providerHeaders.value = prettyJson(provider.headers || {});
     renderProviderModelOptions(els.providerPreset.value, provider.model);

@@ -106,7 +106,10 @@ export function normalizeImmersiveRecords(value, fallbackTitle) {
     if (typeof record !== 'object' || record === null) {
       return { title: fallbackTitle, detail: String(record), meta: '' };
     }
-    const title = record.title || record.name || record.item || record.subject || record.id
+    const relationFrom = String(record.from || record.source || '').trim();
+    const relationTo = String(record.to || record.target || record.character || '').trim();
+    const relationTitle = relationFrom && relationTo ? `${relationFrom} ↔ ${relationTo}` : '';
+    const title = record.title || relationTitle || record.name || record.item || record.subject || record.id
       || record.time || `${fallbackTitle} ${index + 1}`;
     const status = formatImmersiveRecordStatus(record.status);
     const restrictions = Array.isArray(record.limits || record.restrictions)
@@ -120,12 +123,16 @@ export function normalizeImmersiveRecords(value, fallbackTitle) {
       restrictions ? `限制：${restrictions}` : '',
       consequences ? `后果：${consequences}` : ''
     ].filter(Boolean).join('；');
+    const relationDetail = [record.type, record.relation, record.relationship, record.details]
+      .filter(Boolean)
+      .join(' · ');
     const detail = record.content || record.fact || record.event || record.state || record.stance
-      || record.description || record.progress || record.notes || resourceDetail || status
+      || record.objective || record.description || record.progress || record.notes || record.details || relationDetail || resourceDetail || status
       || formatImmersiveRecordFallback(record);
     const meta = [
       record.time && record.time !== title ? record.time : '',
       detail !== status ? status : '',
+      relationTitle && record.type ? record.type : '',
       record.holder,
       record.source
     ].filter(Boolean).join(' · ');
@@ -161,6 +168,14 @@ export function formatImmersiveRecordFallback(record) {
     .join('；');
 }
 
+export function formatImmersiveLocation(value) {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  return [value.current, value.name, value.label, value.area, value.details, value.description]
+    .map((item) => String(item || '').trim())
+    .find(Boolean) || '';
+}
+
 export function formatImmersiveMemoryMeta(fact) {
   const timestamp = fact?.updatedAt || fact?.createdAt || fact?.time || '';
   const category = fact?.category || fact?.type || fact?.source || '';
@@ -182,6 +197,15 @@ export function resolveLatestRoleplayPanels(messages, extractRoleplayPresentatio
     if (Object.keys(panels).length) return panels;
   }
   return {};
+}
+
+export function resolveLatestTurnFrame(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== 'assistant') continue;
+    if (message?.turnFrame?.validation?.status === 'accepted') return message.turnFrame;
+  }
+  return null;
 }
 
 export function inferStatusProtagonistName(characterStatus) {
@@ -241,20 +265,41 @@ export function createImmersiveDossierToolkit({
     grid.className = className;
     facts.forEach(({ label, value }) => {
       const item = documentObject.createElement('div');
-      if (String(value).length > 34) item.classList.add('is-wide');
+      const valStr = String(value || '').trim();
+      if (valStr.length > 34) item.classList.add('is-wide');
       const term = documentObject.createElement('dt');
       term.textContent = label;
       const description = documentObject.createElement('dd');
-      description.textContent = value;
-      const meterMatch = String(value).match(/(\d+)\s*\/\s*(\d+)/);
+
+      const meterMatch = valStr.match(/(\d+)\s*\/\s*(\d+)/);
+      const percentMatch = !meterMatch ? valStr.match(/(?:^|\s)(\d{1,3})%/) : null;
+
       if (meterMatch && Number(meterMatch[2]) > 0) {
+        description.textContent = valStr;
         const meter = documentObject.createElement('span');
         meter.className = 'immersive-profile-meter';
         const fill = documentObject.createElement('i');
         fill.style.width = `${Math.min(100, Math.round((Number(meterMatch[1]) / Number(meterMatch[2])) * 100))}%`;
         meter.append(fill);
         description.append(meter);
+      } else if (percentMatch) {
+        description.textContent = valStr;
+        const meter = documentObject.createElement('span');
+        meter.className = 'immersive-profile-meter';
+        const fill = documentObject.createElement('i');
+        fill.style.width = `${Math.min(100, Number(percentMatch[1]))}%`;
+        meter.append(fill);
+        description.append(meter);
+      } else if (valStr.length > 0 && valStr.length <= 16 && !valStr.includes(' ')) {
+        // Tag-like fields: wrap in badge
+        const badge = documentObject.createElement('span');
+        badge.className = 'immersive-badge';
+        badge.textContent = valStr;
+        description.append(badge);
+      } else {
+        description.textContent = valStr;
       }
+
       item.append(term, description);
       grid.append(item);
     });

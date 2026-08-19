@@ -178,6 +178,8 @@ function normalizeProviders(value) {
       baseUrl: String(provider.baseUrl || ''),
       apiKey: String(provider.apiKey || ''),
       model: String(provider.model || ''),
+      ttsModel: String(provider.ttsModel || ''),
+      sttModel: String(provider.sttModel || ''),
       temperature: normalizeFiniteNumber(provider.temperature, 0.9),
       maxTokens: normalizePositiveFiniteNumber(provider.maxTokens, 2000),
       reasoningMode: normalizeReasoningMode(provider.reasoningMode),
@@ -211,6 +213,7 @@ function isPlainObject(value) {
 }
 
 const GROUP_MEMBER_COMPATIBILITY_FIELDS = [
+  'talkativeness',
   'speechStyle',
   'exampleDialog',
   'knowledge',
@@ -241,6 +244,13 @@ function normalizeGroupMember(member) {
     if (!Object.hasOwn(member, field)) continue;
     const value = normalizeJsonMetadata(member[field]);
     if (value !== undefined) normalized[field] = value;
+  }
+  // 话唠度：clamp 到 (0, 1]，非法值丢弃（选择器侧默认 0.5）
+  const talkativeness = Number(normalized.talkativeness);
+  if (Number.isFinite(talkativeness) && talkativeness > 0 && talkativeness <= 1) {
+    normalized.talkativeness = talkativeness;
+  } else {
+    delete normalized.talkativeness;
   }
   return normalized;
 }
@@ -380,6 +390,7 @@ export function normalizeWorldBookEntry(entry) {
 export function normalizeCharacterCard(card = {}) {
   return {
     name: String(card.name || '未命名主角'),
+    nickname: String(card.nickname || ''),
     role: String(card.role || '个人创作主角'),
     description: String(card.description || ''),
     personality: String(card.personality || ''),
@@ -387,14 +398,21 @@ export function normalizeCharacterCard(card = {}) {
     firstMessage: String(card.firstMessage || ''),
     exampleDialog: Array.isArray(card.exampleDialog) ? card.exampleDialog.map(String) : [],
     creatorNotes: String(card.creatorNotes || ''),
+    creatorNotesMultilingual: isPlainObject(card.creatorNotesMultilingual) ? card.creatorNotesMultilingual : {},
     systemPrompt: String(card.systemPrompt || ''),
     postHistoryInstructions: String(card.postHistoryInstructions || ''),
     alternateGreetings: Array.isArray(card.alternateGreetings) ? card.alternateGreetings.map(String) : [],
+    groupOnlyGreetings: Array.isArray(card.groupOnlyGreetings) ? card.groupOnlyGreetings.map(String) : [],
     tags: Array.isArray(card.tags) ? card.tags.map(String) : [],
     creator: String(card.creator || ''),
     characterVersion: String(card.characterVersion || ''),
+    source: Array.isArray(card.source) ? card.source.map(String) : [],
+    assets: Array.isArray(card.assets) ? card.assets : [],
+    creationDate: Number.isFinite(Number(card.creationDate)) ? Math.floor(Number(card.creationDate)) : null,
+    modificationDate: Number.isFinite(Number(card.modificationDate)) ? Math.floor(Number(card.modificationDate)) : null,
     sourceSpec: String(card.sourceSpec || ''),
     portrait: normalizeCharacterPortrait(card.portrait),
+    expressions: normalizeCharacterExpressions(card.expressions),
     extensions: isPlainObject(card.extensions) ? card.extensions : {},
     raw: isPlainObject(card.raw) ? card.raw : undefined,
     enabled: card.enabled !== false
@@ -416,4 +434,16 @@ function normalizeCharacterPortrait(value) {
     height: Math.max(0, Math.trunc(normalizeFiniteNumber(value.height, 0))),
     source: String(value.source || 'embedded-character-card')
   };
+}
+
+function normalizeCharacterExpressions(value) {
+  if (!isPlainObject(value)) return undefined;
+  const result = {};
+  for (const [emotion, portrait] of Object.entries(value)) {
+    const normalized = normalizeCharacterPortrait(portrait);
+    if (normalized) {
+      result[String(emotion).trim().toLowerCase()] = normalized;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
 }

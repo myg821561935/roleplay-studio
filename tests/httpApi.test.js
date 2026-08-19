@@ -23,6 +23,24 @@ test('GET /api/state returns config and session', async () => {
   assert.equal(payload.session.settings.activeAgentProfileId, 'story-director');
 });
 
+test('POST /api/sessions/:id/prompt-preview exposes the assembled local request without calling a provider', async () => {
+  const app = createApp({ rootDir: await createTestRoot() });
+  const response = await request(app, {
+    method: 'POST',
+    url: '/api/sessions/main/prompt-preview',
+    headers: { 'content-type': 'application/json' },
+    body: { content: '我先观察门外的动静。' }
+  });
+  const payload = response.json();
+
+  assert.equal(response.status, 200);
+  assert.ok(payload.tokenEstimate > 0);
+  assert.ok(Array.isArray(payload.promptStudio.blocks));
+  assert.ok(Array.isArray(payload.promptStudio.modules));
+  assert.equal(payload.promptStudio.integrity.status, 'complete');
+  assert.equal(payload.request.messages.at(-1).content, '我先观察门外的动静。');
+});
+
 test('GET /api/sessions/:id/knowledge-graph exposes a bounded local projection and audit', async () => {
   const app = createApp({ rootDir: await createTestRoot() });
   await request(app, { url: '/api/state' });
@@ -227,7 +245,7 @@ test('light frontend MVU API applies revisioned declarative patches', async () =
   assert.equal(first.status, 200);
   assert.deepEqual(first.json().mvu, {
     enabled: true,
-    values: { relationships: { shen: 10 }, clues: 1 },
+    values: { chat: { relationships: { shen: 10 }, clues: 1 }, global: {} },
     revision: 1
   });
   assert.equal(conflict.status, 409);
@@ -518,6 +536,36 @@ test('story project API previews deletion, backs up, and detaches its preserved 
   assert.equal(detachedState.storyProjectId, '');
   assert.equal(detachedState.basePackId, 'xianxia');
   assert.equal(detachedState.provenance.bindingHistory.at(-1).reason, 'story-project-deleted');
+});
+
+test('story project API can delete its linked running sessions after backup', async () => {
+  const app = createApp({ rootDir: await createTestRoot() });
+  const project = (await request(app, {
+    method: 'POST',
+    url: '/api/story-projects',
+    headers: { 'content-type': 'application/json' },
+    body: { basePackId: 'xianxia', title: '待删除故事' }
+  })).json().project;
+  const session = (await request(app, {
+    method: 'POST',
+    url: `/api/story-projects/${encodeURIComponent(project.id)}/sessions`,
+    headers: { 'content-type': 'application/json' },
+    body: {}
+  })).json().session;
+
+  const response = await request(app, {
+    method: 'DELETE',
+    url: `/api/story-projects/${encodeURIComponent(project.id)}`,
+    headers: { 'content-type': 'application/json' },
+    body: { confirmDelete: true, deleteSessions: true }
+  });
+  const sessions = (await request(app, { url: '/api/sessions' })).json().sessions;
+
+  assert.equal(response.status, 200);
+  assert.ok(response.json().backup.id);
+  assert.deepEqual(response.json().deletedSessionIds, [session.id]);
+  assert.deepEqual(response.json().preservedSessionIds, []);
+  assert.equal(sessions.includes(session.id), false);
 });
 
 test('PUT /api/character-card saves character card', async () => {
@@ -3121,6 +3169,8 @@ test('POST /api/chat/stream returns SSE chunks and persists the turn', async () 
   assert.match(response.headers['content-type'], /^text\/event-stream/);
   assert.match(response.text, /event: token/);
   assert.match(response.text, /流式回应/);
+  assert.match(response.text, /event: phase/);
+  assert.match(response.text, /"phase":"finalizing"/);
   assert.match(response.text, /event: done/);
   assert.equal(state.session.messages.length, 2);
   assert.equal(state.session.messages[1].content, '流式回应：我拔刀。');
@@ -3150,6 +3200,41 @@ test('POST /api/chat/stream reports reasoning-only output without saving an empt
   assert.match(response.text, /event: error/);
   assert.match(response.text, /PROVIDER_REASONING_ONLY_RESPONSE/);
   assert.equal(state.session.messages.length, 0);
+});
+
+test('POST /api/chat/stream retains an aborted partial turn and reports partialMessageId via SSE error', async () => {
+  const rootDir = await createTestRoot();
+  const app = createApp({
+    rootDir,
+    providerClient: {
+      stream: async ({ onToken }) => {
+        await onToken('夜色沉沉，更夫的梆子声由远及近');
+        await onToken('，沈观澜在檐下按住了剑鞘。');
+        const abortError = new Error('This operation was aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+    }
+  });
+  await saveHttpProvider(app);
+
+  const response = await request(app, {
+    method: 'POST',
+    url: '/api/chat/stream',
+    headers: { 'content-type': 'application/json' },
+    body: { content: '夜探沈府。' }
+  });
+  const state = (await request(app, { url: '/api/state' })).json();
+
+  assert.equal(response.status, 200);
+  assert.match(response.text, /event: error/);
+  assert.match(response.text, /GENERATION_ABORTED/);
+  assert.match(response.text, /"aborted":true/);
+  assert.match(response.text, /"partialMessageId":"assistant-/);
+  // 服务端已留存 partial 回合：user + aborted assistant
+  assert.equal(state.session.messages.length, 2);
+  assert.equal(state.session.messages[1].aborted, true);
+  assert.equal(state.session.messages[1].content, '夜色沉沉，更夫的梆子声由远及近，沈观澜在檐下按住了剑鞘。');
 });
 
 test('POST /api/chat/stream reports exhausted provider quota without saving the opening turn', async () => {

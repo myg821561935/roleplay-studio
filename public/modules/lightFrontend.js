@@ -44,6 +44,10 @@ function degradeStaticHtmlReplacement(value) {
   const source = String(value || '');
   if (!/<\/?[a-z][^>]*>/i.test(source)) return source;
   return source
+    // Removing tags alone would expose stylesheet/program source as chat text.
+    // Static replacements may keep their readable copy, but embedded control
+    // and executable blocks never belong in the narrative surface.
+    .replace(/<\s*(style|script|template|noscript)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
     .replace(/<\s*br\s*\/?>/gi, '\n')
     .replace(/<\s*\/\s*(?:p|div|details|summary|section|article|h[1-6])\s*>/gi, '\n')
     .replace(/<\s*li(?:\s[^>]*)?>/gi, '- ')

@@ -143,15 +143,27 @@ export function createVisualStageController({
 
   function applyBackgroundImage(url, fit = state.session?.settings?.backgroundFit || 'cover') {
     const chatPanel = document.querySelector('.chat-panel');
-    if (!chatPanel) return;
+    const workspace = document.querySelector('.workspace');
     const bg = String(url || '').trim();
-    if (bg) {
-      chatPanel.style.setProperty('--chat-bg-image', `url("${bg}")`);
-    } else {
-      chatPanel.style.removeProperty('--chat-bg-image');
+    const isPortrait = Boolean(bg) && fit === 'portrait';
+    if (chatPanel) {
+      if (bg) {
+        chatPanel.style.setProperty('--chat-bg-image', `url("${bg}")`);
+      } else {
+        chatPanel.style.removeProperty('--chat-bg-image');
+      }
+      chatPanel.classList.toggle('has-stage-background', Boolean(bg));
+      chatPanel.classList.toggle('background-fit-portrait', isPortrait);
     }
-    chatPanel.classList.toggle('has-stage-background', Boolean(bg));
-    chatPanel.classList.toggle('background-fit-portrait', Boolean(bg) && fit === 'portrait');
+    if (workspace) {
+      if (bg) {
+        workspace.style.setProperty('--stage-bg-image', `url("${bg}")`);
+      } else {
+        workspace.style.removeProperty('--stage-bg-image');
+      }
+      workspace.classList.toggle('has-stage-background', Boolean(bg));
+      workspace.classList.toggle('background-fit-portrait', isPortrait);
+    }
     updateBackgroundModeUi(bg, fit);
   }
 

@@ -142,9 +142,14 @@ export function buildJourneyPrompt(
 
   promptText += `\n[ 主角锚点 ]\n`;
   Object.entries(formData).forEach(([key, value]) => {
-    const label = tpl.fields[key]?.label || key;
+    if (key === 'selectedGreeting') return;
+    const label = tpl.fields?.[key]?.label || key;
     promptText += `**${label}**：${value}\n`;
   });
+
+  if (formData.selectedGreeting) {
+    promptText += `\n[ 指定开局切入点 ]\n${formData.selectedGreeting}\n`;
+  }
 
   if (destinyCards.length) {
     promptText += `\n[ ${choiceLabels.sectionLabel} ]\n`;

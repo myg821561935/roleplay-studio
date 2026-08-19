@@ -8,13 +8,310 @@ import { ConfigService } from '../server/config/configService.js';
 import { SessionService } from '../server/services/sessionService.js';
 import { AgentService } from '../server/services/agentService.js';
 
-test('AgentService runs one chat turn and records memory metadata', async () => {
-  const { service } = await createHarness();
+test('AgentService preserves a conflicting draft for audit but excludes it from valid narrative history', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      complete: async ({ messages }) => {
+        if (isSummaryRequest(messages) || isFactExtractionRequest(messages)) {
+          return { content: '{}', raw: { maintenance: true } };
+        }
+        return { content: '地伶皱眉道：“我不记得让你进入。”', raw: { fake: true } };
+      }
+    }
+  });
+  const session = await sessionService.getSession('main');
+  session.memory.worldState = {
+    ...(session.memory.worldState || {}),
+    flags: { dilingAllowedEntry: true }
+  };
+  session.memory.narrativeRepair = {
+    spec: 'nre.narrative-repair/v1',
+    revision: 1,
+    appliedAt: '2026-08-10T00:00:00.000Z',
+    canonicalFacts: { protagonistName: '刘一', presentCharacters: ['刘一', '地伶'] },
+    hardFacts: [{
+      id: 'diling-knows-entry',
+      fact: '地伶亲自允许刘一进入，并留在门外等待。',
+      contradictions: ['我不记得让你进入'],
+      when: { path: 'worldState.flags.dilingAllowedEntry', equals: true }
+    }]
+  };
+  await sessionService.saveSession(session);
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '回答地伶。' });
+
+  assert.equal(result.reply.contextExcluded, true);
+  assert.equal(result.reply.contextExclusionReason, 'narrative-hard-fact-conflict');
+  assert.equal(result.reply.narrativeConsistency.valid, false);
+  assert.equal(result.session.memory.worldState.flags.dilingAllowedEntry, true);
+  assert.match(result.reply.roleplayPanels.runtimeNotice, /叙事一致性校验未通过/);
+});
+
+test('AgentService rejects a conflicting continuation without overwriting the valid assistant message', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      complete: async () => ({ content: '地伶说：“我不记得让你进入。”', raw: { fake: true } })
+    }
+  });
+  const session = await sessionService.getSession('main');
+  session.messages = [{ id: 'a-valid', role: 'assistant', content: '地伶在门外等待刘一回应。' }];
+  session.memory.worldState.flags = { dilingAllowedEntry: true };
+  session.memory.narrativeRepair = {
+    spec: 'nre.narrative-repair/v1',
+    revision: 1,
+    appliedAt: '2026-08-10T00:00:00.000Z',
+    canonicalFacts: { protagonistName: '刘一', presentCharacters: ['刘一', '地伶'] },
+    hardFacts: [{
+      id: 'diling-knows-entry',
+      fact: '地伶亲自允许刘一进入，并留在门外等待。',
+      contradictions: ['我不记得让你进入'],
+      when: { path: 'worldState.flags.dilingAllowedEntry', equals: true }
+    }]
+  };
+  await sessionService.saveSession(session);
+
+  const result = await service.continueMessage({ sessionId: 'main' });
+
+  assert.equal(result.reply.content, '地伶在门外等待刘一回应。');
+  assert.equal(result.reply.rejectedContinuations.length, 1);
+  assert.match(result.reply.rejectedContinuations[0].content, /我不记得让你进入/);
+  assert.equal(result.reply.narrativeConsistency.valid, false);
+  assert.match(result.reply.roleplayPanels.runtimeNotice, /叙事一致性校验未通过/);
+});
+
+test('AgentService continuation replaces stale choices with model-authored choices', async () => {
+  const frame = {
+    spec: 'lra.narrative-turn-frame/v1',
+    scene: { location: '青铜门后石室', summary: '地伶隔门等待回应', presentActors: ['地伶'] },
+    decision: { kind: 'direct-response', focus: '谁在门后？', actor: '地伶', requiresPlayerResponse: true, urgency: 'high' },
+    evidence: [{ text: '地伶尚未进入石室', status: 'confirmed', source: '正文' }],
+    affordances: { routes: [], interactables: ['青铜门'], threats: [], constraints: [] },
+    stateDelta: { summary: '', facts: [], timeAdvanceMinutes: 0 },
+    panels: {}
+  };
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      complete: async () => ({
+        content: `门外传来地伶的问话：“谁在门后？”\n<recommended_actions>["如实回应地伶", "反问她的身份", "保持沉默观察"]</recommended_actions>\n<turn_frame>${JSON.stringify(frame)}</turn_frame>`,
+        raw: { fake: true }
+      })
+    }
+  });
+  const session = await sessionService.getSession('main');
+  session.messages = [{
+    id: 'a-stale',
+    role: 'assistant',
+    content: '玉简落在地上。',
+    recommendedActions: ['检查玉简', '研究魂火', '触碰裂缝']
+  }];
+  await sessionService.saveSession(session);
+
+  const result = await service.continueMessage({ sessionId: 'main' });
+  assert.equal(result.reply.decisionNode.kind, 'direct-response');
+  assert.equal(result.reply.turnFrame.validation.status, 'accepted');
+  assert.equal(result.reply.recommendedActions.some((action) => /玉简|魂火|裂缝/.test(action)), false);
+  assert.match(result.reply.recommendedActions.join('\n'), /回应|反问|沉默/);
+  assert.equal(result.reply.recommendedActionPresentation.source, 'model-recommended-actions');
+});
+
+test('AgentService accepts provider tag aliases without persisting control-plane drafts', async () => {
+  const frame = {
+    spec: 'lra.narrative-turn-frame/v1',
+    scene: { location: '回灵草田', time: '夜', summary: '巡夜灵识离去', presentActors: ['刘一'] },
+    decision: { kind: 'open-state', focus: '是否起身', actor: '刘一', requiresPlayerResponse: false, urgency: 'normal' },
+    evidence: [{ text: '夜色尚深', status: 'confirmed', source: '正文' }],
+    affordances: { routes: ['返回院舍'], interactables: ['青石'], threats: [], constraints: [] },
+    stateDelta: { summary: '巡夜结束', facts: [], timeAdvanceMinutes: 5 },
+    panels: {}
+  };
+  const { service } = await createHarness({
+    providerClient: {
+      complete: async () => ({
+        content: `夜风掠过草叶，巡夜灵识已经远去。\n\n---\n\n**推荐动作（仅供节奏参考，不替玩家决定）**\n\n- 继续躺着，等待气息完全散去。\n- 起身返回院舍。\n- 观察丹田中的异动。\n- 自定义。\n\n<TurnFrame>${JSON.stringify(frame)}</TurnFrame>`,
+        raw: { fake: true }
+      })
+    }
+  });
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '我先休息片刻。' });
+
+  assert.equal(result.reply.content, '夜风掠过草叶，巡夜灵识已经远去。');
+  assert.equal(result.reply.turnFrame.validation.status, 'accepted');
+  assert.match(result.reply.roleplayPanels.sceneStatus, /回灵草田/);
+  assert.equal(result.reply.roleplayPanels.runtimeNotice, undefined);
+  assert.doesNotMatch(result.reply.content, /推荐动作|TurnFrame|lra\.narrative-turn-frame|---/i);
+  assert.deepEqual(result.reply.recommendedActions, [
+    '继续躺着，等待气息完全散去。',
+    '起身返回院舍。',
+    '观察丹田中的异动。'
+  ]);
+  assert.equal(result.reply.recommendedActions.some((action) => /推荐动作|TurnFrame/.test(action)), false);
+});
+
+test('AgentService persists unnumbered community choices once instead of adding a fallback panel', async () => {
+  const { service } = await createHarness({
+    providerClient: {
+      complete: async () => ({
+        content: `夜深人静，真传弟子的神识正向杂役院扫来。\n\n> [天机选项：异状尚未收束，那道神识正在靠近。]\n- 立刻躺回木板，假装熟睡，赌对方只是例行巡过。\n- 推开后窗，翻入屋后灵田的阴影里。\n- 不躲不藏，径直开门迎上来人。\n- 自定义`,
+        raw: { fake: true }
+      })
+    }
+  });
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '我压住气息，观察门外。' });
+
+  assert.equal(result.reply.content, '夜深人静，真传弟子的神识正向杂役院扫来。');
+  assert.deepEqual(result.reply.recommendedActions, [
+    '立刻躺回木板，假装熟睡，赌对方只是例行巡过。',
+    '推开后窗，翻入屋后灵田的阴影里。',
+    '不躲不藏，径直开门迎上来人。'
+  ]);
+  assert.deepEqual(result.reply.recommendedActionPresentation, {
+    source: 'community-choice-block',
+    title: '天机选项',
+    hint: '异状尚未收束，那道神识正在靠近。'
+  });
+  assert.doesNotMatch(result.reply.content, /天机选项|自定义/u);
+});
+
+test('AgentService only adds a fallback panel when a standard reply exposes a grounded decision', async () => {
+  const { service, sessionService } = await createHarness();
+  const session = await sessionService.getSession('main');
+  session.memory.worldState = {
+    ...(session.memory.worldState || {}),
+    protagonist: { name: '沈砚' },
+    location: { current: { name: '镇武司门前' } }
+  };
+  session.memory.characterRegistry = {
+    currentAct: {
+      location: '镇武司门前',
+      members: [
+        { characterId: 'shenyan', name: '沈砚', state: 'on-stage' },
+        { characterId: 'guard', name: '守卫', state: 'on-stage' }
+      ]
+    }
+  };
+  await sessionService.saveSession(session);
 
   const result = await service.sendMessage({ sessionId: 'main', content: '我去镇武司。' });
   assert.equal(result.session.messages.length, 2);
   assert.equal(result.session.memory.eventLedger.length, 1);
   assert.equal(result.debug.injectedCards.length, 1);
+  assert.equal(result.session.memory.cardRuntime.enabled, true);
+  assert.equal(result.session.memory.cardRuntime.interaction.latestIntent.kind, 'explore');
+  assert.deepEqual(result.reply.recommendedActions || [], []);
+  assert.equal(result.reply.recommendedActionPresentation, undefined);
+  assert.equal(result.reply.decisionNode, undefined);
+  assert.equal(result.session.memory.promptRuntime.communityPresetIntegrity.status, 'complete');
+  assert.match(result.debug.messages[0].content, /角色卡运行化层/);
+  assert.match(result.debug.messages[0].content, /本轮玩家意图/);
+});
+
+test('AgentService does not turn a vague acknowledgement into a fake recommended action', async () => {
+  const { service, sessionService } = await createHarness();
+  const session = await sessionService.getSession('main');
+  session.memory.worldState = {
+    ...(session.memory.worldState || {}),
+    location: { current: { name: '云雾谷' } }
+  };
+  session.memory.simulation = {
+    ...(session.memory.simulation || {}),
+    actors: [{ id: 'story-title', name: '绝世仙宗', role: '剧本名' }]
+  };
+  await sessionService.saveSession(session);
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '想清楚了。' });
+
+  const actions = result.reply.recommendedActions || [];
+  assert.equal(actions.some((action) => /想清楚了|\[object Object\]/.test(action)), false);
+  assert.equal(actions.some((action) => /绝世仙宗/.test(action)), false);
+
+  const continued = await service.sendMessage({ sessionId: 'main', content: '（请继续推进剧情）' });
+  assert.equal(
+    (continued.reply.recommendedActions || []).some((action) => /请继续推进剧情|继续推进/.test(action)),
+    false
+  );
+});
+
+test('AgentService fills a missing model choice block from the grounded closing decision', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      complete: async ({ messages }) => {
+        if (isSummaryRequest(messages) || isFactExtractionRequest(messages)) {
+          return { content: '{}', raw: { maintenance: true } };
+        }
+        return {
+          content: [
+            '青铜门在身后合拢，门外的脚步声很快被隔绝。',
+            '枯骨右手微动，玉简落在石板上，简首古字与腰牌上的印记如出一辙。',
+            '石壁裂缝里暗红微光起伏，你丹田中的红脉随之搏动；玉简末行提到枯骨残留的一点魂火。'
+          ].join('\n'),
+          raw: { fake: true }
+        };
+      }
+    }
+  });
+  const session = await sessionService.getSession('main');
+  session.messages = [{ role: 'user', content: '正文结束后使用天机选项。' }];
+  session.memory.worldState = {
+    protagonist: { name: '刘一' },
+    location: { current: '绝世仙宗禁地·青铜门后石室' },
+    characters: [{ name: '地伶', status: '留在石门边界未随刘一入内' }]
+  };
+  await sessionService.saveSession(session);
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '（请继续推进剧情）' });
+  const actions = result.reply.recommendedActions || [];
+
+  assert.equal(actions.length, 3);
+  assert.match(actions.join('\n'), /玉简|腰牌|魂火|裂缝|红脉/);
+  assert.deepEqual(result.reply.recommendedActionPresentation, {
+    source: 'grounded-decision-fallback',
+    title: '天机选项',
+    hint: ''
+  });
+  assert.equal(result.reply.decisionNode.kind, 'investigation');
+});
+
+test('AgentService lets a current direct question override stale explicit model choices', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      complete: async ({ messages }) => {
+        if (isSummaryRequest(messages) || isFactExtractionRequest(messages)) {
+          return { content: '{}', raw: { maintenance: true } };
+        }
+        return {
+          content: [
+            '玉简与腰牌上的古字仍在石室中泛着微光，枯骨旁的魂火也没有熄灭。',
+            '石壁裂缝深处传来低沉脉动。',
+            '门外的人没有踏过门槛，只站在原地。她抬起银灰色令牌，问道：“谁在那里？”',
+            '<recommended_actions>',
+            '["比对玉简与腰牌上的痕迹", "检查枯骨留下的魂火", "试探裂缝与体内异动是否相连", "到青铜门前确认来人"]',
+            '</recommended_actions>'
+          ].join('\n'),
+          raw: { fake: true }
+        };
+      }
+    }
+  });
+  const session = await sessionService.getSession('main');
+  session.memory.worldState = {
+    location: { current: '绝世仙宗禁地·青铜门后石室' },
+    characters: [{ name: '地伶', status: '留在石门边界未随刘一入内' }]
+  };
+  await sessionService.saveSession(session);
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '（请继续推进剧情）' });
+  const actions = result.reply.recommendedActions || [];
+
+  assert.match(actions.join('\n'), /回应|反问|沉默/);
+  assert.equal(actions.some((action) => /玉简|魂火|裂缝/.test(action)), false);
+  assert.deepEqual(result.reply.recommendedActionPresentation, {
+    source: 'model-recommended-actions',
+    title: '',
+    hint: ''
+  });
+  assert.equal(result.reply.decisionNode.kind, 'direct-response');
 });
 
 test('AgentService applies bounded onUser and onAssistant lifecycle updates in order', async () => {
@@ -37,7 +334,7 @@ test('AgentService applies bounded onUser and onAssistant lifecycle updates in o
   };
   session.memory.lightFrontendState = {
     enabled: true,
-    values: { variables: { turns: 0 } },
+    values: { chat: { variables: { turns: 0 } }, global: {} },
     revision: 0
   };
   await sessionService.saveSession(session);
@@ -45,7 +342,7 @@ test('AgentService applies bounded onUser and onAssistant lifecycle updates in o
   const result = await service.sendMessage({ sessionId: 'main', content: '推进一轮。' });
   const readback = await sessionService.getSession('main');
 
-  assert.equal(result.session.memory.lightFrontendState.values.variables.turns, 11);
+  assert.equal(result.session.memory.lightFrontendState.values.chat.variables.turns, 11);
   assert.equal(readback.memory.lightFrontendState.revision, 2);
   assert.deepEqual(
     readback.messages[1].lifecycleReports.map((item) => [item.event, item.status]),
@@ -68,6 +365,111 @@ test('AgentService can keep a director quick command in context without renderin
   assert.equal(readback.messages[0].content, '（请继续推进剧情）');
   assert.equal(readback.messages[0].hiddenFromChat, true);
   assert.equal(readback.messages[1].role, 'assistant');
+});
+
+test('AgentService signals finalizing only after the visible reply stream is complete', async () => {
+  const { service } = await createHarness();
+  const events = [];
+
+  await service.sendMessageStream({
+    sessionId: 'main',
+    content: '继续前行。',
+    onToken: (content) => events.push(`token:${content}`),
+    onPhase: (phase) => events.push(`phase:${phase}`)
+  });
+
+  assert.equal(events.at(-1), 'phase:finalizing');
+});
+
+test('AgentService retains an aborted partial turn when the user stops mid-stream', async () => {
+  // provider stream 中途抛 AbortError，模拟用户点停止
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      stream: async ({ onToken, signal }) => {
+        await onToken('夜色沉沉，沈观澜立于');
+        await onToken('檐下，指尖轻叩剑鞘');
+        const abortError = new Error('This operation was aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.sendMessageStream({ sessionId: 'main', content: '夜探沈府。', signal: new AbortController().signal }),
+    (error) => error.code === 'GENERATION_ABORTED' && error.partialMessage?.aborted === true
+  );
+
+  const saved = await sessionService.getSession('main');
+  assert.equal(saved.messages.length, 2, '应保存 user + aborted assistant 消息');
+  const [userMessage, abortedMessage] = saved.messages;
+  assert.equal(userMessage.role, 'user');
+  assert.equal(userMessage.content, '夜探沈府。');
+  assert.equal(abortedMessage.role, 'assistant');
+  assert.equal(abortedMessage.aborted, true);
+  assert.equal(abortedMessage.abortReason, 'user-stopped');
+  assert.equal(abortedMessage.content, '夜色沉沉，沈观澜立于檐下，指尖轻叩剑鞘');
+  assert.ok(abortedMessage.abortedAt);
+  // 中止消息不参与记忆推进
+  assert.equal(saved.memory.unsummarizedTurnCount, 0);
+});
+
+test('AgentService discards aborted partial content below the retention threshold', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      stream: async ({ onToken }) => {
+        await onToken('夜'); // 少于 12 字符阈值
+        const abortError = new Error('This operation was aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+    }
+  });
+
+  await assert.rejects(
+    () => service.sendMessageStream({ sessionId: 'main', content: '夜探沈府。', signal: new AbortController().signal }),
+    (error) => error.code === 'GENERATION_ABORTED' && !error.partialMessage
+  );
+
+  const saved = await sessionService.getSession('main');
+  assert.equal(saved.messages.length, 0, '过短 partial 不留存');
+});
+
+test('AgentService appends aborted continuation increment to the last assistant message', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      stream: async ({ onToken }) => {
+        await onToken('忽然，远处传来更夫的梆子声');
+        await onToken('，三长一短，是约定的暗号。');
+        const abortError = new Error('This operation was aborted');
+        abortError.name = 'AbortError';
+        throw abortError;
+      }
+    }
+  });
+  const session = await sessionService.getSession('main');
+  session.messages = [
+    { id: 'u-1', role: 'user', content: '继续。' },
+    { id: 'a-1', role: 'assistant', content: '夜色沉沉，沈观澜立于檐下。' }
+  ];
+  await sessionService.saveSession(session);
+
+  await assert.rejects(
+    () => service.continueMessage({ sessionId: 'main', signal: new AbortController().signal }),
+    (error) => error.code === 'GENERATION_ABORTED' && error.partialMessage?.aborted === true
+  );
+
+  const saved = await sessionService.getSession('main');
+  const lastMessage = saved.messages.at(-1);
+  assert.equal(lastMessage.id, 'a-1', '续写中止并入原消息，不新建消息');
+  assert.equal(lastMessage.aborted, true);
+  assert.equal(lastMessage.abortReason, 'user-stopped-continuation');
+  assert.equal(
+    lastMessage.content,
+    '夜色沉沉，沈观澜立于檐下。\n忽然，远处传来更夫的梆子声，三长一短，是约定的暗号。'
+  );
+  // swipes 更新为含 aborted 增量的最新内容
+  assert.ok(lastMessage.swipes.includes(lastMessage.content));
 });
 
 test('AgentService records estimated usage on assistant messages', async () => {
@@ -265,6 +667,47 @@ test('AgentService extracts recommended actions from assistant reply', async () 
   assert.deepEqual(readback.messages[1].recommendedActions, reply.recommendedActions);
 });
 
+test('AgentService converts legacy Tianji choices into persisted native actions', async () => {
+  const { service, sessionService } = await createHarness({
+    providerClient: {
+      complete: async () => ({
+        content: [
+          '她说完，手轻轻一带，门在你面前合上了。',
+          '',
+          '> [天机选项：她关上了门]',
+          '',
+          '- 选项1：去消防楼那道门确认锁的情况',
+          '- 选项2：回监控室，调出昨晚02:47前后的录像',
+          '- 选项3：下楼找张姨，问她消防梯的门什么时候坏的',
+          '- 选项4：自定义行动'
+        ].join('\n'),
+        raw: { fake: true }
+      })
+    }
+  });
+
+  const result = await service.sendMessage({ sessionId: 'main', content: '我站在203门口。' });
+  const readback = await sessionService.getSession('main');
+
+  assert.equal(result.reply.content, '她说完，手轻轻一带，门在你面前合上了。');
+  assert.deepEqual(result.reply.recommendedActions, [
+    '去消防楼那道门确认锁的情况',
+    '回监控室，调出昨晚02:47前后的录像',
+    '下楼找张姨，问她消防梯的门什么时候坏的'
+  ]);
+  assert.deepEqual(result.reply.recommendedActionPresentation, {
+    source: 'community-choice-block',
+    title: '天机选项',
+    hint: '她关上了门'
+  });
+  assert.deepEqual(readback.messages[1].recommendedActions, result.reply.recommendedActions);
+  assert.deepEqual(
+    readback.messages[1].recommendedActionPresentation,
+    result.reply.recommendedActionPresentation
+  );
+  assert.equal(readback.messages[1].decisionNode.kind, 'open');
+});
+
 test('AgentService separates roleplay protocol panels from visible story text', async () => {
   const { service, sessionService } = await createHarness({
     providerClient: {
@@ -323,9 +766,7 @@ test('AgentService converts Tavern community panels and w2g into stored native f
   assert.deepEqual(result.reply.recommendedActions, [
     '追问店长的麻烦',
     '接过水杯回到座位',
-    '表示必要时可以作证',
-    '继续观察',
-    '跳过'
+    '表示必要时可以作证'
   ]);
   assert.match(result.reply.roleplayPanels.sceneStatus, /下午5:42/);
   assert.match(result.reply.roleplayPanels.communityComment, /分寸感尚可/);
@@ -427,28 +868,28 @@ test('AgentService applies hidden MVU patches and replays the selected swipe sta
     }
   });
   const session = await sessionService.getSession('main');
-  session.memory.lightFrontendBaseline = { enabled: true, revision: 0, values: { clues: 0 } };
+  session.memory.lightFrontendBaseline = { enabled: true, revision: 0, values: { chat: { clues: 0 }, global: {} } };
   session.memory.lightFrontendState = structuredClone(session.memory.lightFrontendBaseline);
   await sessionService.saveSession(session);
 
   const first = await service.sendMessage({ sessionId: 'main', content: '检查案发现场。' });
   assert.equal(first.reply.content, '你确认了第1条线索。');
   assert.doesNotMatch(first.reply.content, /lra-mvu-patch/);
-  assert.equal(first.session.memory.lightFrontendState.values.clues, 1);
+  assert.equal(first.session.memory.lightFrontendState.values.chat.clues, 1);
   assert.equal(first.reply.mvuPatches.length, 1);
 
   const regenerated = await service.regenerateAssistantMessage({
     sessionId: 'main',
     messageId: first.reply.id
   });
-  assert.equal(regenerated.session.memory.lightFrontendState.values.clues, 3);
+  assert.equal(regenerated.session.memory.lightFrontendState.values.chat.clues, 3);
 
   const switched = await service.switchMessageSwipe({
     sessionId: 'main',
     messageId: first.reply.id,
     swipeIndex: 0
   });
-  assert.equal(switched.session.memory.lightFrontendState.values.clues, 1);
+  assert.equal(switched.session.memory.lightFrontendState.values.chat.clues, 1);
   assert.equal(switched.session.messages[1].content, '你确认了第1条线索。');
 });
 
@@ -806,7 +1247,16 @@ test('AgentService dynamic memory trigger extracts new facts into world state', 
         if (isSummaryRequest(messages)) {
           return { content: '新的滚动摘要。', raw: { summary: true } };
         }
-        return { content: `回应：${messages.at(-1).content}`, raw: { fake: true } };
+        const turnFrame = {
+          spec: 'lra.narrative-turn-frame/v1',
+          scene: { location: '镇武司门前', summary: '主角完成本轮行动', presentActors: [] },
+          decision: { kind: 'open-state', focus: '观察当前反馈', requiresPlayerResponse: false, urgency: 'normal' },
+          evidence: [{ text: '本轮行动已经发生', status: 'confirmed', source: '当前正文' }],
+          affordances: { routes: [], interactables: [], threats: [], constraints: [] },
+          stateDelta: { summary: '本轮行动完成', facts: [], timeAdvanceMinutes: 1 },
+          panels: {}
+        };
+        return { content: `回应：${messages.at(-1).content}\n<turn_frame>${JSON.stringify(turnFrame)}</turn_frame>`, raw: { fake: true } };
       }
     }
   });

@@ -431,8 +431,8 @@ test('resource library composes a custom pack from a base pack and selected reso
   assert.equal(pack.lightFrontend.regexTransforms.length, 1);
   assert.equal(pack.lightFrontend.quickReplies[0].template, '追问旧案');
   assert.ok(pack.lightFrontend.quickReplies.find((item) => item.label === '查看线索'));
-  assert.equal(pack.lightFrontend.mvu.values.clueCount, 0);
-  assert.equal(pack.lightFrontend.mvu.values.relationship.shen, 12);
+  assert.equal(pack.lightFrontend.mvu.values.chat.clueCount, 0);
+  assert.equal(pack.lightFrontend.mvu.values.chat.relationship.shen, 12);
   assert.equal(pack.lightFrontend.panels[0].title, '关系档案');
   assert.deepEqual(pack.lightFrontend.adapters[0].mappedCapabilities, ['quick-replies', 'sidebar-panels', 'mvu-state']);
   assert.equal(pack.lightFrontend.adapters[0].mode, 'declarative-partial');
@@ -573,11 +573,13 @@ test('scenario character cards define the player role without inheriting system 
   assert.match(template.fields.openingPressure.defaultValue, /神宫寺遥|主人审阅/);
   assert.ok(Object.keys(template.fields).length <= 5);
   assert.deepEqual(template.sidebar.tabs, [
-    '主角信息',
-    '互动角色',
+    '当前态势',
+    '决策线索',
+    '角色档案',
+    '人物网络',
+    '成长轨迹',
+    '叙事记忆',
     '世界规则',
-    '关系与势力',
-    '故事线索'
   ]);
   assert.doesNotMatch(serialized, /个人创作主角|筑基|雷火|天命榜|落雷秘境/);
 });
@@ -828,6 +830,89 @@ test('resource library validates prompt id conflicts and external runtime requir
   assert.equal(pack.resourceManifest.composition.compatibilityReview.status, 'safe-derivative-approved');
   assert.ok(pack.resourceManifest.composition.compatibilityReview.disabledCapabilities
     .some((item) => item.id === 'tavern-helper'));
+});
+
+test('pack preflight stabilizes legacy resource revisions before binding approval fingerprints', async () => {
+  const service = await createService();
+  const saved = await service.savePromptResource({
+    id: 'legacy-script-preset',
+    title: '旧版脚本预设',
+    content: '依赖酒馆助手更新状态；正文保持叙事克制。'
+  });
+  const prompt = saved.resources[0];
+  const legacy = structuredClone(prompt);
+  delete legacy.revision;
+  await service.repository.writeResource(prompt.id, legacy);
+  await service.repository.removeResourceRevisions(prompt.id);
+
+  const input = {
+    title: '旧素材稳定预检卷',
+    promptResourceIds: [prompt.id],
+    customBaseline: {
+      worldName: '旧素材稳定预检卷',
+      premise: '验证预检和正式创建使用同一资源版本。'
+    }
+  };
+  const inspection = await service.inspectPackComposition(input);
+  const review = inspection.compatibilityReview;
+  const versioned = await service.getResource(prompt.id);
+
+  assert.ok(versioned.revision?.headId);
+  assert.equal(review.rules.length, 0);
+  assert.equal(review.requiresCompatibilityAcknowledgement, true);
+  const pack = await service.createPack({
+    ...input,
+    compatibilityReview: {
+      fingerprint: review.fingerprint,
+      approvedScriptHashes: review.rules.map((rule) => rule.contentHash),
+      acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
+    }
+  });
+  assert.equal(pack.resourceManifest.composition.compatibilityReview.fingerprint, review.fingerprint);
+});
+
+test('pack preflight reports preset player-agency conflicts against the selected roleplay mode', async () => {
+  const service = await createService();
+  const playerWriting = await service.savePromptResource({
+    id: 'preset-player-writing',
+    title: '抢话规则',
+    content: '自动替用户补写动作和对白。'
+  });
+  const dialogueDensity = await service.savePromptResource({
+    id: 'preset-dialogue-density',
+    title: '对话增多',
+    content: '增加 NPC 之间的有效对白。'
+  });
+  const promptResourceIds = [
+    playerWriting.resources[0].id,
+    dialogueDensity.resources[0].id
+  ];
+  const basePack = {
+    id: 'interaction-baseline',
+    title: '互动基线',
+    promptModules: [],
+    worldBook: [],
+    characterCard: { name: '测试主角' },
+    memory: { memoryCards: [], worldState: {} },
+    ruleSystem: { id: 'test-rules', title: '测试规则', boundary: '测试', panels: [] }
+  };
+
+  const dmInspection = await service.inspectPackComposition({
+    promptResourceIds,
+    roleplayMode: 'dm'
+  }, { basePack });
+  assert.equal(dmInspection.compatibilityReview.interaction.roleplayMode, 'dm');
+  assert.equal(dmInspection.compatibilityReview.interaction.semantics.requestsPlayerWriting, true);
+  assert.equal(dmInspection.compatibilityReview.interaction.semantics.requestsMoreDialogue, true);
+  assert.ok(dmInspection.compatibilityReview.interaction.conflicts
+    .some((item) => item.type === 'preset-player-writing-conflict'));
+
+  const directorInspection = await service.inspectPackComposition({
+    promptResourceIds,
+    roleplayMode: 'director'
+  }, { basePack });
+  assert.equal(directorInspection.compatibilityReview.interaction.roleplayMode, 'director');
+  assert.equal(directorInspection.compatibilityReview.interaction.hasConflict, false);
 });
 
 test('resource library stores SillyTavern preset modules in order and reports disabled runtime dependencies', async () => {
