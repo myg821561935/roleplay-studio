@@ -1,16 +1,16 @@
-# 叙界项目上下文
+# 角色剧场项目上下文
 
-本文档是 Narrative Roleplay Engine（叙界）的长期项目交接入口，用于让新的 Codex 任务在不读取历史长对话的情况下继续开发。
+本文档是 Roleplay Studio（角色剧场）的长期项目交接入口，用于让新的 Codex 任务在不读取历史长对话的情况下继续开发。
 
 最后更新：2026-10-22
-仓库目录：`local-roleplay-agent`
-GitHub：`myg821561935/local-roleplay-agent`
+仓库名：`roleplay-studio`（现有本地工作目录仍为 `local-roleplay-agent`）
+GitHub：`myg821561935/roleplay-studio`
 当前阶段候选：`v1.1.0-rc.1`。以 [本阶段范围](release-v1.1.0-rc.1-scope.md) 和 [发布记录](release-v1.1.0-rc.1.md) 为准；下文 v0.6 相关记录保留为历史背景。
 本地默认地址：`http://127.0.0.1:5178`
 
 ## 一、产品定位
 
-叙界是面向个人创作的本地叙事创作、角色扮演与世界模拟引擎，不是普通聊天壳，也不是 SillyTavern 的代码复刻。
+角色剧场是面向个人创作的本地叙事创作、角色扮演与世界模拟引擎，不是普通聊天壳，也不是 SillyTavern 的代码复刻。
 
 核心链路：
 
@@ -265,7 +265,7 @@ tests/
 
 ```text
 请先阅读 README.md、docs/project-context.md 和当前 git diff。
-项目是 Narrative Roleplay Engine（叙界），使用当前 local-roleplay-agent 工作目录。
+项目是 Roleplay Studio（角色剧场），使用当前 local-roleplay-agent 工作目录。
 
 遵守以下边界：
 1. 不重置现有未提交改动。

@@ -316,7 +316,7 @@ async function createTestRoot() {
   await mkdir(path.join(rootDir, 'public'), { recursive: true });
   await writeFile(
     path.join(rootDir, 'public', 'index.html'),
-    '<!doctype html><html><body><h1>叙界</h1></body></html>',
+    '<!doctype html><html><body><h1>角色剧场</h1></body></html>',
     'utf8'
   );
   return rootDir;

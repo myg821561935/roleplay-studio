@@ -14,21 +14,21 @@ const app = createApp({ rootDir });
 const server = createServer(app);
 
 server.on('error', (error) => {
-  console.error('[local-roleplay-agent] Server failed to start', error);
+  console.error('[roleplay-studio] Server failed to start', error);
   process.exitCode = 1;
 });
 
 process.on('unhandledRejection', (reason) => {
-  console.error('[local-roleplay-agent] Unhandled rejection:', reason);
+  console.error('[roleplay-studio] Unhandled rejection:', reason);
 });
 
 process.on('uncaughtException', (error) => {
-  console.error('[local-roleplay-agent] Uncaught exception:', error);
+  console.error('[roleplay-studio] Uncaught exception:', error);
   process.exit(1);
 });
 
 server.listen(port, host, () => {
-  console.log(`Local roleplay agent v${APP_VERSION} running at http://${host}:${port}`);
+  console.log(`Roleplay Studio v${APP_VERSION} running at http://${host}:${port}`);
   console.log(`Data schema v${migration.currentVersion}; applied migrations: ${migration.applied.join(', ') || 'none'}`);
 });
 

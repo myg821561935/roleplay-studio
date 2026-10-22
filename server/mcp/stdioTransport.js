@@ -42,7 +42,7 @@ export class StdioMcpClient {
           params: {
             protocolVersion: PROTOCOL_VERSION,
             capabilities: {},
-            clientInfo: { name: 'local-roleplay-agent', version: APP_VERSION }
+            clientInfo: { name: 'roleplay-studio', version: APP_VERSION }
           }
         }).then(() => {
           this.sendNotification({ jsonrpc: '2.0', method: 'notifications/initialized' });

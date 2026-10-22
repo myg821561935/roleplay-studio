@@ -1,4 +1,4 @@
-# Narrative Roleplay Engine v1.1.0-rc.1
+# Roleplay Studio v1.1.0-rc.1
 
 叙事状态一致性阶段候选版。它整理上个本地里程碑之后累计的提示词、兼容性、对话与世界模拟改动，建立可以继续迭代的 GitHub 基线。
 

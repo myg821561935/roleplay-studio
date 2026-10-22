@@ -59,7 +59,7 @@ fi
 
 if [[ ${#TARGET_PIDS[@]} -eq 0 ]]; then
   rm -f "$PID_FILE"
-  echo "Local roleplay agent is not running on port ${PORT}."
+  echo "Roleplay Studio is not running on port ${PORT}."
   exit 0
 fi
 
@@ -77,7 +77,7 @@ for (( step = 1; step <= WAIT_STEPS; step++ )); do
   done
   if (( RUNNING == 0 )); then
     rm -f "$PID_FILE"
-    echo "Local roleplay agent stopped."
+    echo "Roleplay Studio stopped."
     exit 0
   fi
   sleep 0.25

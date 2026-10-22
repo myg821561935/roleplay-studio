@@ -3612,7 +3612,7 @@ test('static / returns the HTML page', async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers['content-type'], /^text\/html/);
   assert.equal(response.headers['cache-control'], 'no-store');
-  assert.match(response.text, /叙界/);
+  assert.match(response.text, /角色剧场/);
 });
 
 test('GET /api/proxy-image rejects forbidden origin', async () => {
@@ -3865,7 +3865,7 @@ async function createTestRoot() {
   await mkdir(path.join(rootDir, 'public'), { recursive: true });
   await writeFile(
     path.join(rootDir, 'public', 'index.html'),
-    '<!doctype html><html><body><h1>叙界</h1></body></html>',
+    '<!doctype html><html><body><h1>角色剧场</h1></body></html>',
     'utf8'
   );
   await writeFile(path.join(rootDir, 'secret.txt'), 'do-not-expose', 'utf8');

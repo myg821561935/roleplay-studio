@@ -151,7 +151,7 @@ export async function handleHeavyFrontendRuntimeRoute({ req, res, url, service }
         id: instance.provider.model,
         object: 'model',
         created: 0,
-        owned_by: 'narrative-roleplay-engine'
+        owned_by: 'roleplay-studio'
       }]
     }, commonHeaders);
     return true;

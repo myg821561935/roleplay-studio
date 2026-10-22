@@ -1,4 +1,4 @@
-# Narrative Roleplay Engine v0.6.0-rc.1
+# Roleplay Studio v0.6.0-rc.1
 
 状态：**本地基线已提交，自动化签发通过；尚未推送或打标签**
 目标：为长期迭代建立第一个覆盖酒馆兼容、Agent 记忆/图谱和重前端治理的可审阅里程碑候选。

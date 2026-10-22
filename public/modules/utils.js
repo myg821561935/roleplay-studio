@@ -63,7 +63,7 @@ export function humanizeApiError(error) {
   if (error.code === 'BACKUP_SCOPED_SCHEMA_MISMATCH') return '该范围备份来自旧版数据结构，请升级后使用完整备份恢复';
   if (typeof error.code === 'string' && error.code.startsWith('BACKUP_')) return `备份操作失败：${error.code}`;
   if (error.code === 'UNSUPPORTED_MEDIA_TYPE') return '请求格式错误';
-  if (error.code === 'INVALID_IMPORT_PAYLOAD') return '无法识别导入文件，请确认是 Character Card V2/V3 PNG/JSON、YAML 角色卡、世界书 JSON/文本、SillyTavern Prompt/Regex 预设或叙界内容包';
+  if (error.code === 'INVALID_IMPORT_PAYLOAD') return '无法识别导入文件，请确认是 Character Card V2/V3 PNG/JSON、YAML 角色卡、世界书 JSON/文本、SillyTavern Prompt/Regex 预设或角色剧场内容包';
   if (error.code === 'IMPORT_SOURCE_NOT_FOUND') return '未知素材源';
   if (error.code === 'IMPORT_SOURCE_SEARCH_FAILED') return '素材源搜索失败';
   if (error.code === 'IMPORT_SOURCE_DOWNLOAD_FAILED') return '素材下载失败';

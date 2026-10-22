@@ -22,7 +22,7 @@ export function createReaderChromeController({
     const currentSessionId = getCurrentSessionId();
     if (nameEl) {
       const sessionTitle = getSessionDisplayTitle(currentSessionId, state.sessionSummaries);
-      nameEl.textContent = sessionTitle || '叙界';
+      nameEl.textContent = sessionTitle || '角色剧场';
     }
     const arc = String(state.session?.memory?.narrativeState?.activeArc || '').trim();
     if (chapterEl) {

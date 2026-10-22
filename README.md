@@ -1,6 +1,6 @@
-# Narrative Roleplay Engine
+# 角色剧场 · Roleplay Studio
 
-**叙界**是一套面向个人创作的角色扮演与世界模拟引擎。它把剧本内容包、角色卡、世界书、Prompt 预设、分层记忆、世界状态与多模型调用组织成一条可审阅、可回退、可持续扩展的叙事流程。
+**角色剧场**是一套面向个人创作的角色扮演与世界模拟引擎。它把剧本内容包、角色卡、世界书、Prompt 预设、分层记忆、世界状态与多模型调用组织成一条可审阅、可回退、可持续扩展的叙事流程。
 
 它不只是聊天前端。你可以先选择或组装一个世界，塑造主角与开局命运，再进入持续演进的故事；系统会在后续对话中维护人物关系、事实、事件账本和长期记忆。
 
@@ -139,7 +139,7 @@ Agent = 角色与世界资产 + Prompt 装配 + 模型调用
 - 项目长期上下文与新任务交接：[`docs/project-context.md`](docs/project-context.md)
 - 当前里程碑候选：[`v1.1.0-rc.1`](docs/release-v1.1.0-rc.1.md)
 - 当前稳定版本：[`v0.5.0`](docs/release-v0.5.0.md)
-- 版本更新记录：[GitHub Releases](https://github.com/myg821561935/local-roleplay-agent/releases)
+- 版本更新记录：[GitHub Releases](https://github.com/myg821561935/roleplay-studio/releases)
 - 酒馆机制兼容契约与黄金矩阵：[`docs/tavern-compatibility-contract-v2.md`](docs/tavern-compatibility-contract-v2.md)
 - 历史兼容政策：[`docs/tavern-compatibility-policy-v1.md`](docs/tavern-compatibility-policy-v1.md)
 - 轻前端运行时：[`docs/light-frontend-runtime-v1.md`](docs/light-frontend-runtime-v1.md)
@@ -151,4 +151,4 @@ Agent = 角色与世界资产 + Prompt 装配 + 模型调用
 - 剧情知识图谱：[`docs/knowledge-graph-v1.md`](docs/knowledge-graph-v1.md)
 - 剧情图谱工程契约：[`docs/graph-engineering-contract-v1.md`](docs/graph-engineering-contract-v1.md)
 
-`local-roleplay-agent` 继续作为仓库名、npm 包名和历史数据兼容标识；产品展示名称统一为 **Narrative Roleplay Engine / 叙界**。本地优先是部署与隐私特性，不再作为品牌名的一部分。
+产品名称统一为 **角色剧场 / Roleplay Studio**，GitHub 仓库名与 npm 包名为 `roleplay-studio`。既有本地目录无需改名；备份格式、数据协议、健康检查身份及浏览器偏好键中的 `local-roleplay-agent` 保留为兼容标识，旧存档和设置可继续使用。

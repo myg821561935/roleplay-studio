@@ -2284,6 +2284,6 @@ function writeApiError(res, error) {
     writeJson(res, error.statusCode, { error: error.code });
     return;
   }
-  console.error('[local-roleplay-agent] Unhandled API error', error);
+  console.error('[roleplay-studio] Unhandled API error', error);
   writeJson(res, 500, { error: 'INTERNAL_ERROR' });
 }

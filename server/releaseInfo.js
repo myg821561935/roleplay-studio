@@ -1,3 +1,4 @@
+// Stable identity for health checks and existing backups; product name is Roleplay Studio.
 export const APP_NAME = 'local-roleplay-agent';
 export const APP_VERSION = '1.1.0-rc.1';
 export const RELEASE_CHANNEL = 'release-candidate';
