@@ -1,3 +1,4 @@
+import { describesDeparture } from './commitmentAvailability.js';
 import crypto from 'node:crypto';
 import { projectWorldClock } from './worldClock.js';
 import { isWorldBookCharacterProfileEntry } from '../character/characterContentMode.js';
@@ -42,7 +43,8 @@ export function ensureSimulationMemory(memory, { characterCard, groupMembers, ch
     // worldbook input. Absence is not a request to delete its registered NPCs.
     if (!Array.isArray(worldBook)) return [actor];
     const refreshed = worldBookSeeds.get(actor.id);
-    return refreshed ? [refreshed] : [];
+    // Re-reading a character profile refreshes its definition, not its live scene.
+    return refreshed ? [{ ...refreshed, location: actor.location, status: actor.status }] : [];
   });
   const systems = hasWorldSystemContent(existing.systems)
     ? normalizeWorldSystems(existing.systems)
@@ -222,7 +224,7 @@ function normalizeScaleTerms(input) {
   return uniqueStrings(terms, 40, 80);
 }
 
-export function advanceSimulationClock(simulationInput, { minutes = 60, reason = 'manual', now = () => new Date() } = {}) {
+export function advanceSimulationClock(simulationInput, { minutes = 60, reason = 'manual', now = () => new Date(), custodyConstraints = [] } = {}) {
   const simulation = normalizeSimulation(simulationInput);
   const safeMinutes = clampInteger(minutes, 1, 10080, 60);
   const startAbsolute = toAbsoluteMinute(simulation.clock);
@@ -235,6 +237,12 @@ export function advanceSimulationClock(simulationInput, { minutes = 60, reason =
     if (!actor.enabled) continue;
     for (const schedule of actor.schedule) {
       for (const occurrence of scheduleOccurrences(schedule, startAbsolute, endAbsolute)) {
+        const retained=custodyConstraints.some(x=>x.counterparty===actor.name)
+          && ((schedule.location && schedule.location!==actor.location && !(actor.location.length>=2 && schedule.location.startsWith(actor.location))) || describesDeparture(schedule.activity));
+        if(retained) {
+          events.push({id:`backstage-${crypto.randomUUID()}`,timestamp:now().toISOString(),absoluteMinute:occurrence,actorId:actor.id,actorName:actor.name,visibility:'public',summary:`${actor.name}因仍有随时可取回的保管约定，暂缓离场日程`,reason:'commitment-custody'});
+          continue;
+        }
         const before = { location: actor.location, status: actor.status };
         if (schedule.location) actor.location = schedule.location;
         if (schedule.activity) actor.status = schedule.activity;

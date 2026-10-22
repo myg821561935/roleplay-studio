@@ -1,3 +1,4 @@
+import { custodyMoveConflict, activeCustodyCommitments, describesDeparture } from './commitmentAvailability.js';
 import { applyGroundedLedgerAction, isProtectedLedgerWrite } from './groundedLedger.js';
 import { normalizeActionEnvelope } from './actionProtocol.js';
 import { projectWorldClock } from './worldClock.js';
@@ -125,7 +126,7 @@ function applyAction(memory, action, now, evidenceContext) {
   if (action.type === 'actor.relationship.adjust') return applyRelationship(memory, action);
   if (action.type === 'quest.update') return applyQuest(memory, action);
   if (action.type === 'clock.advance') {
-    const advanced = advanceSimulationClock(memory.simulation, { minutes: action.minutes, reason: action.reason, now });
+    const advanced = advanceSimulationClock(memory.simulation, { minutes: action.minutes, reason: action.reason, now, custodyConstraints: activeCustodyCommitments(memory) });
     memory.simulation = advanced.simulation;
     memory.worldState.clock = projectWorldClock(memory.worldState.clock, memory.simulation);
     return advanced.effects.map((effect) => ({ ...effect, actionId: action.id }));
@@ -167,6 +168,8 @@ function applyStateAction(memory, action) {
 function applyActorField(memory, action, field, value) {
   const actor = findActor(memory, action.actorId);
   const before = actor[field];
+  if(field==='location' && custodyMoveConflict(memory,actor.name,before,value))throw new WorldStateArbitrationError('COMMITMENT_CUSTODIAN_REQUIRED',actor.name);
+  if(field==='status' && describesDeparture(value) && activeCustodyCommitments(memory).some(x=>x.counterparty===actor.name))throw new WorldStateArbitrationError('COMMITMENT_CUSTODIAN_REQUIRED',actor.name);
   actor[field] = value;
   return [effect(action, `simulation.actors.${actor.id}.${field}`, before, value)];
 }

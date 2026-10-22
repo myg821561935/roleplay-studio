@@ -1,4 +1,6 @@
-import { resolveItemReferences, referenceQuantity } from './itemReferences.js';
+import { custodyTransferAuthorized } from './commitmentAvailability.js';
+import { resolveActingPerson, movementRecipient } from './actorReferences.js';
+import { resolveItemReferences, referenceQuantity, isItemReceipt } from './itemReferences.js';
 import { createHash } from 'node:crypto';
 import { continuityProse } from '../agent/sceneContinuity.js';
 
@@ -42,22 +44,7 @@ export function initialItemLedger(memory = {}) {
   return items;
 }
 function observedActor(memory, content, quote) {
-  const at = content.indexOf(quote);
-  const prefix = continuityProse(content.slice(0, at)).slice(-700);
-  const names = [...new Set([playerName(memory), ...list(memory.simulation?.actors).map(x=>x.name)])];
-  const leading = names.find(name=>quote.startsWith(name));
-  if (leading) return leading;
-  const explicitSubject = names.find(name=>new RegExp(`(?:^|[，,；：*\\s])${escape(name)}(?:把|将|从|伸手|拿|取|放|收|走|送|递)`, 'u').test(quote));
-  if (explicitSubject) return explicitSubject;
-  const mentions = names.flatMap(name=>[...prefix.matchAll(new RegExp(escape(name),'gu'))].map(m=>({name,at:m.index})))
-    .filter(x=>!/(?:朝向|朝着|朝|对着|面向|面对|递向|看向|交到|指向|看着|看了|看|望向|递给|交给|对|向|给)$/u.test(prefix.slice(Math.max(0,x.at-4),x.at)))
-    .filter(x=>!/^.{0,2}(?:没讲|没说|没有说话|没有开口)/u.test(prefix.slice(x.at+x.name.length)))
-    .sort((a,b)=>b.at-a.at);
-  if (!mentions.length) return '';
-  const tail = prefix.slice(mentions[0].at + mentions[0].name.length);
-  // Do not carry a pronoun across an intervening unnamed subject.
-  if (/(?:少年|少女|伙计|店员|路人|另一人|另一名|陌生人).{0,8}(?:把|将|走|探|伸|拿|说)/u.test(tail)) return '';
-  return mentions[0].name;
+  return resolveActingPerson({content,quote,actors:[playerName(memory),...list(memory.simulation?.actors).map(x=>x.name)]});
 }
 function itemMention(memory, quote, item, source, context = {}) {
   const name=item.name;
@@ -84,7 +71,7 @@ function itemMention(memory, quote, item, source, context = {}) {
     && /^(?:不是.{0,24}而是|(?:然后|随后)?她把(?:它|(?:那|这)?(?:油)?纸包))/u.test(quote) && prefix.includes(kind)
     && !initialItemLedger(memory).some(x=>x.name!==name && prefix.includes(x.name));
 }
-function evidence(action, context, { physical = false } = {}) {
+function evidence(action, context, { physical = false, itemName = '' } = {}) {
   const source = action.evidence?.source, quote = clean(action.evidence?.quote);
   const message = source === 'user' ? context?.userMessage : source === 'assistant' ? context?.assistantMessage : null;
   const content = clean(message?.content);
@@ -93,9 +80,20 @@ function evidence(action, context, { physical = false } = {}) {
   const start = Math.max(content.lastIndexOf('。', position), content.lastIndexOf('\n', position), content.lastIndexOf('！', position)) + 1;
   const end = content.slice(position + quote.length).search(/[。！？\n]/u);
   const sentence = content.slice(start, end < 0 ? content.length : position + quote.length + end);
-  const eventSentence = sentence.replace(/没有用手[^，。]*[，,]/u, '');
-  const notExecuted = /如果|假如|要是|也许|可能|准备|打算|将要|想要|未曾|不曾|回忆|昨日|昨天|曾经|谎称|声称|假装/u.test(eventSentence)
-    || /(?:尚未|还没|并未|没有|不要|别)(?:[^，。；—]{0,32})(?:放|收|取|拿|交|赠|送|落(?!锁)|完成|履行|封存|办妥)/u.test(eventSentence);
+  const motions=[...quote.matchAll(/放在|放到|放回|放进|塞进|收进|收下|收起|收回|取回|拿回|取出|拿起|递给|交给|交到|递到|滑到|移到|接过|接住|接下|交还|归还|赠给|送给|赠与|转交|落了进去|落到|落入|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上|放下|完成|履行|办妥/gu)];
+  const itemAt=itemName?quote.indexOf(itemName):-1;
+  const clauseStart=itemAt<0?0:Math.max(quote.lastIndexOf('，',itemAt),quote.lastIndexOf(',',itemAt),quote.lastIndexOf('；',itemAt))+1;
+  const afterItem=itemAt<0?-1:quote.slice(itemAt).search(/[，,；;]/u);
+  const clauseEnd=afterItem<0?quote.length:itemAt+afterItem;
+  const motion=(itemAt>=0?motions.find(m=>m.index>=clauseStart&&m.index<clauseEnd):null)||motions[0];
+  const scopeEnd=motion?sentence.indexOf(quote)+motion.index+motion[0].length:sentence.length;
+  // A later denial of a different act (handed over, but not put in a sleeve)
+  // must not negate the completed transfer. Conditions before this act remain.
+  const eventSentence=sentence.slice(0,scopeEnd).replace(/没有用手[^，。]*[，,]/u, '');
+  const narratedRequest=source==='assistant' && /(?:请|麻烦)\s*$/u.test(sentence.slice(0,sentence.indexOf(quote)));
+  const notExecuted = narratedRequest || /如果|假如|要是|也许|可能|准备|打算|将要|想要|未曾|不曾|回忆|昨日|昨天|曾经|谎称|声称|假装/u.test(eventSentence)
+    || /(?:尚未|还没|并未|没有|没|不要|别)(?:[^，。；—]{0,32})(?:放|收|取|拿|交|接|赠|送|滑|移|落(?!锁)|完成|履行|封存|办妥)/u.test(eventSentence)
+    || /(?:没有|并未|尚未|未曾).{0,4}(?:发生|完成|执行|办妥)/u.test(sentence.slice(scopeEnd));
   if (physical && (!continuityProse(content).includes(quote) || notExecuted)) fail('LEDGER_EVENT_NOT_EXECUTED');
   return { source, quote, sentence, messageId: message.id || '', userMessageId: context?.userMessage?.id || '' };
 }
@@ -109,7 +107,7 @@ function syncViews(state, player) {
       row.quantity += item.quantity; carried.set(key, row);
     }
     state.protagonist = { ...state.protagonist, inventory: [...opaque, ...[...carried.values()].map(x => x.quantity === 1 && !x.unit ? x.name : `${x.name}×${x.quantity}${x.unit}`)] };
-    state.resourceLedger = [...list(state.resourceLedger).filter(x => x?.source !== 'grounded-item-ledger'), ...items.map(x => ({ ...x, source: 'grounded-item-ledger', title: x.name, details: `数量 ${x.quantity}${x.unit}；所有者 ${x.owner}；持有人 ${x.holder || '无（放置中）'}；位置 ${x.location}${x.container ? `；仍在${x.container}内` : ''}` }))];
+    state.resourceLedger = [...list(state.resourceLedger).filter(x => x?.source !== 'grounded-item-ledger'), ...items.map(x => ({ ...x, source: 'grounded-item-ledger', title: x.name, details: `数量 ${x.quantity}${x.unit}；所有者 ${x.owner}；持有人 ${x.holder || '无（放置中）'}${x.custodian?`；保管责任 ${x.custodian}`:''}；位置 ${x.location}${x.container ? `；仍在${x.container}内` : ''}` }))];
   }
   if (Array.isArray(state.commitments)) {
     const labels = { proposed: '待协商', committed: '已承诺', executed: '已执行', rejected: '已拒绝' };
@@ -155,7 +153,7 @@ export function applyGroundedLedgerAction(memory, action, context) {
     }
     state.commitments = records;
   } else {
-    const proof = evidence(action, context, { physical: true });
+    const proof = evidence(action, context, { physical: true, itemName: initialItemLedger(memory).find(x=>x.id===action.itemId)?.name || action.name });
     const items = initialItemLedger(memory);
     if (action.type === 'item.register') {
       if (!action.name) fail('LEDGER_ITEM_NAME_REQUIRED');
@@ -173,17 +171,22 @@ export function applyGroundedLedgerAction(memory, action, context) {
       const actor = actorName(memory, action.actor);
       if (proof.source === 'user' && actor !== player) fail('LEDGER_PLAYER_ACTION_REQUIRED');
       if (proof.source === 'assistant' && (actor === player || observedActor(memory, clean(context?.assistantMessage?.content), proof.quote)!==actor)) fail('LEDGER_NPC_ACTION_REQUIRED');
-      if (!/放在|放到|放回|放进|收进|收下|收起|收回|取回|拿回|取出|拿起|递给|交给|交还|归还|赠给|送给|赠与|转交|落了进去|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上|盒盖扣上|放下/u.test(proof.quote)) fail('LEDGER_MOVEMENT_REQUIRED');
+      if (!/放在|放到|放回|放进|塞进|收进|收下|收起|收回|取回|拿回|取出|拿起|递给|交给|交到|递到|滑到|移到|接过|接住|接下|交还|归还|赠给|送给|赠与|转交|落了进去|落到|落入|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上|盒盖扣上|放下/u.test(proof.quote)) fail('LEDGER_MOVEMENT_REQUIRED');
       const firstNamedActor = [player,...list(memory.simulation?.actors).map(x=>x.name)].filter(Boolean).map(name=>({name,at:proof.quote.indexOf(name)})).filter(x=>x.at>=0).sort((a,b)=>a.at-b.at)[0];
       if (proof.source === 'user' && firstNamedActor && firstNamedActor.name !== actor && !/^我(?:把|将|取回|拿回|收回)/u.test(proof.quote)) fail('LEDGER_ACTION_SUBJECT_MISMATCH');
-      if (/看着|看见|听见|目送|转述|复述/u.test(proof.quote)) fail('LEDGER_ACTION_SUBJECT_MISMATCH');
+      const movementAt=proof.quote.search(/放在|放到|放回|放进|塞进|收进|收下|收起|收回|取回|拿回|取出|拿起|递给|交给|交到|递到|滑到|移到|接过|接住|接下|交还|归还|赠给|送给|赠与|转交|落了进去|落到|落入|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上|盒盖扣上|放下/u);
+      if (/看着|看见|听见|目送|转述|复述/u.test(proof.quote.slice(0,movementAt))) fail('LEDGER_ACTION_SUBJECT_MISMATCH');
       const holder = actorName(memory, action.holder);
-      if (holder && !proof.quote.includes(holder) && !((holder === player && proof.source === 'user' && /收回|取回|拿回|拿起|收起/u.test(proof.quote)) || (holder === actor && proof.source === 'assistant'))) fail('LEDGER_HOLDER_NOT_GROUNDED');
+      const recipient = movementRecipient({quote:proof.quote,content:clean((proof.source==='user'?context.userMessage:context.assistantMessage)?.content),actors:[player,...list(memory.simulation?.actors).map(x=>x.name)],actor});
+      if(recipient.mentioned && (recipient.ambiguous || recipient.matches[0]!==holder))fail('LEDGER_RECIPIENT_AMBIGUOUS');
+      if (holder && !proof.quote.includes(holder) && !((holder === player && proof.source === 'user' && /收回|取回|拿回|拿起|收起/u.test(proof.quote)) || (holder === actor && proof.source === 'assistant' || recipient.mentioned && recipient.matches[0]===holder))) fail('LEDGER_HOLDER_NOT_GROUNDED');
       if (action.location !== '随身' && !proof.quote.includes(action.location)) fail('LEDGER_LOCATION_NOT_GROUNDED');
+      if(!custodyTransferAuthorized(memory,item.id,holder,clean(context.userMessage?.content)))fail('LEDGER_CUSTODY_DELEGATION_REQUIRED');
       const container = clean(action.container);
       if (container && !proof.quote.includes(container)) fail('LEDGER_CONTAINER_NOT_GROUNDED');
       if (action.location === '随身' && !holder) fail('LEDGER_HOLDER_REQUIRED');
-      if (item.holder && actor !== item.holder && actor !== item.owner) fail('LEDGER_CUSTODY_MISMATCH');
+      if (item.holder && actor !== item.holder && actor !== item.owner
+        && !(proof.source==='assistant' && holder===actor && item.holder!==player && isItemReceipt(proof.quote,item.name))) fail('LEDGER_CUSTODY_MISMATCH');
       // A custodian may receive an item from a surface, not teleport it out of
       // another actor's inventory based solely on their generated narration.
       if (proof.source === 'assistant' && item.holder === player && actor !== player) fail('LEDGER_HANDOVER_REQUIRED');
@@ -193,13 +196,14 @@ export function applyGroundedLedgerAction(memory, action, context) {
       if (action.type === 'item.transfer') {
         owner = actorName(memory, action.owner);
         if (actor !== item.owner || !owner || !/赠给|送给|赠与|所有权转给/u.test(proof.quote) || /寄存|暂存|代管|保管|借/u.test(proof.quote)) fail('LEDGER_OWNERSHIP_TRANSFER_REQUIRED');
-        if (!proof.quote.includes(owner)) fail('LEDGER_OWNER_NOT_GROUNDED');
+        if (!proof.quote.includes(owner) && !(recipient.mentioned && recipient.matches[0]===owner)) fail('LEDGER_OWNER_NOT_GROUNDED');
       }
+      const custodian=holder===owner?'':holder||(container?(item.custodian||item.holder):'');
       if (item.owner === owner && item.holder === holder && item.location === action.location && clean(item.container) === container) fail('LEDGER_DUPLICATE_TRANSITION');
       if (item.quantity > action.quantity) {
         item.quantity -= action.quantity;
-        items.push({ ...item, id: `${item.id.split(':')[0]}:${hash(action.id)}`, quantity: action.quantity, owner, holder, location: action.location, container, evidence: proof });
-      } else Object.assign(item, { owner, holder, location: action.location, container, evidence: proof });
+        items.push({ ...item, id: `${item.id.split(':')[0]}:${hash(action.id)}`, quantity: action.quantity, owner, holder, custodian, location: action.location, container, evidence: proof });
+      } else Object.assign(item, { owner, holder, custodian, location: action.location, container, evidence: proof });
     }
     state.itemLedger = items;
   }
@@ -230,7 +234,7 @@ export function groundTurnLedgerEnvelope(memory, envelope, context = {}) {
   const user = clean(context.userMessage?.content), player = playerName(memory);
   const modelActions = list(envelope?.actions), generated = [], items = initialItemLedger(memory);
   const rows = user.split(/[。！？\n]/u).map(clean).filter(Boolean);
-  const actorNames = list(memory.simulation?.actors).map(x => x.name).filter(x => x !== player);
+  const actorNames = [...new Set(list(memory.simulation?.actors).map(x => x.name).filter(x => x !== player))];
   const counterparties = actorNames.filter(name => user.includes(name));
   const add = action => generated.push({ ...action, id: `grounded-${hash(`${context.userMessage?.id}|${action.type}|${action.itemId || action.commitmentId}|${action.evidence.quote}`)}`, visibility: 'public', reason: '本轮玩家明确原文的保守状态同步' });
   for (const row of rows) {
@@ -249,8 +253,10 @@ export function groundTurnLedgerEnvelope(memory, envelope, context = {}) {
     if (!row.startsWith(player) && !/^我(?:把|将|取回|拿回|收回|拿起)/u.test(row)) continue;
     if (/看着|看见|目送|听见|设想|转述|复述/u.test(row)) continue;
     const returning = /取回|拿回|收回/u.test(row);
-    const destination = row.match(/(?:放在|放到|放回|放进|收进)([^，,；：]{1,60})/u)?.[1]?.trim();
-    const recipient = actorNames.find(name=>new RegExp(`(?:交给|递给|送给|赠给|赠与)${escape(name)}`, 'u').test(row));
+    const destination = row.match(/(?:放在|放到|放回|放进|塞进|收进)([^，,；：]{1,60})/u)?.[1]?.trim();
+    const target = movementRecipient({quote:row,content:user,actors:actorNames,actor:player});
+    if(target.ambiguous)continue;
+    const recipient = target.matches[0];
     if (!returning && !destination && !recipient) continue;
     const references=resolveItemReferences({items,quote:row,content:user,actors:actorNames,player,actor:player,source:'user'});
     const matchedItems=items.filter(x=>references.matches.includes(x.id));
@@ -281,25 +287,34 @@ export function groundTurnLedgerEnvelope(memory, envelope, context = {}) {
   const subjectBoundary=actorNames.length?new RegExp(`(?=(?:${actorNames.map(escape).join('|')})(?:把|将))`,'u'):null;
   const clauses=prose.split(/[。！？\n]/u).flatMap(row=>subjectBoundary?row.split(subjectBoundary):[row]);
   for (const raw of clauses) {
-    const quote=raw.replace(/^[*\s]+|[*\s]+$/g,'').trim();
+    let quote=raw.replace(/^[*\s]+|[*\s]+$/g,'').trim();
     if (!quote || !assistant.includes(quote)) continue;
     const actor=observedActor(projected,assistant,quote);
     if (!actor || actor===player) continue;
+    // Do not bind the first object's destination to a later named container.
+    const anchors=initialItemLedger(projected).filter(x=>x.holder===actor||x.custodian===actor).flatMap(item=>[item.name,...['木匣','铁匣'].filter(c=>clean(item.location).includes(c)||clean(item.container).includes(c))]).map(name=>quote.indexOf(name)).filter(at=>at>=0);
+    const anchor=anchors.length?Math.min(...anchors):-1;
+    const placements=[...quote.matchAll(/放在|放到|放回|放进|塞进|收进|收回|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上/gu)];
+    if(anchor>=0 && placements[0]?.index<anchor && placements.some(m=>m.index>anchor))quote=quote.slice(anchor);
     let location='';
-    const direct=quote.match(/(?:放在|放到|放回|放进|收进|收回|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上)(?:了)?([^，,；：]{1,24})/u);
+    const direct=quote.match(/(?:放在|放到|放回|放进|塞进|收进|收回|落在|送到|托进|放入|置于|落进|送回|收入|置入|搁在|搁上)(?:了)?([^，,；：]{1,24})/u);
     if (!direct && /(?:走回|移到)(柜台正中|柜台|台面)[^。]{0,16}放下/u.test(quote)) location=quote.match(/(?:走回|移到)(柜台正中|柜台|台面)/u)[1];
     if (!direct && /(?:木匣|铁匣)的盒盖扣上/u.test(quote) && /丹|信|剑|玉牌/u.test(quote)) location=quote.match(/木匣|铁匣/u)[0];
     if (direct) location=direct[1].replace(/\*+/gu,'').split(/[—]/u)[0].trim().replace(/(?:里面|之中|之内|上面|里|内|(?<!正|当)中|上)$/u,'');
     else if (/落了进去/u.test(quote)) location=[...quote.matchAll(/暗屉|抽屉|木匣|铁匣|石柜/gu)].at(-1)?.[0]||'';
+    const recipient=movementRecipient({quote,content:assistant,actors:[player,...actorNames],actor});
+    if(recipient.ambiguous)continue;
+    const receipt=/接过|接住|接下/u.test(quote);
+    if(recipient.mentioned || receipt)location='随身';
     if (!location || location.length>16) continue;
     // A container can itself be below/on a counter. Moving the item into that
     // container is custody; placing the whole container on a bare surface is
     // represented separately by `container` and a surface-only destination.
-    const holder=/屉|匣|柜(?!台)|袋|囊|格(?:子)?$/u.test(location)?actor:/柜台|台面|青石|桌面|桌/u.test(location)?'':null;
+    const holder=recipient.matches[0] || (receipt?actor:null) || (/屉|匣|柜(?!台)|袋|囊|格(?:子)?$/u.test(location)?actor:/柜台|台面|青石|桌面|桌/u.test(location)?'':null);
     if (holder===null) continue;
     const movedNames=new Set();
     for (const item of initialItemLedger(projected)) {
-      if(movedNames.has(item.name))continue;
+      if(movedNames.has(item.name) || (receipt && !recipient.mentioned && !isItemReceipt(quote,item.name)))continue;
       if (item.holder===player || !itemMention(projected,quote,item,'assistant',context)) continue;
       if (item.quantity!==1) continue; // plural/mixed stacks need explicit protocol
       const carried=holder===actor && /随身/u.test(location);
@@ -310,6 +325,34 @@ export function groundTurnLedgerEnvelope(memory, envelope, context = {}) {
       try { applyGroundedLedgerAction(projected,generated.at(-1),context);npcMoves.push(generated.at(-1));movedNames.add(item.name); }
       catch { generated.length=count; }
     }
+  }
+  // Keep the final observed location. Crossing a door establishes departure,
+  // not arrival at the destination requested by the player.
+  const travelByActor = new Map();
+  const sceneLocation=clean(typeof memory.worldState?.location==='string'?memory.worldState.location:memory.worldState?.location?.current).replace(/[·\s]/gu,'');
+  for(const raw of prose.split(/[。！？\n]/u)) {
+    const quote=raw.replace(/^[*\s]+|[*\s]+$/gu,'').trim();
+    if(!quote || speculative.test(quote) || !assistant.includes(quote))continue;
+    const name=observedActor(projected,assistant,quote), actor=list(projected.simulation?.actors).find(x=>x.name===name);
+    if(!actor || name===player)continue;
+    const direction=quote.match(/往([^，,；：*]{1,16}?)(?:去了|走去|走远)/u);
+    const located=quote.match(new RegExp(`^(?:${escape(name)}|她|他)(?:此刻|现在|目前|此时)?(?:正在|已经在|位于|在)([^，,；：*]{2,24})`,'u'));
+    const travel=direction || located || quote.match(/(?:前往|走向|走到|回到|返回|去了)([^，,；：*]{1,24})/u);
+    let location=travel?.[1]?.replace(/(?:送药|办事|继续|去送|去办|抓药|取药|停了脚|停住|站着|坐下|坐着).*$/u,'').trim() || '';
+    const departure=!/(?:不|没|未).{0,4}(?:出门|出去|跨出|迈出|踏出|走出|离去|退场)/u.test(quote) && /出(?:了)?门|侧身出去|走出去|掀帘出去|(?:跨出|迈出|踏出|出了|走出)(?:门槛|门外)|走后|离去|退场|走出(?:药铺|店门|屋门|房门)|离开(?:药铺|店铺|现场)/u.test(quote);
+    if(location && location.length<=16) {
+      const sceneMatch=sceneLocation && location.length>=2 && (sceneLocation.includes(location.replace(/[·\s]/gu,'')) || location.replace(/[·\s]/gu,'').includes(sceneLocation));
+      const local=!direction && (sceneMatch || (/柜台|药柜|柜边|门边|门前/u.test(location) && !/街|巷|城|市口/u.test(location)));
+      if(/^柜台(?:前|后|旁|边)?$/u.test(location) && actor.location && !actor.location.includes('柜台'))location=actor.location+location;
+      if(!local && (direction || /前往|走向/u.test(quote)))location+='（途中）';
+      travelByActor.set(actor.id,{actor,quote,location,outside:!local});
+    } else if(departure && (!travelByActor.get(actor.id)?.outside || !/走后/u.test(quote))) {
+      travelByActor.set(actor.id,{actor,quote,location:'场外（具体位置待确认）',outside:true});
+    }
+  }
+  for(const {actor,quote,location,outside} of travelByActor.values()) {
+    if(location!==actor.location)generated.push({id:`grounded-travel-${hash(context.userMessage?.id+'|'+quote)}`,type:'actor.move',actorId:actor.id,location,visibility:'public',reason:'正文明确的实际转场；未写明目的地时保留未知',evidence:{source:'assistant',quote}});
+    generated.push({id:`grounded-presence-${hash(context.userMessage?.id+'|'+quote)}`,type:'actor.status',actorId:actor.id,status:outside?'已离场':'在场',visibility:'public',reason:'正文实际转场的在场状态',evidence:{source:'assistant',quote}});
   }
   for (const record of list(memory.worldState?.commitments).filter(x=>x.status==='committed' && /寄存|暂存|短存/u.test(x.title))) {
     if (!user.includes(record.title)||!/现在可以|实际收存|请.{0,24}收好/u.test(user)) continue;
@@ -324,6 +367,7 @@ export function groundTurnLedgerEnvelope(memory, envelope, context = {}) {
   const handledItems = new Set(generated.filter(x=>x.type.startsWith('item.')).map(x=>x.itemId));
   const handledPromises = new Set(generated.filter(x=>x.type==='commitment.update').map(x=>x.commitmentId));
   const actions = modelActions.filter(action => {
+    if(action.type==='actor.move' && generated.some(x=>x.type==='actor.move'&&x.actorId===action.actorId))return false;
     if (action.type.startsWith('item.') && handledItems.has(action.itemId) && generated.some(x=>x.itemId===action.itemId && x.evidence.source===action.evidence?.source)) return false;
     if (action.type==='commitment.update' && (handledPromises.has(action.commitmentId) || (action.status==='proposed' && generated.some(x=>x.type==='commitment.update' && x.status==='proposed' && action.evidence?.source==='user')))) return false;
     return true;

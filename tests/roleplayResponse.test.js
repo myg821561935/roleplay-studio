@@ -384,3 +384,9 @@ test('community StatusBlock materializes concrete CharacterStatus without leakin
     assert.doesNotMatch(parsed.content, /StatusBlock|CharacterStatus|状态栏/);
   }
 });
+
+test('empty plot wrappers do not discard actual prose or expose hidden control text',()=>{
+ const parsed=parseRoleplayResponse('她把信交给乙。<plot>\n</plot><thinking>隐藏推演</thinking><normal_status>时间：清晨</normal_status>');
+ assert.equal(parsed.content,'她把信交给乙。');assert.doesNotMatch(parsed.content,/隐藏推演|清晨/);
+ assert.equal(parseRoleplayResponse('<plot></plot><thinking>隐藏推演</thinking>').content,'');
+});

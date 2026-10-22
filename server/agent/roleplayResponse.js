@@ -70,8 +70,8 @@ export function parseRoleplayResponse(rawContent) {
   const presentationSource = stripRecommendedActionBlocks(legacyChoices.content);
   const protocolDetected = [...PRESENTATION_BLOCKS, ...TRANSPARENT_WRAPPERS]
     .some((tag) => new RegExp(`<${escapeRegExp(tag)}(?=[\\s>/])`, 'i').test(source));
-  const plotBlocks = extractBlocks(presentationSource, 'plot', { includePartial: true });
-  const contentBlocks = CONTENT_BLOCKS.flatMap((tag) => extractBlocks(presentationSource, tag, { includePartial: true }));
+  const plotBlocks = extractBlocks(presentationSource, 'plot', { includePartial: true }).filter(block=>block.trim());
+  const contentBlocks = CONTENT_BLOCKS.flatMap((tag) => extractBlocks(presentationSource, tag, { includePartial: true })).filter(block=>block.trim());
   const visibleSource = plotBlocks.length
     ? plotBlocks.join('\n\n')
     : contentBlocks.length

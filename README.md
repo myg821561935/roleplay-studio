@@ -6,7 +6,7 @@
 
 | 当前版本 | 运行方式 | 数据位置 | 兼容原则 |
 | --- | --- | --- | --- |
-| `v1.1.0-rc.1` 里程碑候选版 | Node.js 22.13+ 本地网页 | 角色卡、世界书、密钥与存档保存在本机 | 兼容酒馆资源格式和常见交互语义；第三方脚本须审核、隔离并审计 |
+| `v1.1.0-rc.2` 里程碑候选版 | Node.js 22.13+ 本地网页 | 角色卡、世界书、密钥与存档保存在本机 | 兼容酒馆资源格式和常见交互语义；第三方脚本须审核、隔离并审计 |
 
 ## 从世界设定到第一幕
 
@@ -137,7 +137,7 @@ Agent = 角色与世界资产 + Prompt 装配 + 模型调用
 ## 文档与发布
 
 - 项目长期上下文与新任务交接：[`docs/project-context.md`](docs/project-context.md)
-- 当前里程碑候选：[`v1.1.0-rc.1`](docs/release-v1.1.0-rc.1.md)
+- 当前里程碑候选：[`v1.1.0-rc.2`](docs/release-v1.1.0-rc.2.md)
 - 当前稳定版本：[`v0.5.0`](docs/release-v0.5.0.md)
 - 版本更新记录：[GitHub Releases](https://github.com/myg821561935/roleplay-studio/releases)
 - 酒馆机制兼容契约与黄金矩阵：[`docs/tavern-compatibility-contract-v2.md`](docs/tavern-compatibility-contract-v2.md)

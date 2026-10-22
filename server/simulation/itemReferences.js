@@ -1,11 +1,16 @@
+import { resolveActorReference } from './actorReferences.js';
 // Referential resolution operates on existing item lots, never on invented assets.
 // Names, custody and locations narrow candidates before pronouns are considered.
 const list = value => Array.isArray(value) ? value : [];
 const text = value => String(value || '');
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const kinds = [ ['丹', /丹(?:药)?|药丸/u], ['信', /(?<!相|自|确|深|坚)信(?!用|任|息|心|号|仰|念)|信封/u], ['剑', /剑/u], ['灯', /灯/u], ['玉牌', /玉牌/u] ];
+const kinds = [ ['丹', /丹(?:药)?|药丸/u], ['信', /(?<!相|自|确|深|坚)信(?!用|任|息|心|号|仰|念)|信封|(?:那|这)(?:一)?封/u], ['剑', /剑/u], ['灯', /灯/u], ['玉牌', /玉牌/u] ];
 const physicalContext = value => text(value).replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"/gu,'');
 const locationKey = value => text(value).replace(/木匣|铁匣/g,'匣').replace(/柜台|桌面|台面|青石/g,'台').replace(/正中|里面|之中|内|中|上|里/g,'');
+
+export function isItemReceipt(quote,name) {
+  return new RegExp(`(?:接过|接住|接下)(?:了)?(?:这|那)?(?:一)?(?:枚|封|个|把|张)?${escape(name)}`,'u').test(quote);
+}
 
 export function resolveItemReferences({items=[],quote='',content='',actors=[],player='',actor='',source='user'}={}) {
   content=text(content);quote=text(quote);
@@ -31,20 +36,23 @@ export function resolveItemReferences({items=[],quote='',content='',actors=[],pl
     }
   }
   // Relational references must identify the source, not the action destination.
-  const sourcePart=quote.split(/(?:放在|放到|放进|放回|收进|交给|递给|赠给|送给|归还给)/u)[0];
+  const sourcePart=quote.split(/(?:放在|放到|放进|塞进|放回|收进|交给|递给|交到|递到|滑到|移到|落到|落入|赠给|送给|归还给)/u)[0];
   const place=sourcePart.match(/(木匣|铁匣|匣|抽屉|柜台|台面|桌面|随身袋)(?:里|中|内|上|边)(?:的|那|这)/u)?.[1];
-  const holder=list(actors).find(name=>new RegExp(`${escape(name)}(?:手里|手中|保管|拿着|持有)`, 'u').test(sourcePart));
+  const holder=list(actors).find(name=>new RegExp(`${escape(name)}(?:手里|手中|保管|拿着|持有)|由${escape(name)}保管`, 'u').test(sourcePart));
+  const owner=list([player,...actors]).find(name=>new RegExp(`属于${escape(name)}|归${escape(name)}所有`, 'u').test(sourcePart));
+  if(owner)candidates=(candidates.length?candidates:items).filter(x=>x.owner===owner);
   let holderName=holder||'';
-  if(!holderName && /[她他]手(?:里|中)|[她他]保管/u.test(sourcePart)) {
-    const mentioned=list(actors).filter(name=>name!==player&&prior.includes(name));
-    const holding=[...new Set(items.map(x=>x.holder).filter(x=>x&&x!==player))];
-    holderName=mentioned.length===1?mentioned[0]:holding.length===1?holding[0]:'';
+  if(!holderName && /[她他]手(?:里|中)|[她他]保管|(?:前者|后者)(?:手里|手中|保管)/u.test(sourcePart)) {
+    const reference=sourcePart.match(/前者|后者|她|他/u)?.[0]||'';
+    const resolved=resolveActorReference({reference,content,quote,actors:list(actors).filter(x=>x!==player)});
+    const holding=[...new Set((candidates.length?candidates:items).map(x=>/保管/u.test(sourcePart)?(x.custodian||x.holder):x.holder).filter(x=>x&&x!==player))];
+    holderName=resolved.matches.length===1?resolved.matches[0]:holding.length===1?holding[0]:'';
     if(!holderName)return {matches:[],ambiguous:true,basis:'holder'};
   }
   if(place || holderName){
     if(!candidates.length)candidates=items;
     if(place)candidates=candidates.filter(x=>locationKey(x.location).includes(locationKey(place))||locationKey(x.container).includes(locationKey(place)));
-    if(holderName)candidates=candidates.filter(x=>x.holder===holderName);
+    if(holderName)candidates=candidates.filter(x=>x.holder===holderName || (/保管/u.test(sourcePart)&&x.custodian===holderName));
     basis='relation';
   }
   if(!candidates.length && /前者|后者/u.test(quote)){
@@ -64,7 +72,7 @@ export function resolveItemReferences({items=[],quote='',content='',actors=[],pl
   }
   // Use physical custody to disambiguate equal-name lots; a request alone never
   // permits an NPC to extract anything from the player's inventory.
-  if(source==='assistant') candidates=candidates.filter(x=>x.holder!==player && (!x.holder||x.holder===actor));
+  if(source==='assistant') candidates=candidates.filter(x=>x.holder!==player && (!x.holder||x.holder===actor||isItemReceipt(quote,x.name)));
   else if(/取回|拿回|收回/u.test(quote)) candidates=candidates.filter(x=>x.holder!==player);
   else candidates=candidates.filter(x=>x.holder===player);
   const explicitMultiple=named.length>0 && new Set(named.map(x=>x.name)).size>1;
