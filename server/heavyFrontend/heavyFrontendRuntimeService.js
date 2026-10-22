@@ -107,7 +107,7 @@ export class HeavyFrontendRuntimeService {
       })),
       findings: prepared.findings,
       review: {
-        status: 'required',
+        status: 'local-observe',
         reviewedAt: '',
         reviewer: '',
         note: '',
@@ -145,7 +145,7 @@ export class HeavyFrontendRuntimeService {
       packageId,
       revisionId,
       contentHash: prepared.contentHash,
-      status: 'review-required',
+      status: 'observation-ready',
       metrics: {
         fileCount: prepared.fileCount,
         totalBytes: prepared.totalBytes,
@@ -199,7 +199,13 @@ export class HeavyFrontendRuntimeService {
     if (!item) throw new HeavyFrontendError(404, 'HEAVY_FRONTEND_PACKAGE_NOT_FOUND');
     const revision = getCurrentRevision(item);
     if (!revision) throw new HeavyFrontendError(409, 'HEAVY_FRONTEND_REVISION_MISSING');
-    if (revision.review?.status !== 'approved' || revision.review?.contentHash !== revision.contentHash) {
+    if (revision.review?.contentHash !== revision.contentHash) {
+      throw new HeavyFrontendError(409, 'HEAVY_FRONTEND_REVIEW_REQUIRED');
+    }
+    if (revision.review?.status === 'rejected') {
+      throw new HeavyFrontendError(409, 'HEAVY_FRONTEND_REJECTED');
+    }
+    if (!['approved', 'local-observe'].includes(revision.review?.status)) {
       throw new HeavyFrontendError(409, 'HEAVY_FRONTEND_REVIEW_REQUIRED');
     }
 
@@ -243,7 +249,12 @@ export class HeavyFrontendRuntimeService {
       providerId: provider.id,
       model: provider.model,
       status: 'created',
-      budget
+      budget,
+      executionMode: revision.review.status === 'approved' ? 'approved' : 'local-observe',
+      metrics: {
+        findingCount: revision.findings.length,
+        criticalFindingCount: revision.findings.filter((finding) => finding.severity === 'critical').length
+      }
     });
     return {
       instance: publicInstance(instance),

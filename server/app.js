@@ -1,13 +1,15 @@
+import { promptBudgetErrorDetail } from './routes/promptError.js';
+import { markReviewedFactChanges } from './agent/factProvenance.js';
+import { handleHistoryRepairRoutes } from './routes/historyRepairRoutes.js';
+import { buildPromptComparison } from './agent/promptComparison.js';
+import { normalizeEnhancements } from './agent/enhancements.js';
 import { readFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { JsonStore } from './lib/jsonStore.js';
 import { writeJson } from './lib/http.js';
 import { ConfigService, normalizePersona } from './config/configService.js';
-import {
-  buildEditableSessionConfig,
-  buildSessionScopedConfig
-} from './config/sessionScopedConfig.js';
+import { buildEditableSessionConfig, buildSessionScopedConfig } from './config/sessionScopedConfig.js';
 import { SessionService } from './services/sessionService.js';
 import { AgentService } from './services/agentService.js';
 import { AssetService } from './services/assetService.js';
@@ -62,6 +64,8 @@ import { handleReferenceRepairRoutes } from './routes/referenceRepairRoutes.js';
 import { handleSessionConfigMigrationRoutes } from './routes/sessionConfigMigrationRoutes.js';
 import { handleKnowledgeGraphRoutes } from './routes/knowledgeGraphRoutes.js';
 import { handlePromptTemplateRoutes } from './routes/promptTemplateRoutes.js';
+import { handleCharacterPresetRoutes } from './routes/characterPresetRoutes.js';
+import { handleCoreMemoryRoutes } from './routes/coreMemoryRoutes.js';
 import { resetScriptGovernanceForImportedSession } from './security/scriptGovernance.js';
 import { SQLiteGraphRepository } from './knowledgeGraph/sqliteGraphRepository.js';
 import { KnowledgeGraphService } from './knowledgeGraph/knowledgeGraphService.js';
@@ -70,7 +74,6 @@ import {
   handleHeavyFrontendApiRoutes,
   handleHeavyFrontendRuntimeRoute
 } from './routes/heavyFrontendRoutes.js';
-
 const contentTypes = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
@@ -90,7 +93,6 @@ const SENSITIVE_HEADER_PATTERNS = [
   'credential',
   'auth'
 ];
-
 export function createApp({ rootDir = process.cwd(), providerClient: providerClientOverride, fetchImpl } = {}) {
   const appRoot = path.resolve(rootDir);
   const store = new JsonStore(path.join(appRoot, 'data'));
@@ -375,6 +377,8 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
     sessionService
   })) return;
 
+  if (await handleCharacterPresetRoutes({ req, res, url, configService, sessionService })) return;
+
   if (await handleResourceLibraryRoutes({
     req,
     res,
@@ -566,6 +570,8 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
       return;
     }
 
+    if (await handleHistoryRepairRoutes({ req, res, subPath, sessionId, sessionService })) return;
+
     if (subPath === 'prompt-preview' && req.method === 'POST') {
       validateMutatingRequest(req);
       const body = await readRequestJson(req);
@@ -583,7 +589,7 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
         worldBook: activeConfig.worldBook,
         worldSystems: activeConfig.worldSystems
       });
-      const assembled = assemblePrompt({
+      const assemble = (overrides = {}) => assemblePrompt({
         promptModules: activeConfig.promptModules,
         characterCard: activeConfig.characterCard,
         worldBook: activeConfig.worldBook,
@@ -597,8 +603,13 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
         customArrays: globalConfig.customArrays,
         lightFrontend: activeConfig.lightFrontend,
         activationContext: { seed: session.id || sessionId, generationType },
-        options: session.settings
+        options: { ...session.settings, inspectPromptChanges: true, ...overrides }
       });
+      if (body.compareModes === true) {
+        writeJson(res, 200, { comparison: buildPromptComparison({ session, providers: globalConfig.providers, generationType, content: previewMessage, assemble }) });
+        return;
+      }
+      const assembled = assemble();
       writeJson(res, 200, {
         tokenEstimate: assembled.tokenEstimate,
         promptStudio: assembled.sections.promptStudio,
@@ -883,6 +894,8 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
     return;
   }
 
+  if (await handleCoreMemoryRoutes({ req, res, url, sessionService, agentService, validateMutatingRequest, readRequestJson })) return;
+
   if (req.method === 'PUT' && url.pathname === '/api/memory/facts') {
     validateMutatingRequest(req);
     const body = await readRequestJson(req);
@@ -947,36 +960,6 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
     return;
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/character-presets') {
-    validateMutatingRequest(req);
-    const body = await readRequestJson(req);
-    const config = await configService.getAll();
-    const presets = Array.isArray(config.characterPresets) ? config.characterPresets : [];
-    const newPreset = {
-      id: `preset-${crypto.randomUUID()}`,
-      name: String(body.name || body.characterCard?.name || '未命名').trim().slice(0, 30),
-      characterCard: body.characterCard || config.characterCard,
-      worldBook: body.worldBook || config.worldBook,
-      promptModules: body.promptModules || config.promptModules,
-      createdAt: new Date().toISOString()
-    };
-    const updated = [...presets, newPreset];
-    await configService.saveCharacterPresets(updated);
-    writeJson(res, 200, { characterPresets: updated, preset: newPreset });
-    return;
-  }
-
-  if (req.method === 'DELETE' && url.pathname === '/api/character-presets') {
-    validateMutatingRequest(req);
-    const body = await readRequestJson(req);
-    const config = await configService.getAll();
-    const presets = Array.isArray(config.characterPresets) ? config.characterPresets : [];
-    const updated = presets.filter((p) => p.id !== body.id);
-    await configService.saveCharacterPresets(updated);
-    writeJson(res, 200, { characterPresets: updated });
-    return;
-  }
-
   if (req.method === 'POST' && url.pathname === '/api/prompt-presets') {
     validateMutatingRequest(req);
     const body = await readRequestJson(req);
@@ -1034,6 +1017,15 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
     validateMutatingRequest(req);
     const body = await readRequestJson(req);
     if (!Array.isArray(body.groupMembers)) throw new ApiError(400, 'INVALID_GROUP_MEMBERS');
+    const strategy = body.groupSpeakerStrategy ? String(body.groupSpeakerStrategy).trim() : null;
+    if (body.sessionId && strategy) {
+      const session = await sessionService.getSession(body.sessionId);
+      if (session) {
+        if (!session.settings) session.settings = {};
+        session.settings.groupSpeakerStrategy = strategy;
+        await sessionService.saveSession(session);
+      }
+    }
     const result = body.sessionId
       ? await saveSessionConfigField({
           sessionService,
@@ -1043,7 +1035,13 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
           value: body.groupMembers
         })
       : { groupMembers: await configService.saveGroupMembers(body.groupMembers) };
-    writeJson(res, 200, result);
+    if (strategy) {
+      const globalCfg = await configService.getConfig();
+      if (!globalCfg.settings) globalCfg.settings = {};
+      globalCfg.settings.groupSpeakerStrategy = strategy;
+      await configService.saveSettings(globalCfg.settings);
+    }
+    writeJson(res, 200, { ...result, groupSpeakerStrategy: strategy });
     return;
   }
 
@@ -1156,6 +1154,8 @@ async function handleApi({ req, res, url, appRoot, configService, sessionService
       text: String(body.text || ''),
       voice: String(body.voice || 'alloy'),
       format: String(body.format || 'mp3'),
+      emotion: String(body.emotion || ''),
+      speed: body.speed !== undefined ? Number(body.speed) : null,
       fetchImpl: fetchImpl || globalThis.fetch
     });
     const contentType = result.format === 'wav' ? 'audio/wav' : (result.format === 'opus' ? 'audio/ogg' : 'audio/mpeg');
@@ -1565,6 +1565,7 @@ async function streamChat({ agentService, body, res }) {
       hideUserMessage: body.hideUserMessage === true,
       onToken: async (content) => writeSse(res, 'token', { content }),
       onPhase: async (phase) => writeSse(res, 'phase', { phase }),
+      onTurnReady: async (payload) => writeSse(res, 'turn', payload),
       signal: disconnectGuard?.signal || null
     });
     writeSse(res, 'done', result);
@@ -1590,6 +1591,8 @@ async function streamContinue({ agentService, body, res }) {
     const result = await agentService.continueMessage({
       sessionId: body.sessionId || 'main',
       onToken: async (content) => writeSse(res, 'token', { content }),
+      onPhase: async (phase) => writeSse(res, 'phase', { phase }),
+      onTurnReady: async (payload) => writeSse(res, 'turn', payload),
       signal: disconnectGuard?.signal || null
     });
     writeSse(res, 'done', result);
@@ -1604,6 +1607,7 @@ async function streamContinue({ agentService, body, res }) {
 // SSE error 载荷：中止错误附带已留存的消息 ID，前端据此刷新本地会话展示 partial 回合
 function buildStreamErrorPayload(error) {
   const payload = { error: resolveProviderErrorCode(error) };
+  if (promptBudgetErrorDetail(error)) payload.detail = promptBudgetErrorDetail(error);
   if (error?.code === 'GENERATION_ABORTED' && error.partialMessage) {
     payload.aborted = true;
     payload.partialMessageId = error.partialMessage.id;
@@ -1613,6 +1617,7 @@ function buildStreamErrorPayload(error) {
 
 function resolveProviderErrorCode(error) {
   const message = String(error?.message || '');
+  if (error?.code === 'PROMPT_BUDGET_INSUFFICIENT') return error.code;
   if (message === 'NO_ACTIVE_PROVIDER') return 'NO_ACTIVE_PROVIDER';
   if (error?.code === 'GENERATION_ABORTED' || message === 'GENERATION_ABORTED') return 'GENERATION_ABORTED';
   if (message.startsWith('PROVIDER_REASONING_ONLY_RESPONSE')) return 'PROVIDER_REASONING_ONLY_RESPONSE';
@@ -1625,8 +1630,8 @@ function resolveProviderErrorCode(error) {
 
 function wrapProviderError(error) {
   const code = resolveProviderErrorCode(error);
-  const status = code === 'NO_ACTIVE_PROVIDER' ? 409 : 502;
-  throw new ApiError(status, code);
+  const status = ['NO_ACTIVE_PROVIDER', 'PROMPT_BUDGET_INSUFFICIENT'].includes(code) ? 409 : 502;
+  throw new ApiError(status, code, promptBudgetErrorDetail(error));
 }
 
 function writeSse(res, event, data) {
@@ -1704,7 +1709,7 @@ async function saveMemoryFacts({ sessionService, body }) {
   const factsPayload = body.facts ?? [];
   if (!Array.isArray(factsPayload)) throw new ApiError(400, 'INVALID_MEMORY_FACTS');
   const session = await getApiSession(sessionService, body.sessionId || 'main');
-  const facts = normalizeFactCards(factsPayload);
+  const facts = markReviewedFactChanges(normalizeFactCards(factsPayload), session.memory?.memoryCards || []);
   session.memory = {
     ...session.memory,
     memoryCards: facts
@@ -1956,6 +1961,8 @@ function normalizeSessionSettings(settings = {}) {
     maxInjectedCards: normalizePositiveInteger(settings.maxInjectedCards, 5),
     narrativeMode: normalizeSessionSettingChoice(settings.narrativeMode, ['free', 'stable', 'strict']) || 'stable',
     roleplayMode: normalizeSessionSettingChoice(settings.roleplayMode, ['dialogue', 'dm', 'protagonist', 'director', 'commentary']) || 'dm',
+    agentEnhancements: normalizeEnhancements(settings.agentEnhancements),
+    promptExecutionMode: normalizeSessionSettingChoice(settings.promptExecutionMode, ['auto', 'faithful', 'enhanced']) || 'auto',
     responseLength: normalizeSessionSettingChoice(settings.responseLength, ['compact', 'balanced', 'long']) || 'balanced',
     cardRuntimeEnabled: settings.cardRuntimeEnabled !== false,
     worldBookIncludeNames: settings.worldBookIncludeNames !== false,
@@ -1965,6 +1972,7 @@ function normalizeSessionSettings(settings = {}) {
     worldBookMinActivationsDepthMax: normalizeNonNegativeInteger(settings.worldBookMinActivationsDepthMax, 0),
     activeAgentProfileId: normalizeAgentProfileId(settings.activeAgentProfileId),
     providerId: String(settings.providerId || '').trim(),
+    fastTaskProviderId: String(settings.fastTaskProviderId || '').trim(),
     taskProviderOverrides: normalizeSessionTaskProviderOverrides(settings.taskProviderOverrides),
     taskFallbackOverrides: normalizeSessionTaskFallbackOverrides(settings.taskFallbackOverrides),
     authorNote: String(settings.authorNote || ''),
@@ -1972,6 +1980,7 @@ function normalizeSessionSettings(settings = {}) {
     backgroundFit: normalizeSessionSettingChoice(settings.backgroundFit, ['cover', 'portrait']) || 'cover',
     backgroundSource: String(settings.backgroundSource || '').trim(),
     theme: normalizeSessionSettingChoice(settings.theme, ['default-dark', 'wuxia-scroll', 'xianxia-scroll']),
+    ...(settings.groupSpeakerStrategy !== undefined ? { groupSpeakerStrategy: normalizeSessionSettingChoice(settings.groupSpeakerStrategy, ['talkativeness', 'list-order', 'manual']) || 'talkativeness' } : {}),
     visualContentPack: normalizeSessionSettingChoice(settings.visualContentPack, [
       'xuanhuan',
       'lingyi',

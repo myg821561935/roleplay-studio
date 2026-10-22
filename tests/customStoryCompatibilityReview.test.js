@@ -6,19 +6,31 @@ import {
   createCustomStoryCompatibilityReview
 } from '../public/modules/customStoryCompatibilityReview.js';
 
-test('compatibility review normalizes duplicate script hashes', () => {
+test('compatibility review only accepts complete per-script decisions', () => {
   assert.deepEqual(createCustomStoryCompatibilityReview({
     fingerprint: 'sha256:review',
-    approvedScriptHashes: ['sha256:script', '', 'sha256:script'],
+    executionMode: 'local-observe',
+    approvedScriptHashes: ['sha256:legacy-script'],
+    scriptReviews: [
+      { scriptId: 'panel', contentHash: 'sha256:script', decision: 'approved', note: '已核对脚本来源与执行风险。' },
+      { scriptId: 'panel', contentHash: 'sha256:script-next', decision: 'rejected', note: '新版脚本尚未完成安全审查。' },
+      { scriptId: 'ignored', contentHash: 'sha256:ignored', decision: 'approved', note: '太短' }
+    ],
     acknowledgeCompatibility: true
   }), {
     fingerprint: 'sha256:review',
-    approvedScriptHashes: ['sha256:script'],
+    scriptReviews: [{
+      scriptId: 'panel',
+      contentHash: 'sha256:script-next',
+      decision: 'rejected',
+      note: '新版脚本尚未完成安全审查。'
+    }],
+    executionMode: 'local-observe',
     acknowledgeCompatibility: true
   });
 });
 
-test('third-party scripts render their isolated sandbox source without manual approval', () => {
+test('third-party scripts default to local observation and can be switched to strict review', () => {
   const element = new FakeElement('div');
   const state = {
     customStoryDraft: { compatibilityReview: createCustomStoryCompatibilityReview() }
@@ -42,7 +54,7 @@ test('third-party scripts render their isolated sandbox source without manual ap
       requiresScriptApproval: true,
       requiresCompatibilityAcknowledgement: false
     },
-    pendingScriptRules: [],
+    pendingScriptRules: [{ scriptId: 'panel-script', contentHash: 'sha256:script' }],
     compatibilityAcknowledgementPending: false
   };
   const controller = createCustomStoryApprovalController({
@@ -53,20 +65,27 @@ test('third-party scripts render their isolated sandbox source without manual ap
     renderReadiness: () => { rendered += 1; },
     invalidateInspection: () => {},
     confirmAction: () => true,
+    promptAction: () => '已核对脚本内容、来源和受限运行风险。',
     documentObject: { createElement: (tagName) => new FakeElement(tagName) }
   });
 
   controller.render(readiness, { status: 'ready' });
   controller.bindEvents();
   const source = element.find((node) => node.tagName === 'pre');
-  // 沙箱模型：脚本在 Web Worker 隔离沙箱中执行，无需手动审批按钮
-  const approve = element.find((node) => node.dataset.storyScriptApproveHash !== undefined);
-  assert.equal(approve, null);
+  const approve = element.find((node) => node.dataset.storyScriptReview === 'panel-script'
+    && node.dataset.storyScriptDecision === 'approved');
   assert.equal(source.textContent, '<script>renderPanel()</script>');
   assert.equal(element.className, 'story-custom-approvals is-complete');
-  // 渲染不产生任何审批副作用，也不会改动已保存的兼容审查
-  assert.equal(rendered, 0);
-  assert.deepEqual(state.customStoryDraft.compatibilityReview.approvedScriptHashes, []);
+  assert.ok(approve);
+  element.dispatchClick(approve);
+  assert.equal(rendered, 1);
+  assert.deepEqual(state.customStoryDraft.compatibilityReview.scriptReviews, [{
+    scriptId: 'panel-script',
+    contentHash: 'sha256:script',
+    decision: 'approved',
+    note: '已核对脚本内容、来源和受限运行风险。'
+  }]);
+  assert.equal(state.customStoryDraft.compatibilityReview.executionMode, 'local-observe');
 });
 
 test('blocked source runtime renders exact removals before approving a safe derivative', () => {
@@ -192,7 +211,7 @@ class FakeElement {
   }
 
   closest(selector) {
-    if (selector === '[data-story-script-approve-hash]' && this.dataset.storyScriptApproveHash !== undefined) return this;
+    if (selector === '[data-story-script-review]' && this.dataset.storyScriptReview !== undefined) return this;
     if (selector === '[data-story-compatibility-ack]' && this.dataset.storyCompatibilityAck !== undefined) return this;
     if (selector === '[data-story-compatibility-retry]' && this.dataset.storyCompatibilityRetry !== undefined) return this;
     return null;

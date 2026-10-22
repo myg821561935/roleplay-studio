@@ -71,15 +71,81 @@ function createPlaceholderPng(width, height, [r, g, b]) {
   return Buffer.concat([PNG_SIGNATURE, ihdr, idat, iend]);
 }
 
-export function exportCharacterCardPng(characterCard, worldBook = [], basePng = null) {
-  const v2Card = toV2CharacterCard(characterCard, worldBook);
-  const json = JSON.stringify(v2Card);
+export function exportCharacterCardPng(characterCard, worldBook = [], basePng = null, {
+  coreMemory = null,
+  foreshadowing = [],
+  forceV3 = false
+} = {}) {
+  const shouldExportV3 = forceV3 || String(characterCard?.sourceSpec || '').toLowerCase() === 'chara_card_v3';
+  const exportedCard = shouldExportV3
+    ? exportCharacterCardToV3(characterCard, { worldBook, coreMemory, foreshadowing })
+    : toV2CharacterCard(characterCard, worldBook);
+  const json = JSON.stringify(exportedCard);
   const base64 = Buffer.from(json, 'utf8').toString('base64');
 
   const png = normalizeBasePng(basePng) || createPlaceholderPng(256, 256, [45, 42, 58]);
-  const keyword = String(v2Card?.spec || '').toLowerCase() === 'chara_card_v3' ? 'ccv3' : 'chara';
+  const keyword = String(exportedCard?.spec || '').toLowerCase() === 'chara_card_v3' ? 'ccv3' : 'chara';
   const textChunk = createTextChunk(keyword, base64);
   return replaceCharacterMetadata(png, textChunk);
+}
+
+export function exportCharacterCardToV3(card = {}, {
+  worldBook = [],
+  coreMemory = null,
+  foreshadowing = []
+} = {}) {
+  const safeCard = card && typeof card === 'object' ? card : {};
+  const v3Data = {
+    name: String(safeCard.name || '未命名角色').trim(),
+    description: String(safeCard.description || '').trim(),
+    personality: String(safeCard.personality || '').trim(),
+    scenario: String(safeCard.scenario || '').trim(),
+    first_mes: String(safeCard.firstMessage || '').trim(),
+    mes_example: Array.isArray(safeCard.exampleDialog)
+      ? safeCard.exampleDialog.join('\n')
+      : String(safeCard.exampleDialog || '').trim(),
+    creator_notes: String(safeCard.creatorNotes || '').trim(),
+    system_prompt: String(safeCard.systemPrompt || '').trim(),
+    post_history_instructions: String(safeCard.postHistoryInstructions || '').trim(),
+    alternate_greetings: Array.isArray(safeCard.alternateGreetings) ? safeCard.alternateGreetings : [],
+    tags: Array.isArray(safeCard.tags) ? safeCard.tags : [],
+    creator: String(safeCard.creator || '').trim(),
+    character_version: String(safeCard.characterVersion || '1.0.0').trim(),
+    extensions: {
+      ...(safeCard.extensions || {}),
+      local_roleplay_agent: {
+        ...(safeCard.extensions?.local_roleplay_agent || {}),
+        coreMemory: coreMemory || undefined,
+        foreshadowing: Array.isArray(foreshadowing) && foreshadowing.length ? foreshadowing : undefined
+      }
+    }
+  };
+
+  if (Array.isArray(worldBook) && worldBook.length) {
+    v3Data.character_book = {
+      name: `${v3Data.name}的世界书`,
+      entries: worldBook.map((entry, index) => ({
+        id: entry.id ?? index,
+        keys: Array.isArray(entry.keys)
+          ? entry.keys
+          : (Array.isArray(entry.keywords) ? entry.keywords : (entry.keys ? [entry.keys] : [])),
+        secondary_keys: Array.isArray(entry.secondaryKeys) ? entry.secondaryKeys : [],
+        content: String(entry.content || '').trim(),
+        comment: String(entry.comment || entry.title || '').trim(),
+        constant: Boolean(entry.constant),
+        selectiveLogic: Number(entry.selectiveLogic ?? 0),
+        order: Number(entry.order ?? 100),
+        position: entry.position ?? 1,
+        enabled: entry.enabled !== false
+      }))
+    };
+  }
+
+  return {
+    spec: 'chara_card_v3',
+    spec_version: '3.0',
+    data: v3Data
+  };
 }
 
 function normalizeBasePng(value) {

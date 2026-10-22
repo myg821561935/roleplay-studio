@@ -1,4 +1,6 @@
+import { applyGroundedLedgerAction, isProtectedLedgerWrite } from './groundedLedger.js';
 import { normalizeActionEnvelope } from './actionProtocol.js';
+import { projectWorldClock } from './worldClock.js';
 import { advanceSimulationClock, ensureSimulationMemory } from './npcSimulation.js';
 
 const ALLOWED_STATE_ROOTS = new Set([
@@ -26,7 +28,7 @@ export class WorldStateArbitrationError extends Error {
   }
 }
 
-export function adjudicateActionEnvelope({ memory, envelope, now = () => new Date() } = {}) {
+export function adjudicateActionEnvelope({ memory, envelope, evidenceContext, now = () => new Date() } = {}) {
   const normalized = normalizeActionEnvelope(envelope);
   const next = ensureSimulationMemory(memory);
   const revisionBefore = Number(next.simulation.revision || 0);
@@ -55,13 +57,13 @@ export function adjudicateActionEnvelope({ memory, envelope, now = () => new Dat
   for (const action of normalized.actions) {
     try {
       assertConditions(next, action.conditions);
-      const actionEffects = applyAction(next, action, now);
+      const actionEffects = applyAction(next, action, now, evidenceContext);
       accepted.push({ action, effects: actionEffects });
       effects.push(...actionEffects);
     } catch (error) {
       const arbitrationError = error instanceof WorldStateArbitrationError
         ? error
-        : new WorldStateArbitrationError('ACTION_APPLY_FAILED', error.message);
+        : new WorldStateArbitrationError(error.code?.startsWith('LEDGER_') ? error.code : 'ACTION_APPLY_FAILED', error.detail || error.message);
       rejected.push({ action, code: arbitrationError.code, detail: arbitrationError.detail });
     }
   }
@@ -100,19 +102,22 @@ export function replayActionHistory({ memory, messages, now = () => new Date() }
   const checkpointId = String(source.actionCheckpointMessageId || '');
   const checkpointIndex = checkpointId ? safeMessages.findIndex((message) => message?.id === checkpointId) : -1;
   const replayMessages = checkpointIndex >= 0 ? safeMessages.slice(checkpointIndex + 1) : safeMessages;
+  let userMessage = null;
   for (const message of replayMessages) {
+    if (message?.role === 'user') userMessage = message;
     if (message?.role !== 'assistant'
       || message?.contextExcluded === true
       || message?.excluded === true
       || !message.actionEnvelope) continue;
-    const adjudicated = adjudicateActionEnvelope({ memory: next, envelope: message.actionEnvelope, now });
+    const adjudicated = adjudicateActionEnvelope({ memory: next, envelope: message.actionEnvelope, evidenceContext: { userMessage, assistantMessage: message }, now });
     Object.assign(next, adjudicated.memory);
     results.set(message.id, adjudicated.result);
   }
   return { memory: next, results };
 }
 
-function applyAction(memory, action, now) {
+function applyAction(memory, action, now, evidenceContext) {
+  if (action.type === 'commitment.update' || action.type.startsWith('item.')) return applyGroundedLedgerAction(memory, action, evidenceContext);
   if (action.type.startsWith('state.')) return applyStateAction(memory, action);
   if (action.type === 'actor.move') return applyActorField(memory, action, 'location', action.location);
   if (action.type === 'actor.status') return applyActorField(memory, action, 'status', action.status);
@@ -122,6 +127,7 @@ function applyAction(memory, action, now) {
   if (action.type === 'clock.advance') {
     const advanced = advanceSimulationClock(memory.simulation, { minutes: action.minutes, reason: action.reason, now });
     memory.simulation = advanced.simulation;
+    memory.worldState.clock = projectWorldClock(memory.worldState.clock, memory.simulation);
     return advanced.effects.map((effect) => ({ ...effect, actionId: action.id }));
   }
   throw new WorldStateArbitrationError('ACTION_TYPE_UNSUPPORTED', action.type);
@@ -129,6 +135,7 @@ function applyAction(memory, action, now) {
 
 function applyStateAction(memory, action) {
   assertAllowedPath(action.path);
+  if (isProtectedLedgerWrite(memory.worldState, action.path, action.value)) throw new WorldStateArbitrationError('LEDGER_DIRECT_WRITE_FORBIDDEN', action.path);
   const segments = action.path.split('.');
   const before = structuredClone(getPath(memory.worldState, segments));
   let after;

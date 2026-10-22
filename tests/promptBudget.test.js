@@ -40,3 +40,49 @@ test('final prompt budget removes a history turn as a pair instead of orphaning 
   assert.equal(result.messages.some((message) => message.content.includes('较早行动')), false);
   assert.equal(result.messages.some((message) => message.content.includes('较早结果')), false);
 });
+
+test('final prompt budget removes a coherence-sensitive community preset as one atomic group', () => {
+  const result = enforcePromptMessageBudget([
+    { role: 'system', content: '核心规则。', _promptKind: 'core-system' },
+    {
+      role: 'system',
+      content: '变量初始化约束。'.repeat(80),
+      _promptKind: 'preset-critical',
+      _promptModuleId: 'preset-setup',
+      _promptIntegrityGroup: 'community-preset:atomic'
+    },
+    {
+      role: 'system',
+      content: '变量输出协议。'.repeat(80),
+      _promptKind: 'preset-critical',
+      _promptModuleId: 'preset-output',
+      _promptIntegrityGroup: 'community-preset:atomic'
+    },
+    { role: 'user', content: '当前行动。', _promptKind: 'current-user' }
+  ], { maxTokens: 80 });
+
+  assert.equal(result.messages.some((message) => /变量初始化约束/.test(message.content)), false);
+  assert.equal(result.messages.some((message) => /变量输出协议/.test(message.content)), false);
+  assert.deepEqual(
+    result.report.omittedMessageInspection.map((message) => message.moduleId).sort(),
+    ['preset-output', 'preset-setup']
+  );
+  assert.ok(result.report.omittedMessageInspection.every((message) => (
+    message.status === 'evicted-by-budget' && /完整性保护/.test(message.evictionReason)
+  )));
+});
+
+test('budget-visible dynamic context is evicted before protected user intent', () => {
+  const result = enforcePromptMessageBudget([
+    { role: 'system', content: '核心规则。', _promptKind: 'core-system' },
+    { role: 'system', content: '动态摘要。'.repeat(120), _promptKind: 'dynamic-context-tail' },
+    { role: 'user', content: '我先听门外的人说完。', _promptKind: 'current-user' }
+  ], { maxTokens: 80 });
+
+  assert.equal(result.messages.some((message) => /动态摘要/.test(message.content)), false);
+  assert.equal(result.messages.at(-1).content, '我先听门外的人说完。');
+  assert.deepEqual(result.report.omittedMessageInspection.map((message) => ({
+    kind: message.kind,
+    status: message.status
+  })), [{ kind: 'dynamic-context-tail', status: 'evicted-by-budget' }]);
+});

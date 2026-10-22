@@ -73,6 +73,106 @@ body.asset-center-open {
   display: flex;
   align-items: center;
   gap: 10px;
+  position: relative;
+}
+
+.asset-import-menu {
+  position: relative;
+}
+
+.asset-import-menu summary.asset-secondary-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line, rgba(150, 110, 80, 0.22));
+  border-radius: 8px;
+  background: var(--panel, #fcf8f2);
+  color: var(--text, #34281e);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+  transition: all 0.16s ease;
+  user-select: none;
+}
+
+.asset-import-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.asset-import-menu summary:hover,
+.asset-import-menu[open] summary {
+  background: var(--panel-raised, #ffffff);
+  border-color: #3b6b63;
+  color: #3b6b63;
+}
+
+.asset-import-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 260px;
+  padding: 8px;
+  border: 1px solid rgba(120, 184, 173, 0.35);
+  border-radius: 10px;
+  background: rgba(253, 250, 244, 0.98);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(12px);
+  animation: asset-popover-in 0.15s ease-out;
+}
+
+@keyframes asset-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.asset-import-popover button[role="menuitem"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text, #34281e);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.asset-import-popover button[role="menuitem"] strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #34281e);
+}
+
+.asset-import-popover button[role="menuitem"] span {
+  font-size: 11px;
+  color: var(--muted, #7d6854);
+  font-family: var(--mono, monospace);
+}
+
+.asset-import-popover button[role="menuitem"]:hover {
+  background: rgba(59, 107, 99, 0.12);
+  color: #2b564f;
+}
+
+.asset-import-popover button[role="menuitem"]:hover strong {
+  color: #2b564f;
 }
 
 .asset-center-header .icon-button {

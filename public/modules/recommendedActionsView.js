@@ -4,6 +4,7 @@ import { normalizeRecommendedActionPresentation } from './recommendedActionPrese
 const CUSTOM_ACTION_PATTERN = /^(?:自定义(?:行动|选项)?|自由输入|其他)(?:[。.!！])?$/u;
 const INSTRUCTIONAL_HINT_PATTERN = /^(?:选择|请选择|可选择|你可以|从下列|在下方)/u;
 const CONTROL_FRAGMENT_PATTERN = /(?:<\/?turn[_ -]?frame|lra\.narrative|\b(?:facts|stateDelta|affordances|presentActors|timeAdvanceMinutes)\s*[:：]|[{}\[\]])/iu;
+const PRIMARY_ACTION_COUNT = 3;
 
 export function createRecommendedActionsViewNode({
   actions,
@@ -41,10 +42,12 @@ export function createRecommendedActionsViewNode({
 
   const list = documentObject.createElement('div');
   list.className = 'recommended-actions-list';
-  suggestedActions.forEach((text, index) => {
+  suggestedActions.slice(0, PRIMARY_ACTION_COUNT).forEach((text, index) => {
     list.append(createSuggestedActionButton(documentObject, text, index));
   });
-  list.append(createCustomActionRow(documentObject, suggestedActions.length));
+  list.append(createCustomActionRow(documentObject, Math.min(suggestedActions.length, PRIMARY_ACTION_COUNT)));
+  const moreActions = createMoreActionsNode(documentObject, suggestedActions.slice(PRIMARY_ACTION_COUNT));
+  if (moreActions) list.append(moreActions);
 
   wrap.append(header, situation, list);
   return wrap;
@@ -80,13 +83,30 @@ export function isCustomRecommendedAction(value) {
 }
 
 function createSuggestedActionButton(documentObject, text, index) {
+  const strategy = resolveActionStrategy(text);
   const button = documentObject.createElement('button');
   button.type = 'button';
   button.className = 'recommendation-button';
   button.dataset.recommendedAction = text;
-  button.setAttribute?.('aria-label', `行动选项 ${index + 1}：${text}`);
-  button.append(createNumber(documentObject, index), createCopy(documentObject, text));
+  button.dataset.actionStrategy = strategy;
+  button.setAttribute?.('aria-label', `行动选项 ${index + 1}，${strategy}：${text}`);
+  button.append(createNumber(documentObject, index), createCopy(documentObject, text, strategy));
   return button;
+}
+
+function createMoreActionsNode(documentObject, actions) {
+  if (!actions.length) return null;
+  const details = documentObject.createElement('details');
+  details.className = 'recommendation-more-actions';
+  const summary = documentObject.createElement('summary');
+  summary.textContent = `更多行动 · ${actions.length}`;
+  const list = documentObject.createElement('div');
+  list.className = 'recommendation-more-list';
+  actions.forEach((text, index) => {
+    list.append(createSuggestedActionButton(documentObject, text, PRIMARY_ACTION_COUNT + 1 + index));
+  });
+  details.append(summary, list);
+  return details;
 }
 
 function createCustomActionRow(documentObject, index) {
@@ -120,11 +140,32 @@ function createNumber(documentObject, index) {
   return number;
 }
 
-function createCopy(documentObject, text) {
+function createCopy(documentObject, text, strategy = '') {
   const copy = documentObject.createElement('span');
   copy.className = 'recommendation-copy';
-  copy.textContent = text;
+  if (strategy) {
+    const badge = documentObject.createElement('span');
+    badge.className = 'recommendation-strategy';
+    badge.textContent = strategy;
+    copy.append(badge);
+  }
+  const content = documentObject.createElement('span');
+  content.className = 'recommendation-text';
+  content.textContent = text;
+  copy.append(content);
   return copy;
+}
+
+export function resolveActionStrategy(value) {
+  const text = String(value || '').replace(/^\s*[【\[][^】\]]+[】\]]\s*/u, '').trim();
+  if (/(?:回答|回应|说明|承认|表明|坦白|告诉|开口|答应|点头)/u.test(text)) return '回应';
+  if (/(?:询问|反问|追问|试探|打听|套话|确认|求证)/u.test(text)) return '试探';
+  if (/(?:观察|查看|检查|辨认|感知|倾听|等待|留意|分析)/u.test(text)) return '观察';
+  if (/(?:沉默|隐瞒|掩饰|躲|藏|退|离开|避开|绕开|装作|假装)/u.test(text)) return '回避';
+  if (/(?:攻击|出手|拔剑|反击|威胁|阻拦|强行|正面对抗|迎战)/u.test(text)) return '对抗';
+  if (/(?:帮助|协助|配合|交付|递给|接受|同行|跟随)/u.test(text)) return '合作';
+  if (/(?:前往|走向|进入|推门|起身|靠近|返回|追上|移动)/u.test(text)) return '行动';
+  return '行动';
 }
 
 function extractNarrativeClosing(value) {
@@ -135,13 +176,13 @@ function extractNarrativeClosing(value) {
     .replace(/\s+/gu, ' ')
     .trim();
   if (!source) return '';
-  const sentences = source.match(/[^。！？!?]{4,180}[。！？!?]?/gu) || [];
-  return compactText(sentences.at(-1), 180);
+  const sentences = source.match(/[^。！？!?]{4,100}[。！？!?]?/gu) || [];
+  return compactText(sentences.at(-1), 90);
 }
 
 function isNarrativeSituation(value) {
   const text = compactText(value, 240);
-  if (!text || text.length < 6 || CONTROL_FRAGMENT_PATTERN.test(text)) return false;
+  if (!text || text.length < 6 || text.length > 120 || CONTROL_FRAGMENT_PATTERN.test(text)) return false;
   return /[\p{L}\p{N}]/u.test(text) && !/^[,，;；:：]/u.test(text);
 }
 

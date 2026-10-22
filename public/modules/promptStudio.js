@@ -1,3 +1,6 @@
+import { createHistoryRepairController } from './historyRepair.js';
+import { renderPromptChanges } from './promptChangeView.js';
+import { exportPromptComparison } from './promptComparison.js';
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -23,6 +26,14 @@ function moduleStatusLabel(status) {
   }[status] || '未知状态';
 }
 
+function blockStatusLabel(status) {
+  return {
+    running: '已发送',
+    truncated: '已压缩',
+    'evicted-by-budget': '预算淘汰'
+  }[status] || '';
+}
+
 function makeElement(documentObject, tagName, className, value = '') {
   const element = documentObject.createElement(tagName);
   if (className) element.className = className;
@@ -40,9 +51,14 @@ export function createPromptStudioController({
   humanizeApiError = (error) => error?.message || String(error),
   promptAction = () => null,
   onIntegrityChange = () => {},
+  onOpenCopy = () => {},
   documentObject = globalThis.document
 } = {}) {
+  const repairContainer = els.promptStudio?.appendChild && documentObject?.createElement ? documentObject.createElement('div') : null;
+  if (repairContainer) els.promptStudio.appendChild(repairContainer);
+  const historyRepair = createHistoryRepairController({ container: repairContainer, documentObject, apiRequest, getCurrentSessionId, onOpenCopy });
   let snapshot = null;
+  let snapshotSessionId = null;
   let eventsBound = false;
   let busy = false;
   let draggedModuleId = '';
@@ -136,8 +152,14 @@ export function createPromptStudioController({
       const row = makeElement(documentObject, 'li', 'prompt-studio-block');
       const order = makeElement(documentObject, 'span', 'prompt-studio-block-order', String(block.order || '—').padStart(2, '0'));
       const main = makeElement(documentObject, 'div', 'prompt-studio-block-main');
+      const heading = makeElement(documentObject, 'div', 'prompt-studio-block-heading');
+      heading.append(
+        makeElement(documentObject, 'strong', '', text(block.title) || '本地提示词区块')
+      );
+      const statusLabel = blockStatusLabel(text(block.status));
+      if (statusLabel) heading.append(makeElement(documentObject, 'span', `prompt-studio-status ${text(block.status)}`, statusLabel));
       main.append(
-        makeElement(documentObject, 'strong', '', text(block.title) || '本地提示词区块'),
+        heading,
         makeElement(documentObject, 'span', 'prompt-studio-block-meta', [
           text(block.role) || 'system',
           block.depth === null || block.depth === undefined ? '固定位置' : `深度 ${block.depth}`,
@@ -145,6 +167,9 @@ export function createPromptStudioController({
           text(block.trigger) || text(block.kind)
         ].filter(Boolean).join(' · '))
       );
+      if (text(block.evictionReason)) {
+        main.append(makeElement(documentObject, 'span', 'prompt-studio-block-reason', text(block.evictionReason)));
+      }
       row.append(order, main);
       container.append(row);
     }
@@ -158,10 +183,22 @@ export function createPromptStudioController({
   }
 
   function render() {
+    if (snapshotSessionId !== getCurrentSessionId()) snapshot = null;
+    historyRepair.render();
     const studio = snapshot?.promptStudio;
     renderIntegrity(studio?.integrity || state.session?.memory?.promptRuntime?.communityPresetIntegrity);
+    if (studio?.narrationDrift?.status === 'possible-conflict' && els.promptStudioIntegrity) {
+      els.promptStudioIntegrity.append(makeElement(documentObject, 'p', 'prompt-studio-integrity is-warning', studio.narrationDrift.message));
+    }
+    if (els.promptStudioIntegrity) {
+      for (const issue of [...(studio?.sourceConflicts?.conflicts || []), ...(studio?.qualityAudit?.issues || [])]) els.promptStudioIntegrity.append(makeElement(documentObject, 'p', 'prompt-studio-integrity is-warning', issue.message));
+      const facts = studio?.factSources || [];
+      if (facts.length) els.promptStudioIntegrity.append(makeElement(documentObject, 'p', '', '记忆来源：' + facts.map(f => `${f.title}（${({card:'原卡', 'user-confirmed':'用户确认', 'history-observed':'历史中出现', 'model-inference':'模型推测'})[f.origin] || '来源待核实'}；${f.reviewStatus}）`).join('；')));
+      if (studio?.budgetAccounting?.optionalTokensRemoved) els.promptStudioIntegrity.append(makeElement(documentObject, 'p', '', `预算不足，已优先移除约 ${studio.budgetAccounting.optionalTokensRemoved} tokens 的可选 Agent 补充；下方可查看保留与淘汰区块。`));
+    }
     renderModules(studio?.modules || []);
     renderBlocks(studio?.blocks || []);
+    renderPromptChanges(els.promptStudioChanges, studio?.changes || [], documentObject);
     renderRequest(snapshot?.request?.messages || []);
     if (els.promptStudioSummary) {
       const budgets = studio?.budgets || {};
@@ -174,6 +211,7 @@ export function createPromptStudioController({
   async function refreshPreview() {
     if (busy) return null;
     setBusy(true);
+    const requestedSessionId = getCurrentSessionId();
     setStatus(els.promptStudioStatus, '正在组装本地预览...', 'busy');
     try {
       const content = text(getPreviewContent());
@@ -185,6 +223,8 @@ export function createPromptStudioController({
         }
       });
       if (!isRecord(payload?.promptStudio) || !isRecord(payload?.request)) throw new Error('PROMPT_PREVIEW_INVALID');
+      if (requestedSessionId !== getCurrentSessionId()) return null;
+      snapshotSessionId = requestedSessionId;
       snapshot = payload;
       if (!state.session || typeof state.session !== 'object') state.session = {};
       if (!state.session.memory || typeof state.session.memory !== 'object') state.session.memory = {};
@@ -265,6 +305,15 @@ export function createPromptStudioController({
   function bindEvents() {
     if (eventsBound) return;
     eventsBound = true;
+    els.promptStudioExportComparison?.addEventListener('click', async () => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await exportPromptComparison({ apiRequest, sessionId: getCurrentSessionId(), content: text(getPreviewContent()), documentObject });
+        setStatus(els.promptStudioStatus, '已导出两种模式的请求与盲评表；尚未调用模型。', 'ok');
+      } catch (error) { setStatus(els.promptStudioStatus, humanizeApiError(error), 'error'); }
+      finally { setBusy(false); }
+    });
     els.promptStudioRefresh?.addEventListener('click', () => { void refreshPreview(); });
     els.promptStudioShowRequest?.addEventListener('click', () => {
       showRequest = !showRequest;

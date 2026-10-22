@@ -79,11 +79,12 @@ export class McpRegistry {
   /**
    * 调用工具
    */
-  async callTool({ serverId, toolName, arguments: args = {} }) {
+  async callTool({ serverId, toolName, arguments: args = {}, signal = null }) {
     const entry = this.connections.get(serverId);
     if (!entry) throw new Error(`MCP_SERVER_NOT_FOUND: ${serverId}`);
     if (!entry.client) throw new Error(`MCP_SERVER_NOT_CONNECTED: ${serverId}`);
-    return entry.client.callTool({ name: toolName, arguments: args });
+    signal?.throwIfAborted();
+    return entry.client.callTool({ name: toolName, arguments: args, ...(signal ? { signal } : {}) });
   }
 
   /**

@@ -134,7 +134,7 @@ export function createHeavyFrontendRuntimeController({
       await loadPackages({ announce: false });
       setStatus(result.duplicate
         ? '已识别为现有版本；未重复复制文件。'
-        : '导入完成。当前版本必须审核通过后才能运行。', 'ok');
+        : '导入完成。当前版本可在本地隔离环境观察运行；启动、调用与错误会写入审计。', 'ok');
     } catch (error) {
       setStatus(`导入失败：${humanizeError(error)}`, 'error');
     }
@@ -184,8 +184,8 @@ export function createHeavyFrontendRuntimeController({
   }
 
   async function launch(item) {
-    if (item.currentRevision?.review?.status !== 'approved') {
-      setStatus('当前版本尚未批准，不能启动。', 'error');
+    if (item.currentRevision?.review?.status === 'rejected') {
+      setStatus('当前版本已被明确拒绝，不能启动。', 'error');
       return;
     }
     const providerId = ui.detail.querySelector('#heavy-frontend-provider')?.value || '';
@@ -389,7 +389,7 @@ export function createHeavyFrontendRuntimeController({
         <div>
           <span>当前内容哈希</span>
           <code>${escapeHtml(revision?.contentHash || '')}</code>
-          <small>${revision?.review?.note ? `审核记录：${escapeHtml(revision.review.note)}` : '更新任何文件都会生成新版本，并使批准失效。'}</small>
+          <small>${revision?.review?.note ? `审核记录：${escapeHtml(revision.review.note)}` : '更新任何文件都会生成新版本，并重新进入本地观察。'}</small>
         </div>
         <div class="heavy-frontend-review-actions">
           <button type="button" class="ghost-button" data-heavy-frontend-action="reject">拒绝当前版本</button>
@@ -403,7 +403,7 @@ export function createHeavyFrontendRuntimeController({
           <label><span>服务端 Provider</span><select id="heavy-frontend-provider">${renderProviderOptions(providers)}</select></label>
           <label><span>本次最多调用</span><input id="heavy-frontend-max-calls" type="number" min="1" max="100" value="40"></label>
           <label><span>单次最大输出 Tokens</span><input id="heavy-frontend-max-tokens" type="number" min="256" max="32768" value="16000"></label>
-          <button type="button" class="primary-button" data-heavy-frontend-action="launch" ${review.label === '已批准' && providers.length ? '' : 'disabled'}>启动隔离实例</button>
+          <button type="button" class="primary-button" data-heavy-frontend-action="launch" ${review.status !== 'rejected' && providers.length ? '' : 'disabled'}>启动隔离实例</button>
         </div>
         ${providers.length ? '' : '<p class="heavy-frontend-inline-warning">尚未配置可用 Provider，请先在工作台设置模型与密钥。</p>'}
       </section>
@@ -479,9 +479,9 @@ function renderProviderOptions(providers) {
 }
 
 function reviewPresentation(status) {
-  if (status === 'approved') return { label: '已批准', className: 'approved' };
-  if (status === 'rejected') return { label: '已拒绝', className: 'rejected' };
-  return { label: '待审核', className: 'required' };
+  if (status === 'approved') return { status: 'approved', label: '已批准', className: 'approved' };
+  if (status === 'rejected') return { status: 'rejected', label: '已拒绝', className: 'rejected' };
+  return { status: 'local-observe', label: '本地观察', className: 'required' };
 }
 
 function countSeverities(findings) {
@@ -547,6 +547,7 @@ function formatNumber(value) {
 function auditLabel(value) {
   return ({
     'package-import': '导入新版本',
+    'observation-ready': '观察运行就绪',
     'package-import-existing-revision': '识别已有版本',
     'package-review': '人工审核',
     'runtime-launch': '启动实例',
@@ -561,6 +562,7 @@ function humanizeError(error) {
   const code = error?.code || error?.message || 'UNKNOWN_ERROR';
   return ({
     HEAVY_FRONTEND_REVIEW_REQUIRED: '当前内容哈希尚未审核通过',
+    HEAVY_FRONTEND_REJECTED: '当前版本已被明确拒绝运行',
     HEAVY_FRONTEND_PROVIDER_NOT_CONFIGURED: '没有配置可用 Provider',
     HEAVY_FRONTEND_PROVIDER_SECRET_MISSING: '所选 Provider 缺少密钥',
     HEAVY_FRONTEND_ENTRY_REQUIRED: '无法唯一识别入口 HTML，请保留 start-screen-noST.html 或 index.html',

@@ -36,7 +36,8 @@ export function createImmersiveLedgerController({
 
   const getLatestPanels = () => resolveLatestRoleplayPanels(
     Array.isArray(state.session?.messages) ? state.session.messages : [],
-    extractRoleplayPresentation
+    extractRoleplayPresentation,
+    state.session?.turnViewSnapshot
   );
 
   const toWorldBookRecord = (entry) => toImmersiveWorldBookRecord(entry, truncateText);
@@ -47,7 +48,10 @@ export function createImmersiveLedgerController({
     const memory = state.session?.memory || {};
     const worldState = memory.worldState || {};
     const panels = getLatestPanels();
-    const turnFrame = resolveLatestTurnFrame(Array.isArray(state.session?.messages) ? state.session.messages : []);
+    const turnFrame = resolveLatestTurnFrame(
+      Array.isArray(state.session?.messages) ? state.session.messages : [],
+      state.session?.turnViewSnapshot
+    );
     const crisisSections = presentation.custom
       ? []
       : parseImmersiveDocumentSections(tpl?.tabs?.currentCrisis?.content)
@@ -222,8 +226,15 @@ export function createImmersiveLedgerController({
   }
 
   function buildImmersiveWorldBookRecords(pattern, limit = 6) {
+    const snapshot = state.session?.turnViewSnapshot;
+    const committedActivationIds = snapshot?.spec === 'lra.turn-view-snapshot/v1'
+      && snapshot?.worldBookActivation
+      && Array.isArray(snapshot.worldBookActivation.activatedIds)
+      ? new Set(snapshot.worldBookActivation.activatedIds.map(String))
+      : null;
     return (Array.isArray(state.config?.worldBook) ? state.config.worldBook : [])
       .filter((entry) => entry && entry.enabled !== false)
+      .filter((entry) => committedActivationIds === null || committedActivationIds.has(String(entry.id || '')))
       .filter((entry) => {
         const visibility = entry?.extensions?.visibility || entry?.visibility || 'player';
         return visibility !== 'gm' && entry?.extensions?.gmOnly !== true;

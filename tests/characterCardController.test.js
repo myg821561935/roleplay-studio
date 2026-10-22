@@ -250,6 +250,7 @@ test('character-card controller keeps invalid JSON local and does not call the A
 
 test('favorite loading keeps character, world book, and prompt modules in one session', async () => {
   const requests = [];
+  const applied = {};
   const preset = {
     id: 'favorite-1',
     name: '望舒旧案',
@@ -265,27 +266,77 @@ test('favorite loading keeps character, world book, and prompt modules in one se
     },
     apiRequest: async (path, options) => {
       requests.push({ path, options });
-      if (path === '/api/character-card') return { characterCard: preset.characterCard };
-      if (path === '/api/world-book') return { worldBook: preset.worldBook };
-      return { promptModules: preset.promptModules };
+      return {
+        characterCard: preset.characterCard,
+        worldBook: preset.worldBook,
+        promptModules: preset.promptModules
+      };
     },
     getSessionId: () => 'story-session',
     getCharacterPresets: () => [preset],
     getKnownContentPackIds: () => ['xianxia'],
+    setCharacterCard: (value) => { applied.characterCard = value; },
+    setWorldBook: (value) => { applied.worldBook = value; },
+    setPromptModules: (value) => { applied.promptModules = value; },
     setStatus: () => {},
     documentRef: null
   });
 
   await controller.loadCharacterPresetFavorite();
 
-  assert.deepEqual(requests.map(({ path, options }) => ({
-    path,
-    sessionId: options.body.sessionId
-  })), [
-    { path: '/api/character-card', sessionId: 'story-session' },
-    { path: '/api/world-book', sessionId: 'story-session' },
-    { path: '/api/prompt-modules', sessionId: 'story-session' }
-  ]);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/api/character-presets/apply');
+  assert.deepEqual(requests[0].options.body, {
+    sessionId: 'story-session',
+    characterCard: preset.characterCard,
+    worldBook: preset.worldBook,
+    promptModules: preset.promptModules
+  });
+  assert.deepEqual(applied, {
+    characterCard: preset.characterCard,
+    worldBook: preset.worldBook,
+    promptModules: preset.promptModules
+  });
+});
+
+test('late favorite responses cannot redraw a newly selected session', async () => {
+  let sessionId = 'story-a';
+  let resolveRequest;
+  const response = new Promise((resolve) => { resolveRequest = resolve; });
+  const preset = {
+    id: 'favorite-1',
+    name: '旧会话收藏',
+    characterCard: { name: '旧角色' },
+    worldBook: [],
+    promptModules: []
+  };
+  const applied = [];
+  const controller = createCharacterCardController({
+    elements: {
+      characterPresetFavorites: { value: preset.id },
+      loadCharacterPreset: { dataset: {}, textContent: '加载' },
+      characterCardStatus: {}
+    },
+    apiRequest: async () => response,
+    getSessionId: () => sessionId,
+    getCharacterPresets: () => [preset],
+    setCharacterCard: () => applied.push('character'),
+    setWorldBook: () => applied.push('worldbook'),
+    setPromptModules: () => applied.push('prompt'),
+    setStatus: () => {},
+    documentRef: null
+  });
+
+  const pending = controller.loadCharacterPresetFavorite();
+  sessionId = 'story-b';
+  resolveRequest({
+    characterCard: preset.characterCard,
+    worldBook: preset.worldBook,
+    promptModules: preset.promptModules
+  });
+  await pending;
+
+  assert.deepEqual(applied, []);
 });
 
 test('imported character resources appear beside built-in presets and load as editable drafts', () => {

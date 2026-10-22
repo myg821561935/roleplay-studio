@@ -2,6 +2,7 @@ import {
   normalizeWorldBookTagRegistry,
   resolveWorldBookCharacterFilter
 } from './worldBookTagRegistry.js';
+import { normalizeWorldBookPosition } from '../agent/worldBookPosition.js';
 
 export function importWorldBookFromPayload(payload = {}) {
   const rawBook = readJsonPayload(payload);
@@ -152,11 +153,7 @@ function normalizeLogicValue(value) {
 }
 
 function normalizePosition(position) {
-  if (typeof position === 'number') {
-    // SillyTavern 规范：0 = before_char（角色描述前）、1 = after_char（角色描述后）
-    return position === 1 ? 'after_character' : 'before_character';
-  }
-  return stringValue(position || 'after_character');
+  return normalizeWorldBookPosition(position);
 }
 
 function readJsonPayload(payload) {

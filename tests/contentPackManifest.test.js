@@ -94,3 +94,9 @@ function createPack() {
     ruleSystem: { id: 'rain-night-rules', title: '听雨规则', boundary: '仙侠悬案', panels: [] }
   };
 }
+
+test('release upgrade respects an explicit external content pack engine ceiling',()=>{
+ const bundle=createContentPackBundle({...createPack(),manifest:{engine:'>=0.2.2 <1.0.0'}});
+ const inspected=inspectContentPackBundle(bundle,{appVersion:'1.1.0-rc.1'});
+ assert.equal(inspected.canInstall,false);
+});

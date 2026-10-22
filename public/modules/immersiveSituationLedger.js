@@ -31,7 +31,10 @@ export function createImmersiveSituationLedger({
     const memory = state.session?.memory || {};
     const worldState = memory.worldState || {};
     const panels = getLatestPanels();
-    const turnFrame = resolveLatestTurnFrame(Array.isArray(state.session?.messages) ? state.session.messages : []);
+    const turnFrame = resolveLatestTurnFrame(
+      Array.isArray(state.session?.messages) ? state.session.messages : [],
+      state.session?.turnViewSnapshot
+    );
     const quests = filterCustomStoryRecords(
       normalizeImmersiveRecords(resolveImmersiveQuestRecords(memory), '待推进事项'),
       presentation

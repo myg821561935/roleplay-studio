@@ -23,7 +23,7 @@ export function parseSseEvent(text) {
 // 由 SSE error 载荷构造错误对象：
 // 服务端留存了 partial 回合时透出 aborted 标记与消息 ID，供调用方刷新会话展示
 export function createSseError(data) {
-  const error = new Error(data?.error || 'STREAM_ERROR');
+  const error = new Error(data?.detail || data?.error || 'STREAM_ERROR');
   error.code = data?.error;
   if (data?.aborted === true) {
     error.aborted = true;

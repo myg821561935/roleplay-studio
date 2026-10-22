@@ -20,6 +20,20 @@ test('session replacement and fallback keep full-session semantics explicit', ()
   assert.equal(coordinator.replaceSession([], { fallback: null }), fallback);
 });
 
+test('full session replacement invalidates every inspector section exactly once', () => {
+  const state = { session: { id: 'one' } };
+  const coordinator = createSessionStateCoordinator({
+    state,
+    inspectorSections: ['memory', 'facts', 'worldbook']
+  });
+
+  coordinator.replaceSession({ id: 'one', messages: [{ id: 'm2' }] });
+  assert.deepEqual(coordinator.getDirtyInspectorSections(), ['memory', 'facts', 'worldbook']);
+
+  coordinator.replaceSession({ id: 'one', messages: [{ id: 'm3' }] });
+  assert.deepEqual(coordinator.getDirtyInspectorSections(), ['memory', 'facts', 'worldbook']);
+});
+
 test('session merge is shallow and rejects stale async responses after a session switch', () => {
   const state = {
     session: {

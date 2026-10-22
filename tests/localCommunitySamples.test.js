@@ -95,3 +95,16 @@ test('fails a ready sample when its pinned content hash changes', async () => {
     await rm(tempDir, { recursive: true, force: true });
   }
 });
+
+test('character samples count their normalized embedded worldbook entries', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'embedded-book-audit-'));
+  try {
+    const sourcePath = path.join(root, 'card.json');
+    await writeFile(sourcePath, JSON.stringify({ spec: 'chara_card_v2', data: { name: '测试人物', description: '简洁对白', character_book: { entries: [{ id: 1, keys: ['街道'], content: '街道通往广场。', enabled: true }] } } }));
+    const manifest = path.join(root, 'manifest.json');
+    await writeFile(manifest, JSON.stringify({ schemaVersion: 1, samples: [{ id: 'embedded', resourceType: 'character', contentTier: 'sfw', frontendTier: 'text', status: 'ready', sourcePath }] }));
+    const report = await auditLocalCommunitySamples(manifest);
+    assert.equal(report.results[0].status, 'passed');
+    assert.equal(report.results[0].details.worldBookEntries, 1);
+  } finally { await rm(root, {recursive:true, force:true}); }
+});

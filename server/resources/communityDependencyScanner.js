@@ -53,8 +53,8 @@ const RUNTIME_RULES = [
     status: 'missing',
     pathPatterns: [/(?:^|\.)(?:scripts?|javascript|scriptcode|onload|onmessage|hooks?)(?:\.|$)/i],
     textPatterns: [/<script(?:\s|>)/i, /javascript:\s*/i],
-    impact: '检测到可执行脚本或事件钩子。未审核代码保持禁用；通过人工审核、内容哈希绑定和本地审计后，受支持的正则脚本可进入隔离沙箱。',
-    recommendation: '逐条审核脚本来源、能力与副作用；只有审核通过且哈希未变化的脚本才能启用。'
+    impact: '检测到可执行脚本或事件钩子。可转换为受控正则脚本的部分会进入本地隔离沙箱观察运行并记录；无法隔离的宿主脚本仍不会执行。',
+    recommendation: '测试阶段观察来源、能力与副作用；需要收敛时切换为逐条审核，并将当前内容哈希绑定为长期结论。'
   },
   {
     id: 'regex-scripts',
@@ -354,7 +354,7 @@ function summarizeRequirements(requirements) {
   const summary = level === 'external-runtime'
     ? `检测到 ${counts.missing} 项当前无法执行的社区扩展能力；角色与设定可以安全保存，但不能视为可直接游玩的完整卡。`
     : level === 'review-required'
-      ? `检测到 ${counts.review} 项可进入隔离沙箱的脚本能力；默认保持禁用，需完成人工审核、内容哈希绑定与本地审计后才能启用。`
+      ? `检测到 ${counts.review} 项可进入隔离沙箱的脚本能力；默认在本地观察运行并记录，可随时切换为严格逐项审核。`
     : level === 'degraded'
       ? `检测到 ${counts.degraded} 项需要转换的社区能力；核心内容可以游玩，降级项需要复核。`
       : '未发现必须依赖酒馆助手、小白 X 或第三方脚本的能力。';
@@ -408,8 +408,8 @@ function resolveLightFrontendRule(rule, runtime, evidence, templateReport) {
         ...rule,
         status: 'review',
         evidence,
-        impact: `识别到 ${sandboxTransforms.length} 条需要隔离沙箱的正则脚本；导入后默认禁用，不再误报为“运行时缺失”。`,
-        recommendation: '逐条人工审核后生成内容哈希并写入本地审计；脚本内容变化时自动撤销授权。'
+        impact: `识别到 ${sandboxTransforms.length} 条需要隔离沙箱的正则脚本；导入后默认本地观察运行，不再误报为“运行时缺失”。`,
+        recommendation: '观察脚本来源、运行结果和本地审计；需要收敛时逐条确认内容哈希。'
       };
     }
   }
@@ -421,10 +421,10 @@ function resolveLightFrontendRule(rule, runtime, evidence, templateReport) {
       status: sandboxCount ? 'review' : 'supported',
       evidence,
       impact: sandboxCount
-        ? `已识别 ${safeCount} 条安全显示规则与 ${sandboxCount} 条待审核沙箱规则；未审核规则保持禁用。`
+        ? `已识别 ${safeCount} 条安全显示规则与 ${sandboxCount} 条本地观察沙箱规则；可隔离规则会记录运行结果。`
         : `已识别 ${safeCount} 条安全显示规则；只影响页面呈现，不改写原始消息与记忆。`,
       recommendation: sandboxCount
-        ? '在脚本治理面板逐条审核沙箱规则；内容哈希变化后必须重新审核。'
+        ? '在脚本治理面板查看风险与运行审计；需要收敛时逐条确认内容哈希。'
         : '导入后可在兼容报告中复核被禁用的高风险表达式。'
     };
   }

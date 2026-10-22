@@ -60,6 +60,13 @@ export function parseRoleplayResponse(rawContent) {
   }
   const normalizedSource = unwrapTransparentBlocks(source);
   const legacyChoices = extractLegacyRecommendedActions(normalizedSource);
+  const modelActions = extractRecommendedActions(normalizedSource);
+  const communityActions = extractCommunityActions(normalizedSource);
+  const actionSource = selectRecommendedActionSource({
+    legacyChoices,
+    modelActions,
+    communityActions
+  });
   const presentationSource = stripRecommendedActionBlocks(legacyChoices.content);
   const protocolDetected = [...PRESENTATION_BLOCKS, ...TRANSPARENT_WRAPPERS]
     .some((tag) => new RegExp(`<${escapeRegExp(tag)}(?=[\\s>/])`, 'i').test(source));
@@ -83,17 +90,11 @@ export function parseRoleplayResponse(rawContent) {
     speaker,
     emotion: extractEmotion(normalizedSource),
     protocolDetected,
-    recommendedActions: sanitizeRecommendedActions([
-      ...extractRecommendedActions(normalizedSource),
-      ...extractCommunityActions(normalizedSource),
-      ...legacyChoices.actions
-    ], 6),
-    recommendedActionPresentation: legacyChoices.presentation
-      || (extractRecommendedActions(normalizedSource).length >= 2
-        ? { source: 'model-recommended-actions', title: '', hint: '' }
-        : extractCommunityActions(normalizedSource).length >= 2
-          ? { source: 'community-action-block', title: '', hint: '' }
-          : null),
+    // 单回合中出现多种兼容选项协议时，它们属于同一个动作菜单的候选。
+    // 先确定唯一来源，再由 decisionPlanner 做校验、去重和补足，不能并排
+    // 渲染为两张选项卡或把两套选项混在一起。
+    recommendedActions: actionSource.actions,
+    recommendedActionPresentation: actionSource.presentation,
     panels: compactPanels({
       directorNotes,
       sceneStatus: cleanPanelText([
@@ -118,6 +119,25 @@ export function parseRoleplayResponse(rawContent) {
         .join('\n\n'))
     })
   };
+}
+
+function selectRecommendedActionSource({ legacyChoices, modelActions, communityActions }) {
+  const candidates = [
+    {
+      actions: sanitizeRecommendedActions(legacyChoices?.actions, 6),
+      presentation: legacyChoices?.presentation || null
+    },
+    {
+      actions: sanitizeRecommendedActions(modelActions, 6),
+      presentation: { source: 'model-recommended-actions', title: '', hint: '' }
+    },
+    {
+      actions: sanitizeRecommendedActions(communityActions, 6),
+      presentation: { source: 'community-action-block', title: '', hint: '' }
+    }
+  ];
+  return candidates.find((candidate) => candidate.actions.length >= 2)
+    || { actions: [], presentation: null };
 }
 
 function extractCommunityActions(source) {
@@ -220,10 +240,12 @@ function sanitizeRecommendedActions(values = [], maxActions = 4) {
 }
 
 function stripRecommendedActionBlocks(source) {
-  return String(source || '').replace(
-    /<recommended_actions\b[^>]*>[\s\S]*?<\/recommended_actions\s*>/ig,
-    '\n'
-  );
+  return ['recommended_actions', ...COMMUNITY_ACTION_BLOCKS].reduce((result, tag) => (
+    result.replace(
+      new RegExp(`<${escapeRegExp(tag)}\\b[^>]*>[\\s\\S]*?<\\/${escapeRegExp(tag)}\\s*>`, 'ig'),
+      '\n'
+    )
+  ), String(source || ''));
 }
 
 function extractBlocks(source, tag, { includePartial = false } = {}) {
@@ -266,6 +288,8 @@ function unwrapTransparentBlocks(source) {
   // 先剥离完整闭合的 emotion 标签，再剥离未闭合的半截 emotion 开头（流式 buffer 中常见）
   result = result
     .replace(/<emotion\b[^>]*>[\s\S]*?<\/emotion\s*>/gi, '')
+    .replace(/<emotion\b[^>]*>[^<]*<\/em\s*>/gi, '')
+    .replace(/<emotion\b[^>]*>[^<]*(?=<(?:plot|content|正文|msg|dream_body)\b)/gi, '')
     .replace(/<emotion\b[^>]*>[\s\S]*$/i, '')
     .replace(/<emotion\b[^>]*>$/i, '');
   TRANSPARENT_WRAPPERS.forEach((tag) => {

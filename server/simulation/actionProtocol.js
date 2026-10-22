@@ -1,9 +1,14 @@
+import { renderGroundedLedger } from './groundedLedger.js';
 import crypto from 'node:crypto';
 
 export const ACTION_PROTOCOL_SPEC = 'lra.action/v1';
 export const MAX_ACTIONS_PER_ENVELOPE = 20;
 
 const ACTION_TYPES = new Set([
+  'commitment.update',
+  'item.register',
+  'item.move',
+  'item.transfer',
   'state.set',
   'state.increment',
   'state.append',
@@ -31,7 +36,7 @@ export class ActionProtocolError extends Error {
   }
 }
 
-export function normalizeActionEnvelope(input, { maxActions = MAX_ACTIONS_PER_ENVELOPE } = {}) {
+export function normalizeActionEnvelope(input, { maxActions = MAX_ACTIONS_PER_ENVELOPE, rejectedActions = null } = {}) {
   const source = Array.isArray(input) ? { actions: input } : input;
   if (!isPlainObject(source)) throw new ActionProtocolError('ACTION_ENVELOPE_INVALID');
 
@@ -56,7 +61,14 @@ export function normalizeActionEnvelope(input, { maxActions = MAX_ACTIONS_PER_EN
     actorId: normalizeOptionalId(source.actorId || source.actor || 'narrator') || 'narrator',
     summary: normalizeText(source.summary || source.intent, 240),
     baseRevision,
-    actions: sourceActions.map((action, index) => normalizeAction(action, index))
+    actions: sourceActions.flatMap((action, index) => {
+      try { return [normalizeAction(action, index)]; }
+      catch (error) {
+        if (!Array.isArray(rejectedActions)) throw error;
+        rejectedActions.push({ index, code: error.code || 'ACTION_INVALID', detail: error.detail || '' });
+        return [];
+      }
+    })
   };
 }
 
@@ -82,10 +94,14 @@ export function extractActionEnvelope(text) {
   const content = stripActionBlocks(source).trimEnd();
   try {
     const parsed = JSON.parse(String(rawPayload || '').trim());
+    const rejectedActions = [];
+    const envelope = normalizeActionEnvelope(parsed, { rejectedActions });
     return {
       content,
-      envelope: normalizeActionEnvelope(parsed),
-      error: null,
+      envelope: envelope.actions.length ? envelope : null,
+      error: rejectedActions.length
+        ? new ActionProtocolError('ACTION_ITEMS_INVALID', JSON.stringify(rejectedActions))
+        : null,
       rawPayload: String(rawPayload || '').trim()
     };
   } catch (error) {
@@ -113,8 +129,17 @@ export function buildActionProtocolPrompt({ memory, targetSpeaker } = {}) {
     `当前状态修订号：${revision}。`,
     '叙事正文之后，如本回合确实造成可持续的世界变化，必须追加一个且仅一个 ```lra-actions JSON 块；没有稳定变化时不要输出该块。',
     '动作只是提议，最终由本地裁定器执行。不要在正文中解释协议，也不要把协议块当作对白。',
-    '允许类型：state.set、state.increment、state.append、state.remove、actor.move、actor.status、actor.knowledge.add、actor.relationship.adjust、quest.update、clock.advance。',
+    '允许类型：state.set、state.increment、state.append、state.remove、actor.move、actor.status、actor.knowledge.add、actor.relationship.adjust、quest.update、clock.advance、commitment.update、item.register、item.move、item.transfer。',
     '每个动作应给出 reason；不确定的事实不要写入。私密情报使用 visibility=private，只有导演视图可见。',
+    '字段约束：state.set/append/remove 使用 path 和 value；state.increment 使用 path 和数值 delta。path 的每一段只能由英文字母、数字、下划线构成，不能用中文键。flags 是对象，例如 state.set 写 flags.deposit_pending，不可直接 append flags。中文事实写在 value 内。',
+    'actor.move 使用 actorId、location；actor.status 使用 actorId、status；actor.knowledge.add 使用 actorId、fact；actor.relationship.adjust 使用 actorId、targetId、数值 delta（-100 到 100），不得用文字关系替代 delta。',
+    'quest.update 使用 questId、status、progress；clock.advance 使用正整数 minutes。当前时钟已结算常规耗时，不要重复推进，更不能把约定日期、对白或回忆推进为当前时间。',
+    '承诺使用 commitment.update：commitmentId、status（proposed待协商/committed已承诺/executed已执行/rejected已拒绝）、title（原文中可引用的简短事项名）、terms（原文条件）、counterparty（NPC名称或ID）、evidence:{source:"user"或"assistant",quote:"本轮逐字原文"}。先记录 proposed；只有玩家本轮明确同意该事项才可 committed，完成履行后才可 executed。不能同时把新提议写成已承诺，不能修改旧提议条款；改价另建提议。NPC对白不能证明玩家承诺。',
+    '已有物品使用下方清单中的 itemId。移动使用 item.move：itemId、quantity、actor（实际行动者）、holder（新持有人名称，放在桌面等无持有人时为空字符串）、location（原文中确切位置，随身用“随身”）、evidence。container可注明物品仍在其中的容器，整匣移到桌面不等于丹药已经出匣。该动作只改变持有人和位置，数量自动拆分，总量及所有者不变；归还/取回沿用原itemId，不得register重复物品。',
+    '只有明确赠送才使用 item.transfer，字段同move并增加owner（新所有者）；寄存、借用、代管一律不能改变owner。新增物品使用item.register：itemId、name、quantity、unit、evidence，须有玩家本轮明确携带/获得原文，不能凭模型臆造。',
+    '证据必须逐字引用本轮玩家输入或正文，包含物品全名、数量与明确动作；对白中的计划/假设/转述不是实际移动。不要在正文代替玩家移动物品或接受条件。持有记录启用后禁止state.*覆盖protagonist.inventory，禁止绕过协议写itemLedger/commitments；这些记录与背包、资源账自动同步。对已纳入账本的物品不要再写自由格式resources/flags副本。',
+    renderGroundedLedger(memory),
+    `可用角色 ID：${JSON.stringify((memory?.simulation?.actors || []).map(actor => ({ id: actor.id, name: actor.name })))}。只能引用已有 ID。`,
     speaker ? `当前指定发言角色：${speaker}。该角色只能依据其已知信息行动。` : '',
     '格式示例：',
     '```lra-actions',
@@ -124,7 +149,7 @@ export function buildActionProtocolPrompt({ memory, targetSpeaker } = {}) {
       actorId: speaker || 'narrator',
       summary: '本回合稳定变化',
       actions: [
-        { type: 'state.append', path: 'protagonist.inventory', value: '旧铜钥匙', reason: '主角已拾取并保管' }
+        { type: 'item.register', itemId: 'old-key', name: '旧铜钥匙', quantity: 1, evidence: { source: 'user', quote: '我拾起旧铜钥匙' }, reason: '玩家明确拾取' }
       ]
     }),
     '```'
@@ -143,6 +168,22 @@ function normalizeAction(input, index) {
     reason: normalizeText(input.reason, 300),
     conditions: normalizeConditions(input.conditions)
   };
+
+  if (type === 'commitment.update' || type.startsWith('item.')) {
+    const evidence = input.evidence || {};
+    if (!['user', 'assistant'].includes(evidence.source)) throw new ActionProtocolError('LEDGER_EVIDENCE_SOURCE_INVALID');
+    const grounded = { ...base, evidence: { source: evidence.source, quote: requiredText(evidence.quote, 'LEDGER_EVIDENCE_REQUIRED', 1000) } };
+    if (type === 'commitment.update') {
+      if (!['proposed', 'committed', 'executed', 'rejected'].includes(input.status)) throw new ActionProtocolError('LEDGER_STATUS_INVALID');
+      return { ...grounded, commitmentId: requiredId(input.commitmentId), status: input.status,
+        title: normalizeText(input.title, 80), terms: normalizeText(input.terms, 600), counterparty: normalizeOptionalId(input.counterparty) };
+    }
+    const quantity = Number(input.quantity);
+    if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 1000000) throw new ActionProtocolError('LEDGER_QUANTITY_INVALID');
+    return { ...grounded, itemId: requiredId(input.itemId), quantity,
+      name: normalizeText(input.name, 80), unit: normalizeText(input.unit, 8), actor: normalizeOptionalId(input.actor),
+      owner: normalizeOptionalId(input.owner), holder: normalizeOptionalId(input.holder), location: normalizeText(input.location, 160), container: normalizeText(input.container, 40) };
+  }
 
   if (type.startsWith('state.')) {
     base.path = normalizePath(input.path);

@@ -71,6 +71,12 @@ export function createGroupMembersController({
   }
 
   function renderGroupMembers() {
+    if (els.groupSpeakerStrategy) {
+      const strategy = state.config?.settings?.groupSpeakerStrategy
+        || state.session?.settings?.groupSpeakerStrategy
+        || 'talkativeness';
+      els.groupSpeakerStrategy.value = strategy;
+    }
     if (!els.groupMembersList) return;
     const members = getMembers();
     els.groupMembersList.replaceChildren();
@@ -114,24 +120,41 @@ export function createGroupMembersController({
       enabledLabel.append(enabled, enabledText);
       header.append(enabledLabel);
 
-      const remove = documentObject.createElement('button');
-      remove.type = 'button';
-      remove.className = 'ghost-button compact';
-      remove.textContent = '删除';
-      remove.dataset.removeMemberIndex = String(index);
-      header.append(remove);
+      const removeBtn = documentObject.createElement('button');
+      removeBtn.className = 'ghost-button compact danger-text';
+      removeBtn.type = 'button';
+      removeBtn.textContent = '删除';
+      removeBtn.dataset.removeMemberIndex = String(index);
+      header.append(removeBtn);
       row.append(header);
 
-      const description = createTextControl('textarea', member, index, 'description', '描述', 2);
-      description.style.cssText = 'width: 100%; margin-bottom: 6px;';
-      row.append(description);
+      const talkRow = documentObject.createElement('div');
+      talkRow.style.cssText = 'display: flex; gap: 8px; align-items: center; margin-bottom: 6px; font-size: 12px; color: var(--text-muted);';
+      const talkLabel = documentObject.createElement('label');
+      talkLabel.textContent = '话唠度：';
+      const talkInput = documentObject.createElement('input');
+      talkInput.type = 'number';
+      talkInput.className = 'form-input compact';
+      talkInput.style.width = '70px';
+      talkInput.min = '0';
+      talkInput.max = '1';
+      talkInput.step = '0.1';
+      talkInput.value = String(member.talkativeness ?? member.extensions?.talkativeness ?? 0.5);
+      talkInput.dataset.memberField = 'talkativeness';
+      talkInput.dataset.memberIndex = String(index);
+      talkRow.append(talkLabel, talkInput);
+      row.append(talkRow);
 
-      const personality = createTextControl('textarea', member, index, 'personality', '性格', 2);
-      personality.style.cssText = 'width: 100%; margin-bottom: 6px;';
+      const desc = createTextControl('textarea', member, index, 'description', '角色设定 / 描述', 2);
+      row.append(desc);
+
+      const personality = createTextControl('input', member, index, 'personality', '性格（如：冷酷、多疑）');
       row.append(personality);
 
+      const scenario = createTextControl('input', member, index, 'scenario', '在场动机 / 场景目标');
+      row.append(scenario);
+
       const systemPrompt = createTextControl('textarea', member, index, 'systemPrompt', '专属指令（可选）', 2);
-      systemPrompt.style.width = '100%';
       row.append(systemPrompt);
 
       els.groupMembersList.append(row);
@@ -141,28 +164,28 @@ export function createGroupMembersController({
   function updateMemberFromControl(control) {
     const field = control?.dataset?.memberField;
     const index = Number(control?.dataset?.memberIndex);
-    if (!field || !Number.isInteger(index)) return false;
-
-    const members = [...getMembers()];
-    if (!members[index] || typeof members[index] !== 'object') return false;
-    const nextValue = field === 'enabled' ? Boolean(control.checked) : control.value;
-    if (Object.is(members[index][field], nextValue)) return false;
-    members[index] = {
-      ...members[index],
-      [field]: nextValue
-    };
+    if (!field || !Number.isInteger(index)) return;
+    const members = getMembers();
+    if (!members[index]) return;
+    let nextValue;
+    if (control.type === 'checkbox') {
+      nextValue = Boolean(control.checked);
+    } else if (field === 'talkativeness') {
+      const num = Number(control.value);
+      nextValue = Number.isFinite(num) ? Math.max(0, Math.min(1, num)) : 0.5;
+    } else {
+      nextValue = String(control.value || '');
+    }
+    members[index] = { ...members[index], [field]: nextValue };
     replaceMembers(members);
-    return true;
   }
 
   function removeGroupMember(index) {
-    if (!Number.isInteger(index) || index < 0) return false;
-    const members = [...getMembers()];
-    if (index >= members.length) return false;
+    const members = getMembers();
+    if (!members[index]) return;
     members.splice(index, 1);
     replaceMembers(members);
     renderGroupMembers();
-    return true;
   }
 
   function addGroupMemberRow() {
@@ -172,6 +195,8 @@ export function createGroupMembersController({
       role: '',
       description: '',
       personality: '',
+      scenario: '',
+      talkativeness: 0.5,
       systemPrompt: '',
       enabled: true
     }];
@@ -193,12 +218,23 @@ export function createGroupMembersController({
     if (els.saveGroupMembers) els.saveGroupMembers.disabled = true;
     setStatus(els.groupMembersStatus, '正在保存...', 'busy');
     try {
+      const strategy = els.groupSpeakerStrategy?.value || 'talkativeness';
       const payload = await apiRequest('/api/group-members', {
         method: 'PUT',
-        body: { groupMembers: members, sessionId: getSessionId() }
+        body: {
+          groupMembers: members,
+          groupSpeakerStrategy: strategy,
+          sessionId: getSessionId()
+        }
       });
       if (!Array.isArray(payload?.groupMembers)) throw new Error('INVALID_GROUP_MEMBERS_RESPONSE');
       replaceMembers(payload.groupMembers);
+      if (strategy) {
+        if (!state.config) state.config = {};
+        if (!state.config.settings) state.config.settings = {};
+        state.config.settings.groupSpeakerStrategy = strategy;
+        if (state.session?.settings) state.session.settings.groupSpeakerStrategy = strategy;
+      }
       renderGroupMembers();
       setStatus(els.groupMembersStatus, `已保存 ${payload.groupMembers.length} 位成员`, 'ok');
       return payload.groupMembers;
@@ -226,6 +262,13 @@ export function createGroupMembersController({
     els.addGroupMember?.addEventListener('click', addGroupMemberRow);
     els.saveGroupMembers?.addEventListener('click', () => {
       void saveGroupMembersConfig();
+    });
+    els.groupSpeakerStrategy?.addEventListener('change', () => {
+      const val = els.groupSpeakerStrategy.value;
+      if (!state.config) state.config = {};
+      if (!state.config.settings) state.config.settings = {};
+      state.config.settings.groupSpeakerStrategy = val;
+      if (state.session?.settings) state.session.settings.groupSpeakerStrategy = val;
     });
     els.groupMembersList?.addEventListener('click', handleListClick);
     els.groupMembersList?.addEventListener('input', handleListInput);

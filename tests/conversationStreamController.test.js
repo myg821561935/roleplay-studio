@@ -7,6 +7,7 @@ import {
   parseSseEvent,
   readSseResponse
 } from '../public/modules/conversationStream.js';
+import { renderStreamingActionPreview } from '../public/modules/streamingActionPreview.js';
 
 class FakeClassList {
   constructor(element) {
@@ -237,18 +238,22 @@ test('SSE helpers parse CRLF, chunk boundaries and a trailing completion event',
 
   const tokens = [];
   const phases = [];
+  const turns = [];
   const payload = await readSseResponse(createSseResponse([
     'event: token\r\ndata: {"content":"雨"}\r\n',
     '\r\nevent: token\ndata: {"content":"声"}\n\n',
     'event: phase\ndata: {"phase":"finalizing"}\n\n',
+    'event: turn\ndata: {"session":{"id":"main","turnViewSnapshot":{"turnId":"assistant/1"}}}\n\n',
     'event: done\ndata: {"session":{"id":"main"}}'
   ]), {
     onToken: async (token) => tokens.push(token),
-    onPhase: async (phase) => phases.push(phase)
+    onPhase: async (phase) => phases.push(phase),
+    onTurnReady: async (turn) => turns.push(turn)
   });
 
   assert.deepEqual(tokens, ['雨', '声']);
   assert.deepEqual(phases, ['finalizing']);
+  assert.deepEqual(turns, [{ session: { id: 'main', turnViewSnapshot: { turnId: 'assistant/1' } } }]);
   assert.deepEqual(payload, { session: { id: 'main' } });
 });
 
@@ -295,13 +300,17 @@ test('SSE reader preserves protocol and HTTP errors and rejects missing completi
   assert.equal(cancelCount, 1);
 });
 
-test('send lifecycle streams a preview, applies the session and synchronizes composer state', async () => {
-  const newSession = {
+test('send lifecycle commits the authoritative turn before final memory refresh', async () => {
+  const committedSession = {
     id: 'story/session',
     messages: [
       { role: 'user', content: '推门' },
       { role: 'assistant', content: '雨声渐近。' }
     ],
+    memory: { rollingSummary: '回合已提交' }
+  };
+  const newSession = {
+    ...committedSession,
     memory: { rollingSummary: '新摘要' }
   };
   const harness = createHarness({
@@ -310,6 +319,7 @@ test('send lifecycle streams a preview, applies the session and synchronizes com
     fetchImpl: async () => createSseResponse([
       'event: token\ndata: {"content":"雨声"}\n\n',
       'event: phase\ndata: {"phase":"finalizing"}\n\n',
+      `event: turn\ndata: ${JSON.stringify({ session: committedSession })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ session: newSession })}\n\n`
     ])
   });
@@ -327,6 +337,7 @@ test('send lifecycle streams a preview, applies the session and synchronizes com
     hideUserMessage: true
   });
   assert.deepEqual(harness.state.session, newSession);
+  assert.deepEqual(harness.replacedSessions.map((entry) => entry.session), [committedSession, newSession]);
   assert.equal(harness.state.pendingJourneyDraft, null);
   assert.equal(harness.state.targetSpeaker, '');
   assert.equal(harness.els.chatInput.value, '');
@@ -341,29 +352,38 @@ test('send lifecycle streams a preview, applies the session and synchronizes com
   ]);
   assert.deepEqual(harness.counts(), {
     captureCount: 2,
-    inspectorCount: 0,
+    inspectorCount: 2,
     renderCount: 1,
     restoreCount: 2,
-    targetRenderCount: 1
+    targetRenderCount: 2
   });
 });
 
-test('stream preview replaces community choice prose with one disabled native action panel', () => {
+test('stream preview hides provisional choices and only shows the organizing state after finalizing', () => {
   const harness = createHarness({ fetchImpl: async () => { throw new Error('unused'); } });
   const preview = harness.controller.appendStreamingPreview('我压住气息。');
 
   harness.controller.updateStreamingPreview(preview, `夜深人静，神识正在靠近。\n\n> [天机选项：异状尚未收束]\n- 立刻躺回木板，假装熟睡。\n- 推开后窗，藏进灵田阴影。\n- 不躲不藏，径直开门。\n- 自定义`);
 
   assert.doesNotMatch(preview.contentNode.innerHTML, /天机选项|立刻躺回/u);
-  const panel = preview.node.querySelector('.recommended-actions');
-  assert.ok(panel);
-  assert.equal(panel.dataset.actionSource, 'community-choice-block');
-  assert.deepEqual(
-    panel.querySelectorAll('.recommendation-button').map((button) => button.dataset.recommendedAction),
-    ['立刻躺回木板，假装熟睡。', '推开后窗，藏进灵田阴影。', '不躲不藏，径直开门。']
-  );
-  assert.equal(panel.querySelector('.recommendation-custom-input').disabled, true);
-  assert.equal(panel.querySelector('.recommendation-custom-submit').disabled, true);
+  assert.equal(preview.node.querySelector('.recommended-actions'), null);
+  assert.equal(preview.node.querySelector('.streaming-action-status'), null);
+
+  renderStreamingActionPreview({
+    preview,
+    documentObject: { createElement: (tagName) => new FakeElement(tagName) }
+  });
+  const status = preview.node.querySelector('.streaming-action-status');
+  assert.ok(status);
+  assert.equal(status.querySelector('.streaming-action-copy').textContent, '正文已完成，正在校验当前局势与可执行行动…');
+  assert.equal(status.attributes.get('role'), 'status');
+
+  renderStreamingActionPreview({
+    preview,
+    documentObject: { createElement: (tagName) => new FakeElement(tagName) }
+  });
+  harness.controller.updateStreamingPreview(preview, '\n月色又暗了一分。');
+  assert.equal(preview.node.querySelectorAll('.streaming-action-status').length, 1);
 });
 
 test('preview setup failures restore the draft and input instead of leaving streaming stuck', async () => {
@@ -593,7 +613,7 @@ test('continue validates concurrency and last-message role before streaming', as
   });
 });
 
-test('continue uses the shared SSE transport and refreshes inspector-owned state', async () => {
+test('continue uses the same committed-turn boundary before final memory refresh', async () => {
   const newSession = {
     id: 'story/session',
     messages: [{ role: 'assistant', content: '续写完成。' }],
@@ -601,9 +621,11 @@ test('continue uses the shared SSE transport and refreshes inspector-owned state
   };
   const harness = createHarness({
     sessionMessages: [{ role: 'assistant', content: '上一段。' }],
-    fetchImpl: async () => createSseResponse(
+    fetchImpl: async () => createSseResponse([
+      'event: phase\ndata: {"phase":"finalizing"}\n\n',
+      `event: turn\ndata: ${JSON.stringify({ session: newSession })}\n\n`,
       `event: done\ndata: ${JSON.stringify({ session: newSession })}\n\n`
-    )
+    ])
   });
 
   await harness.controller.continueLastMessage();
@@ -615,10 +637,10 @@ test('continue uses the shared SSE transport and refreshes inspector-owned state
   assert.equal(harness.els.messages.children[0].hidden, true);
   assert.deepEqual(harness.counts(), {
     captureCount: 1,
-    inspectorCount: 1,
+    inspectorCount: 2,
     renderCount: 1,
     restoreCount: 1,
-    targetRenderCount: 0
+    targetRenderCount: 2
   });
-  assert.deepEqual(harness.streamingChanges.map(({ streaming }) => streaming), [true, false]);
+  assert.deepEqual(harness.streamingChanges.map(({ streaming }) => streaming), [true, true, false]);
 });

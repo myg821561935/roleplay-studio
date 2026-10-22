@@ -64,15 +64,15 @@ test('resource import kind matching keeps each picker inside its declared bounda
   assert.equal(sanitizeImportFileName('  仙侠 / 角色卡 v2  '), 'v2');
 });
 
-test('community compatibility copy reflects reviewed sandbox execution policy', () => {
+test('community compatibility copy reflects locally observable sandbox execution policy', () => {
   assert.match(getCommunityCompatibilitySafetyText({
     requirements: [{ status: 'supported' }],
     counts: { missing: 0 },
     acceptance: { outcome: 'full-mapping' }
-  }), /人工审核、内容哈希绑定并写入本地审计.*隔离沙箱/);
+  }), /默认本地观察运行并写入审计.*严格模式/);
   assert.match(getCommunityCompatibilitySafetyText({
     counts: { missing: 1 }
-  }), /未知 JavaScript 始终保持禁用/);
+  }), /不能放入隔离运行时的代码仍不会执行/);
 });
 
 test('resource import action labels reflect safety, package and story routing decisions', () => {
@@ -160,7 +160,8 @@ test('resource import controller owns pending state and binds all review events'
     disposition: STORY_IMPORT_MODES.ATTACH,
     compatibilityReview: {
       fingerprint: '',
-      approvedScriptHashes: [],
+      scriptReviews: [],
+      executionMode: 'local-observe',
       acknowledgeCompatibility: false
     }
   });

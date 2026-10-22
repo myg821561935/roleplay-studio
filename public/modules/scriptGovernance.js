@@ -34,7 +34,10 @@ export function createScriptGovernanceController({
     const runtime = getRuntime() || {};
     const rules = getSandboxRules(runtime);
     const reviews = Array.isArray(runtime.scriptReviews) ? runtime.scriptReviews : [];
-    const pendingCount = rules.filter((rule) => !isCurrentApproval(rule, findLatestReview(reviews, rule.id))).length;
+    const executionMode = getExecutionMode(runtime);
+    const pendingCount = executionMode === 'review-required'
+      ? rules.filter((rule) => !isCurrentApproval(rule, findLatestReview(reviews, rule.id))).length
+      : 0;
     if (auditCount) {
       auditCount.hidden = pendingCount === 0;
       auditCount.textContent = pendingCount ? `${pendingCount} 待处理` : '';
@@ -46,11 +49,13 @@ export function createScriptGovernanceController({
       return;
     }
     if (auditEmpty) auditEmpty.style.display = 'none';
+    auditList.append(createExecutionModeNotice(executionMode, rules.length));
 
     for (const rule of rules.slice(0, 32)) {
       const risk = assessScriptRisk(String(rule.replacement || ''));
       const latestReview = findLatestReview(reviews, rule.id);
       const approved = isCurrentApproval(rule, latestReview);
+      const rejected = isCurrentRejection(rule, latestReview);
       const stale = Boolean(latestReview && latestReview.contentHash !== rule.contentHash);
       const item = documentObject.createElement('div');
       item.className = `sandbox-audit-item sandbox-risk-${risk.level}`;
@@ -77,11 +82,15 @@ export function createScriptGovernanceController({
         ? `已授权执行 · ${latestReview.reviewer || 'local-user'} · ${formatReviewTime(latestReview.reviewedAt)}`
         : stale
           ? '脚本内容已变化，旧审核已自动失效'
-          : latestReview?.decision === 'rejected'
+          : rejected
             ? '已拒绝执行'
-            : latestReview?.decision === 'revoked'
+              : latestReview?.decision === 'revoked'
               ? '授权已撤销'
-              : '等待人工审核，当前不会执行';
+              : executionMode === 'compatibility-probe'
+                ? '开发兼容探针：外部资源与网络仅在隔离 iframe 内开放；启动、加载与错误会记入审计'
+                : executionMode === 'local-observe'
+                ? '本地探索中：将在隔离沙箱执行并记录事件；可随时拒绝停用'
+                : '等待人工审核，当前不会执行';
 
       const summary = documentObject.createElement('div');
       summary.className = 'sandbox-audit-summary';
@@ -97,9 +106,16 @@ export function createScriptGovernanceController({
         actions.append(createReviewButton(documentObject, '撤销执行授权', 'ghost-button compact', () => {
           setScriptReview(rule, 'revoked', risk);
         }));
+      } else if (rejected) {
+        actions.append(createReviewButton(
+          documentObject,
+          executionMode === 'review-required' ? '审核并允许' : '恢复执行',
+          'primary-button compact',
+          () => setScriptReview(rule, 'approved', risk)
+        ));
       } else {
         actions.append(
-          createReviewButton(documentObject, '审核并允许', 'primary-button compact', () => {
+          createReviewButton(documentObject, executionMode === 'review-required' ? '审核并允许' : '确认长期授权', 'primary-button compact', () => {
             setScriptReview(rule, 'approved', risk);
           }),
           createReviewButton(documentObject, '拒绝', 'ghost-button compact', () => {
@@ -119,7 +135,7 @@ export function createScriptGovernanceController({
         `确认允许脚本「${rule.name || rule.id}」执行？`,
         `风险等级：${risk.level}`,
         risk.risks.length ? `风险：${risk.risks.join('；')}` : '未识别到明确高危行为。',
-        '授权只绑定当前内容哈希；脚本内容变化后会自动失效。'
+        '授权只绑定当前内容哈希；脚本内容变化后会重新进入本地探索观察。'
       ].join('\n'));
       if (!accepted) return;
     }
@@ -151,6 +167,85 @@ export function createScriptGovernanceController({
     }
   }
 
+  function createExecutionModeNotice(executionMode, ruleCount) {
+    const notice = documentObject.createElement('div');
+    notice.className = `sandbox-execution-mode sandbox-execution-mode-${executionMode}`;
+    const copy = documentObject.createElement('div');
+    const title = documentObject.createElement('strong');
+    const description = documentObject.createElement('span');
+    const strict = executionMode === 'review-required';
+    const compatibilityProbe = executionMode === 'compatibility-probe';
+    title.textContent = strict
+      ? '严格审批模式'
+      : compatibilityProbe ? '开发兼容探针' : '本地探索模式';
+    description.textContent = strict
+      ? `所有 ${ruleCount} 条脚本须逐项批准才会执行。`
+      : compatibilityProbe
+        ? `为验证酒馆兼容性，未拒绝脚本可使用子 iframe 的外部资源、网络、表单、嵌套页面与 Worker；不会获得主页面、存档、Provider 密钥或本机命令权限。所有启动、加载和错误均会审计。`
+        : `未被明确拒绝的脚本可在无网络、无宿主数据权限的隔离沙箱运行；启动、加载与错误会记入本地审计。`;
+    copy.append(title, description);
+    const actions = documentObject.createElement('div');
+    actions.className = 'sandbox-audit-actions';
+    if (strict) {
+      actions.append(
+        createReviewButton(documentObject, '启用本地探索', 'ghost-button compact', () => setExecutionMode('local-observe')),
+        createReviewButton(documentObject, '启用开发探针', 'ghost-button compact', () => setExecutionMode('compatibility-probe'))
+      );
+    } else if (compatibilityProbe) {
+      actions.append(
+        createReviewButton(documentObject, '退出探针', 'ghost-button compact', () => setExecutionMode('local-observe')),
+        createReviewButton(documentObject, '切换严格审批', 'ghost-button compact', () => setExecutionMode('review-required'))
+      );
+    } else {
+      actions.append(
+        createReviewButton(documentObject, '启用开发探针', 'ghost-button compact', () => setExecutionMode('compatibility-probe')),
+        createReviewButton(documentObject, '切换严格审批', 'ghost-button compact', () => setExecutionMode('review-required'))
+      );
+    }
+    notice.append(copy, actions);
+    return notice;
+  }
+
+  async function setExecutionMode(executionMode) {
+    if (executionMode === 'compatibility-probe') {
+      const accepted = confirmAction([
+        '启用开发兼容探针？',
+        '此模式会在隔离 iframe 内开放外部资源、网络、表单、嵌套页面与 Worker，用于本地验证酒馆角色卡。',
+        '第三方内容可能读取受限渲染上下文并上传到网络；但不会获得主页面 DOM、存档、Provider 密钥或本机命令权限。',
+        '仅用于本地调试；完成后请切回本地探索或严格审批。'
+      ].join('\n'));
+      if (!accepted) return;
+    }
+    try {
+      const payload = await apiRequest(
+        `/api/sessions/${encodeURIComponent(getSessionId())}/script-policy`,
+        {
+          method: 'PUT',
+          body: {
+            executionMode,
+            acknowledgeDeveloperRisk: executionMode === 'compatibility-probe'
+          }
+        }
+      );
+      if (payload.session) {
+        setSession(payload.session);
+        syncRuntime?.(payload.session.config?.lightFrontend || {});
+      }
+      renderAuditPanel();
+      setStatus?.(
+        statusElement,
+        executionMode === 'compatibility-probe'
+          ? '开发兼容探针已启用：子 iframe 外部能力已开放，审计已开启'
+          : executionMode === 'local-observe'
+            ? '已启用本地探索：隔离运行与审计已开启'
+            : '已切换为严格审批模式',
+        'ok'
+      );
+    } catch (error) {
+      setStatus?.(statusElement, `脚本策略更新失败：${humanizeError(error)}`, 'error');
+    }
+  }
+
   function renderMessageContent({
     container,
     visibleContent,
@@ -167,7 +262,7 @@ export function createScriptGovernanceController({
       visibleContent,
       runtime.regexTransforms,
       runtime.scriptReviews,
-      { role, ...context }
+      { role, ...context, scriptExecutionMode: getExecutionMode(runtime) }
     );
     const displayContent = applyLightFrontendDisplayTransforms(sandboxedText, runtime, {
       role,
@@ -185,7 +280,10 @@ export function createScriptGovernanceController({
       const names = blockedAssessments.map((item) => item.name || item.id).filter(Boolean);
       const summary = documentObject.createElement('span');
       summary.className = 'sandbox-risk-copy';
-      summary.textContent = `${blockedAssessments.length} 个第三方脚本等待审核，本次未执行${names.length ? `：${names.slice(0, 2).join('、')}${names.length > 2 ? '等' : ''}` : ''}`;
+      const rejected = blockedAssessments.filter((item) => item.blockedReason === 'explicitly-rejected').length;
+      summary.textContent = rejected
+        ? `${rejected} 个第三方脚本已被拒绝，本次未执行${names.length ? `：${names.slice(0, 2).join('、')}${names.length > 2 ? '等' : ''}` : ''}`
+        : `${blockedAssessments.length} 个第三方脚本需要严格审批，本次未执行${names.length ? `：${names.slice(0, 2).join('、')}${names.length > 2 ? '等' : ''}` : ''}`;
       blocked.title = blockedAssessments.map((item) => `${item.name || item.id}: ${item.summary}`).join('\n');
       blocked.append(summary);
       if (typeof onOpenAudit === 'function') {
@@ -206,7 +304,7 @@ export function createScriptGovernanceController({
 
       const notice = documentObject.createElement('div');
       notice.className = `sandbox-risk-notice sandbox-risk-${fragment.risk.level}`;
-      notice.textContent = `${fragment.risk.level === 'high' ? '⚠' : fragment.risk.level === 'medium' ? '⚡' : '✓'} ${fragment.risk.summary}`;
+      notice.textContent = getFragmentRiskNotice(fragment.risk, getExecutionMode(runtime));
       notice.title = fragment.risk.risks.join('\n');
       wrapper.append(notice);
 
@@ -216,17 +314,19 @@ export function createScriptGovernanceController({
       const mounted = replacePlaceholder(container, placeholder, wrapper);
       if (!mounted) continue;
       mountSandboxedContent(frameHost, fragment.html, { role, ...context }, {
-        onAudit: ({ status }) => recordExecution({
+        executionMode: getExecutionMode(runtime),
+        onAudit: ({ status, errorCode }) => recordExecution({
           scriptId: fragment.scriptId,
           contentHash: fragment.contentHash,
           status,
+          errorCode,
           messageId
         })
       });
     }
   }
 
-  function recordExecution({ scriptId, contentHash, status, messageId }) {
+  function recordExecution({ scriptId, contentHash, status, errorCode = '', messageId }) {
     const sessionId = getSessionId();
     if (!sessionId || !scriptId || !contentHash) return;
     pendingExecutionAudits.push({
@@ -234,6 +334,7 @@ export function createScriptGovernanceController({
       scriptId,
       contentHash,
       status,
+      errorCode,
       messageId
     });
     if (executionAuditTimer !== null) return;
@@ -265,10 +366,11 @@ export function createScriptGovernanceController({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        executions: batch.map(({ scriptId, contentHash, status, messageId }) => ({
+        executions: batch.map(({ scriptId, contentHash, status, errorCode, messageId }) => ({
           scriptId,
           contentHash,
           status,
+          errorCode,
           messageId
         }))
       }),
@@ -308,6 +410,30 @@ function isCurrentApproval(rule, review) {
     && review.contentHash === rule.contentHash
     && Number(review.policyVersion) === POLICY_VERSION
   );
+}
+
+function isCurrentRejection(rule, review) {
+  return Boolean(
+    review
+    && ['rejected', 'revoked'].includes(review.decision)
+    && review.contentHash === rule.contentHash
+    && Number(review.policyVersion) === POLICY_VERSION
+  );
+}
+
+function getExecutionMode(runtime) {
+  const mode = String(runtime?.scriptExecutionMode || '').trim().toLowerCase();
+  return ['local-observe', 'compatibility-probe', 'review-required'].includes(mode)
+    ? mode
+    : 'local-observe';
+}
+
+function getFragmentRiskNotice(risk, executionMode) {
+  const prefix = risk.level === 'high' ? '⚠' : risk.level === 'medium' ? '⚡' : '✓';
+  if (executionMode === 'compatibility-probe') {
+    return `${prefix} 开发兼容探针已开放子 iframe 的外部资源与网络；${risk.summary}`;
+  }
+  return `${prefix} ${risk.summary}`;
 }
 
 function createReviewButton(documentObject, label, className, onClick) {

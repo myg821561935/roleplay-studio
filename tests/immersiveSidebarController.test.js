@@ -224,6 +224,30 @@ test('latest accepted turn frame is available to situation and clue ledgers in t
   ]), frame);
 });
 
+test('committed turn snapshot wins over stale message projections and excludes invalid turns', () => {
+  const messages = [
+    { id: 'a1', role: 'assistant', content: '旧消息', roleplayPanels: { sceneStatus: '旧场景' } },
+    { id: 'a2', role: 'assistant', content: '冲突消息', contextExcluded: true, roleplayPanels: { sceneStatus: '错误场景' } },
+    { id: 'a3', role: 'assistant', content: '半截消息', aborted: true, roleplayPanels: { sceneStatus: '半截场景' } }
+  ];
+  const frame = {
+    validation: { status: 'accepted' },
+    scene: { location: '已提交场景' },
+    decision: { focus: '回应当前人物' }
+  };
+  const snapshot = {
+    spec: 'lra.turn-view-snapshot/v1',
+    turnId: 'a1',
+    roleplayPanels: { sceneStatus: '已提交场景' },
+    turnFrame: frame
+  };
+
+  assert.deepEqual(resolveLatestRoleplayPanels(messages, () => ({ panels: {} }), snapshot), {
+    sceneStatus: '已提交场景'
+  });
+  assert.equal(resolveLatestTurnFrame(messages, snapshot), frame);
+});
+
 test('immersive sidebar controller owns tab events, merged tabs and ledger dispatch', () => {
   const immersiveRightSidebar = createNode();
   const immersiveSidebarTabs = createEventTarget();
@@ -460,12 +484,14 @@ test('decision clues exclude resolved tasks, whole-prose fallback and unrelated 
     config: {
       characterCard: { name: '刘一' },
       worldBook: [
-        { title: '柴翁_性格调色盘', content: '每次经手宗门任务都要反复核对。', enabled: true },
-        { title: '井底线索', content: '井底暗红湿泥与漆木匣存在关联。', enabled: true }
+        { id: 'woodcutter-style', title: '柴翁_性格调色盘', content: '每次经手宗门任务都要反复核对。', enabled: true },
+        { id: 'well-clue', title: '井底线索', content: '井底暗红湿泥与漆木匣存在关联。', enabled: true },
+        { id: 'inactive-clue', title: '山门传闻', content: '尚未触发的旧传闻。', enabled: true }
       ]
     },
     session: {
       messages: [{
+        id: 'turn-1',
         role: 'assistant',
         content: '柴翁把水桶推到刘一面前。',
         turnFrame: {
@@ -473,6 +499,11 @@ test('decision clues exclude resolved tasks, whole-prose fallback and unrelated 
           evidence: [{ text: '整段正文不应作为线索重复显示', status: 'hypothesis', source: 'accepted-prose-fallback' }]
         }
       }],
+      turnViewSnapshot: {
+        spec: 'lra.turn-view-snapshot/v1',
+        turnId: 'turn-1',
+        worldBookActivation: { activatedIds: ['well-clue'] }
+      },
       memory: {
         worldState: { quests: [{ id: 'well-rope', title: 'well-rope', status: 'completed', progress: 100 }] },
         knowledgeGraph: {
@@ -501,7 +532,7 @@ test('decision clues exclude resolved tasks, whole-prose fallback and unrelated 
   ledgers.renderImmersiveIntelligenceLedger('决策线索', {}, 'xianxia');
   const text = collectNodeText(body);
   assert.match(text, /井底出现暗红湿泥|井底线索/);
-  assert.doesNotMatch(text, /帮柴翁压井轱辘|石板下的漆木匣|整段正文不应作为线索重复显示|柴翁_性格调色盘/);
+  assert.doesNotMatch(text, /帮柴翁压井轱辘|石板下的漆木匣|整段正文不应作为线索重复显示|柴翁_性格调色盘|山门传闻/);
 });
 
 test('current situation, growth and memory consume immediate turn records instead of waiting for a later extraction', () => {

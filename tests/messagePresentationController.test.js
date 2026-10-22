@@ -75,11 +75,12 @@ function findAllByClass(element, className) {
   ));
 }
 
-function createHarness({ speaker = '叶惊弦', groupMembers = [], presentation = null } = {}) {
+function createHarness({ speaker = '叶惊弦', groupMembers = [], presentation = null, turnViewSnapshot = null } = {}) {
   const documentObject = new FakeDocument();
   const renderCalls = [];
   const mainPortrait = `/api/character-images/${'a'.repeat(64)}.png`;
   const state = {
+    session: { turnViewSnapshot },
     config: {
       characterCard: {
         name: '叶惊弦',
@@ -195,8 +196,11 @@ test('assistant presentation owns portrait, swipe, usage, bookmark and safe cont
   assert.deepEqual(recommendations.map((button) => button.dataset.recommendedAction), ['观察四周', '拔剑示警']);
   assert.equal(findByClass(article, 'recommendation-custom-input').placeholder, '写下你自己的回答或行动…');
   assert.equal(findByClass(article, 'recommendation-custom-submit').textContent, '发送');
-  assert.ok(article.children.indexOf(findByClass(article, 'recommended-actions')) < article.children.indexOf(findByClass(article, 'message-tools')));
-  assert.equal(recommendations[0].attributes.get('aria-label'), '行动选项 1：观察四周');
+  const turnClosure = findByClass(article, 'turn-closure');
+  assert.ok(turnClosure);
+  assert.ok(turnClosure.children.indexOf(findByClass(article, 'recommended-actions')) >= 0);
+  assert.ok(article.children.indexOf(turnClosure) < article.children.indexOf(findByClass(article, 'message-tools')));
+  assert.equal(recommendations[0].attributes.get('aria-label'), '行动选项 1，观察：观察四周');
 });
 
 test('assistant presentation resolves an enabled group-member portrait by speaker', () => {
@@ -303,6 +307,74 @@ test('invalid swipe indexes fall back safely and blank recommendations do not cr
   assert.equal(findByClass(actions, 'recommendation-number').textContent, '01');
   assert.equal(findAllByClass(actions, 'recommendation-number').at(-1).textContent, '03');
   assert.equal(controller.createRecommendedActionsNode(['', null]), null);
+});
+
+test('action panel keeps three primary strategies, custom input, and folds secondary choices', () => {
+  const { controller } = createHarness();
+  const actions = controller.createRecommendedActionsNode([
+    '正面回答自己的身份',
+    '反问对方为何巡查',
+    '先观察对方手中的令牌',
+    '绕开对方进入竹林',
+    '拔剑阻拦来人'
+  ]);
+
+  const primary = findAllByClass(actions, 'recommendation-button').slice(0, 3);
+  assert.deepEqual(
+    primary.map((button) => findByClass(button, 'recommendation-strategy').textContent),
+    ['回应', '试探', '观察']
+  );
+  assert.equal(findByClass(actions, 'recommendation-custom-input').placeholder, '写下你自己的回答或行动…');
+  assert.equal(findByClass(actions, 'recommendation-more-actions').children[0].textContent, '更多行动 · 2');
+  assert.deepEqual(
+    findAllByClass(findByClass(actions, 'recommendation-more-actions'), 'recommendation-number')
+      .map((node) => node.textContent),
+    ['05', '06']
+  );
+});
+
+test('committed turn snapshot replaces stale action data as one atomic turn closure', () => {
+  const turnId = 'assistant/committed';
+  const { controller } = createHarness({
+    presentation: { content: '门外的巡夜弟子停下脚步。', speaker: '旁白' },
+    turnViewSnapshot: {
+      spec: 'lra.turn-view-snapshot/v1',
+      turnId,
+      turnFrame: {
+        scene: {
+          location: '杂役院门外',
+          time: '夜半',
+          summary: '巡夜弟子正在等待回应',
+          presentActors: ['刘一', '巡夜弟子']
+        },
+        decision: { kind: 'direct-question', requiresPlayerResponse: true },
+        evidence: [{ text: '对方已经出声询问', status: 'confirmed' }],
+        stateDelta: { summary: '巡查暂时停在门外', facts: [] },
+        validation: { status: 'accepted' }
+      },
+      recommendedActions: ['说明自己正在值夜', '反问对方身份', '保持安静观察'],
+      recommendedActionPresentation: {
+        source: 'decision-planner',
+        title: '轮到你决定',
+        hint: '巡夜弟子正在等待回应'
+      }
+    }
+  });
+  const article = controller.createMessageNode({
+    id: turnId,
+    role: 'assistant',
+    content: '旧正文。',
+    recommendedActions: ['检查玉简', '观察魂火']
+  });
+
+  assert.equal(findAllByClass(article, 'turn-closure').length, 1);
+  assert.equal(findByClass(article, 'turn-closure').dataset.committedTurn, 'true');
+  assert.deepEqual(
+    findAllByClass(article, 'recommendation-button').map((button) => button.dataset.recommendedAction),
+    ['说明自己正在值夜', '反问对方身份', '保持安静观察']
+  );
+  assert.equal(findAllByClass(article, 'turn-context-chip').length, 3);
+  assert.equal(findAllByClass(article, 'turn-evidence-details').length, 2);
 });
 
 test('legacy card-runtime fallback choices are hidden without deleting historical messages', () => {

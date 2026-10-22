@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 export const SCRIPT_GOVERNANCE_POLICY_VERSION = 1;
+export const SCRIPT_EXECUTION_MODES = Object.freeze({
+  LOCAL_OBSERVE: 'local-observe',
+  COMPATIBILITY_PROBE: 'compatibility-probe',
+  REVIEW_REQUIRED: 'review-required'
+});
 
 const MAX_SCRIPT_REVIEWS = 128;
 const MAX_SCRIPT_EXECUTIONS = 500;
@@ -93,6 +98,44 @@ export function isScriptRuleApproved(lightFrontend, rule) {
   );
 }
 
+// Local exploration and the explicit development compatibility probe widen
+// *readiness*, not host authority. A current explicit rejection or revocation
+// always wins, so users retain an immediate stop control while testing.
+export function isScriptRuleExecutable(lightFrontend, rule) {
+  if (!isPlainObject(rule) || rule.requiresSandbox !== true) return false;
+  const scriptId = cleanScriptId(rule.id);
+  if (!scriptId) return false;
+  const contentHash = computeScriptContentHash(rule);
+  const latest = findLatestReview(normalizeScriptReviews(lightFrontend?.scriptReviews), scriptId);
+  if (latest?.contentHash === contentHash
+    && latest.policyVersion === SCRIPT_GOVERNANCE_POLICY_VERSION
+    && ['rejected', 'revoked'].includes(latest.decision)) {
+    return false;
+  }
+  return [
+    SCRIPT_EXECUTION_MODES.LOCAL_OBSERVE,
+    SCRIPT_EXECUTION_MODES.COMPATIBILITY_PROBE
+  ].includes(getScriptExecutionMode(lightFrontend))
+    || isScriptRuleApproved(lightFrontend, rule);
+}
+
+export function getScriptExecutionMode(lightFrontend) {
+  return normalizeScriptExecutionMode(lightFrontend?.scriptExecutionMode);
+}
+
+export function setScriptExecutionMode(session, input = {}, { now = new Date() } = {}) {
+  const lightFrontend = getLightFrontend(session, { create: true });
+  const mode = normalizeScriptExecutionMode(input.executionMode, { fallback: '' });
+  if (!mode) throw new ScriptGovernanceError('SCRIPT_EXECUTION_MODE_INVALID');
+  if (mode === SCRIPT_EXECUTION_MODES.COMPATIBILITY_PROBE
+    && input.acknowledgeDeveloperRisk !== true) {
+    throw new ScriptGovernanceError('SCRIPT_DEVELOPER_MODE_ACK_REQUIRED');
+  }
+  lightFrontend.scriptExecutionMode = mode;
+  session.updatedAt = toIsoString(now);
+  return mode;
+}
+
 export function appendScriptExecutionAudit(session, input = {}, { now = new Date() } = {}) {
   const lightFrontend = getLightFrontend(session);
   const scriptId = cleanScriptId(input.scriptId);
@@ -109,8 +152,8 @@ export function appendScriptExecutionAudit(session, input = {}, { now = new Date
   if (!EXECUTION_STATUSES.has(status)) {
     throw new ScriptGovernanceError('SCRIPT_EXECUTION_STATUS_INVALID');
   }
-  if (status !== 'blocked' && !isScriptRuleApproved(lightFrontend, rule)) {
-    throw new ScriptGovernanceError('SCRIPT_REVIEW_REQUIRED');
+  if (status !== 'blocked' && !isScriptRuleExecutable(lightFrontend, rule)) {
+    throw new ScriptGovernanceError('SCRIPT_EXECUTION_BLOCKED');
   }
 
   const occurredAt = toIsoString(now);
@@ -123,6 +166,8 @@ export function appendScriptExecutionAudit(session, input = {}, { now = new Date
     messageId: String(input.messageId || '').trim().slice(0, 120),
     errorCode: String(input.errorCode || '').trim().slice(0, 120),
     durationMs: normalizeDuration(input.durationMs),
+    executionMode: getScriptExecutionMode(lightFrontend),
+    permissionSource: resolvePermissionSource(lightFrontend, rule),
     occurredAt,
     policyVersion: SCRIPT_GOVERNANCE_POLICY_VERSION
   };
@@ -139,6 +184,7 @@ export function appendScriptExecutionAudit(session, input = {}, { now = new Date
 export function getScriptGovernanceSnapshot(session) {
   const lightFrontend = getLightFrontend(session);
   const reviews = normalizeScriptReviews(lightFrontend.scriptReviews);
+  const executionMode = getScriptExecutionMode(lightFrontend);
   const rules = getSandboxRules(lightFrontend).map((rule) => {
     const contentHash = computeScriptContentHash(rule);
     const latestReview = findLatestReview(reviews, cleanScriptId(rule.id));
@@ -153,11 +199,13 @@ export function getScriptGovernanceSnapshot(session) {
       riskLevel: risk.level,
       risks: risk.risks,
       approved: isScriptRuleApproved(lightFrontend, rule),
+      executable: isScriptRuleExecutable(lightFrontend, rule),
       latestReview
     };
   });
   return {
     policyVersion: SCRIPT_GOVERNANCE_POLICY_VERSION,
+    executionMode,
     rules,
     reviews,
     trustedScriptIds: rules.filter((rule) => rule.approved).map((rule) => rule.scriptId),
@@ -176,6 +224,7 @@ export function resetScriptGovernanceForImportedSession(session) {
     lightFrontend.regexTransforms = attachScriptContentHashes(lightFrontend.regexTransforms);
     lightFrontend.scriptReviews = [];
     lightFrontend.trustedScriptIds = [];
+    lightFrontend.scriptExecutionMode = SCRIPT_EXECUTION_MODES.LOCAL_OBSERVE;
   }
   if (isPlainObject(session?.audit)) {
     session.audit.scriptExecutions = [];
@@ -254,6 +303,10 @@ function normalizeScriptExecutions(value) {
       messageId: String(record.messageId || ''),
       errorCode: String(record.errorCode || ''),
       durationMs: normalizeDuration(record.durationMs),
+      executionMode: normalizeScriptExecutionMode(record.executionMode),
+      permissionSource: ['approved', 'local-observe', 'compatibility-probe'].includes(record.permissionSource)
+        ? record.permissionSource
+        : 'approved',
       occurredAt: String(record.occurredAt || ''),
       policyVersion: Number(record.policyVersion) || 0
     }))
@@ -299,6 +352,18 @@ function cleanReviewer(value) {
 function normalizeOptionalNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+function normalizeScriptExecutionMode(value, { fallback = SCRIPT_EXECUTION_MODES.LOCAL_OBSERVE } = {}) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return Object.values(SCRIPT_EXECUTION_MODES).includes(normalized) ? normalized : fallback;
+}
+
+function resolvePermissionSource(lightFrontend, rule) {
+  if (isScriptRuleApproved(lightFrontend, rule)) return 'approved';
+  return getScriptExecutionMode(lightFrontend) === SCRIPT_EXECUTION_MODES.COMPATIBILITY_PROBE
+    ? 'compatibility-probe'
+    : 'local-observe';
 }
 
 function normalizeDuration(value) {

@@ -60,7 +60,7 @@ test('reports safe Quick Reply and regex scripts as supported while preset order
   assert.ok(report.requirements.some((item) => item.id === 'prompt-preset-order'));
 });
 
-test('reports sandbox-capable regex JavaScript as review-required instead of a missing host runtime', () => {
+test('reports sandbox-capable regex JavaScript as local-observe capable instead of a missing host runtime', () => {
   const report = scanCommunityDependencies({
     extensions: {
       regex_scripts: [{
@@ -79,7 +79,7 @@ test('reports sandbox-capable regex JavaScript as review-required instead of a m
   assert.ok(report.counts.review >= 1);
   assert.ok(report.requirements.some((item) => item.id === 'executable-extension' && item.status === 'review'));
   assert.ok(report.requirements.some((item) => item.id === 'regex-scripts' && item.status === 'review'));
-  assert.match(report.summary, /人工审核.*内容哈希.*本地审计/);
+  assert.match(report.summary, /默认在本地观察运行/);
 });
 
 test('reports MVU JSON state as supported without claiming script compatibility', () => {

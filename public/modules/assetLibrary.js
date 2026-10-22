@@ -197,11 +197,23 @@ export function createAssetLibraryController({
 
   async function deleteAssetsFromCenter(items) {
     const resourceIds = collectAssetResourceIds(items);
-    if (!resourceIds.length) return;
-    await apiRequest('/api/resource-library/resources', {
-      method: 'DELETE',
-      body: { resourceIds }
-    });
+    const packs = (Array.isArray(items) ? items : []).filter((item) => item?.kind === 'pack' && item.raw?.custom !== false);
+
+    if (resourceIds.length) {
+      await apiRequest('/api/resource-library/resources', {
+        method: 'DELETE',
+        body: { resourceIds }
+      });
+    }
+
+    for (const pack of packs) {
+      if (pack.id) {
+        await apiRequest(`/api/resource-library/packs/${encodeURIComponent(pack.id)}`, {
+          method: 'DELETE',
+          body: { confirmDetach: true }
+        });
+      }
+    }
   }
 
   return {

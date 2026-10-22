@@ -72,3 +72,13 @@
 | `/api/sessions/:id/simulation/advance` | `POST` | 推进世界时钟并执行日程 |
 
 所有修改接口继续使用本项目的本地来源校验与 JSON 请求约束。
+
+## v1.1 候选版：有证据的承诺与物品
+
+新增 `commitment.update`、`item.register`、`item.move` 和 `item.transfer`，仍使用 `lra.action/v1`。这些动作要求 `evidence: { source: "user" | "assistant", quote: "本轮逐字原文" }`。原文存在并不等于行动发生：对白里的请求、计划、否定或假设不能作为物品已移动的证明。
+
+承诺字段为 `commitmentId`、`title`、`terms`、`counterparty`、`status`。状态依次为 `proposed`、`committed`、`executed`，拒绝使用 `rejected`。原条件不可原地改写；新方案另建提议。玩家明确同意与履行动作分别校验。
+
+物品移动使用当前记录的 `itemId`，以及 `quantity`、`actor`、`holder`、`location`。`holder: ""` 表示放置中；`container` 可表示物品仍在某容器内。移动保留原所有者、必要时拆分批次；只有明确赠送的 `item.transfer` 加上 `owner` 才能改变所有权。不能用 `register` 重复创建已登记物品来补背包。
+
+原文中的物品代称需由现有记录和上下文明确定位。多个非等价对象均符合时不猜测。保管时所有权仍在原主人，整匣移到桌面也不等于物品已经出匣。`protagonist.inventory`、资源账和承诺视图由同一记录投影；启用后的记录不可用自由状态写入覆盖。

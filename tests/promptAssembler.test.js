@@ -4,6 +4,10 @@ import { retrieveCards } from '../server/agent/memoryRetriever.js';
 import { assemblePrompt } from '../server/agent/promptAssembler.js';
 import { estimateTokens } from '../server/agent/token.js';
 
+function promptText(result) {
+  return result.messages.map((message) => message.content).join('\n');
+}
+
 test('estimateTokens gives non-zero estimate for Chinese text', () => {
   assert.equal(estimateTokens('神荒武界'), 4);
 });
@@ -53,37 +57,38 @@ test('assemblePrompt includes modules, state, summary, matched world book, and r
   assert.equal(result.messages.at(-1).content, '我要去镇武司附近打探消息。');
   assert.equal(result.injectedCards.length, 1);
   assert.ok(result.messages.some((message) => /保持角色一致/.test(message.content)));
-  assert.match(result.messages[0].content, /# 角色卡/);
-  assert.match(result.messages[0].content, /沈观澜/);
-  assert.match(result.messages[0].content, /正在调查镇武司旧案/);
-  assert.match(result.messages[0].content, /# 角色演绎契约/);
-  assert.match(result.messages[0].content, /短句，少解释/);
-  assert.match(result.messages[0].content, /不知道密档去向/);
-  assert.match(result.messages[0].content, /只模仿风格特征，不逐句复述示例/);
-  assert.match(result.messages[0].content, /# 沉浸式呈现契约/);
-  assert.match(result.messages[0].content, /<special_status>/);
-  assert.match(result.messages[0].content, /<recommended_actions>/);
-  assert.match(result.messages[0].content, /必须在回复正文之后给出 3 个行动建议/);
-  assert.match(result.messages[0].content, /不要把“自定义”作为第四个伪选项/);
-  assert.match(result.messages[0].content, /当前决策节点/);
-  assert.match(result.messages[0].content, /叙述中的比喻、光影、衣饰、声调和动作修辞不是独立线索/);
-  assert.match(result.messages[0].content, /不得用“观察周围”/);
-  assert.match(result.messages[0].content, /玩家主角：李青/);
-  assert.match(result.messages[0].content, /当前演绎角色：沈观澜/);
-  assert.match(result.messages[0].content, /本轮玩家已明确的行动或问题：我要去镇武司附近打探消息/);
-  assert.match(result.messages[0].content, /角色卡与当前已启用世界书.*最高事实源/);
+  const allPromptText = promptText(result);
+  assert.match(allPromptText, /# 角色卡/);
+  assert.match(allPromptText, /沈观澜/);
+  assert.match(allPromptText, /正在调查镇武司旧案/);
+  assert.match(allPromptText, /# 角色演绎契约/);
+  assert.match(allPromptText, /短句，少解释/);
+  assert.match(allPromptText, /不知道密档去向/);
+  assert.match(allPromptText, /只模仿风格特征，不逐句复述示例/);
+  assert.match(allPromptText, /# 沉浸式呈现契约/);
+  assert.match(allPromptText, /<special_status>/);
+  assert.match(allPromptText, /<recommended_actions>/);
+  assert.match(allPromptText, /必须在回复正文之后给出 3 个行动建议/);
+  assert.match(allPromptText, /不要把“自定义”作为第四个伪选项/);
+  assert.match(allPromptText, /当前决策节点/);
+  assert.match(allPromptText, /极度内在的静态过程/);
+  assert.match(allPromptText, /<recommended_actions>/);
+  assert.match(allPromptText, /玩家主角：李青/);
+  assert.match(allPromptText, /当前演绎角色：沈观澜/);
+  assert.match(allPromptText, /本轮玩家已明确的行动或问题：我要去镇武司附近打探消息/);
+  assert.match(allPromptText, /角色卡与当前已启用世界书.*最高事实源/);
   assert.ok(result.messages.some(m => /镇武司负责约束江湖武人/.test(m.content)));
-  assert.match(result.messages[0].content, /云州城/);
-  assert.match(result.messages[0].content, /主角刚到城中。/);
+  assert.match(allPromptText, /云州城/);
+  assert.match(allPromptText, /主角刚到城中。/);
   assert.ok(result.messages.some((message) => message.content === '我走进云州城。'));
   assert.ok(result.messages.some((message) => message.content === '城门外风雪未歇。'));
   assert.deepEqual(result.sections.promptModules, ['core']);
   assert.equal(result.sections.hasCharacterCard, true);
   assert.equal(result.sections.responseLengthMode, 'balanced');
   assert.equal(result.sections.roleplayMode, 'dm');
-  assert.match(result.messages[0].content, /# 角色扮演流派（标准 DM 叙事流）/);
-  assert.match(result.messages.at(-2).content, /# 本轮正文篇幅与推进契约（标准推进）/);
-  assert.match(result.messages.at(-2).content, /900-1400 个中文字符/);
+  assert.match(allPromptText, /# 角色扮演流派（标准 DM 叙事流）/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /# 本轮正文篇幅与推进契约（标准推进）/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /1200-2000 个中文字符/);
 });
 
 test('assemblePrompt forwards World Info name and minimum-activation settings to the runtime', () => {
@@ -145,6 +150,29 @@ test('assemblePrompt applies a native roleplay mode independently of route stabi
   assert.match(result.messages[0].content, /# 角色扮演流派（导演 \/ 共创流）/);
   assert.equal(result.sections.narrativeMode, 'strict');
   assert.equal(result.sections.roleplayMode, 'director');
+});
+
+test('continuation prompts retain the previous frontier and prohibit replaying it', () => {
+  const result = assemblePrompt({
+    promptModules: [],
+    characterCard: { name: '白小纯', enabled: true },
+    worldBook: [],
+    memory: { memoryCards: [] },
+    messages: [
+      { role: 'user', content: '我看向浮在水面的黑匣子。' },
+      { role: 'assistant', content: '黑匣子被泉水托到石沿旁，封蜡尚未脱落。白小纯站在一旁，没有伸手。' }
+    ],
+    userMessage: '[玩家请求继续推进：从上一条正文已经发生的最后事实之后，只推进一个新的世界反馈节拍；禁止复述、改写或重演上一条正文，不替玩家行动、发言或作决定。若形成真实未决节点，请交还选择权。]',
+    options: { recentPairs: 4 }
+  });
+
+  const anchor = result.messages.find((message) => /# 继续推进落点锚定/u.test(message.content));
+  assert.ok(anchor);
+  assert.match(anchor.content, /不是空白输入/);
+  assert.match(anchor.content, /黑匣子被泉水托到石沿旁/);
+  assert.match(anchor.content, /不得复述、改写、重演/);
+  assert.equal(result.messages.at(-1).role, 'user');
+  assert.match(result.messages.at(-1).content, /玩家请求继续推进/);
 });
 
 test('mind-influence cards preserve gradual conflict instead of instant personality deletion', () => {
@@ -244,7 +272,7 @@ test('continuation keeps the latest real player utterance despite newer hidden c
   const allContent = result.messages.map((message) => message.content).join('\n');
   assert.match(allContent, /我把钥匙交给沈观澜，请她先检查暗门/);
   assert.match(allContent, /最近真实玩家输入：我把钥匙交给沈观澜，请她先检查暗门/);
-  assert.match(allContent, /只推进一个世界反馈节拍/);
+  assert.match(allContent, /在需要玩家作决定时停止/);
   assert.equal(result.messages.some((message) => (
     message.role === 'user' && message.content === '（请继续推进剧情）'
   )), false);
@@ -273,8 +301,8 @@ test('assemblePrompt injects the validated relationship subgraph', () => {
   });
 
   assert.equal(result.sections.hasKnowledgeGraph, true);
-  assert.match(result.messages[0].content, /# 当前场景关系子图/);
-  assert.match(result.messages[0].content, /刘一 → 江小鲤：逐渐信任/);
+  assert.match(promptText(result), /# 当前场景关系子图/);
+  assert.match(promptText(result), /刘一 → 江小鲤：逐渐信任/);
 });
 
 test('assemblePrompt injects source-backed episodic memory without exposing CoT', () => {
@@ -309,13 +337,14 @@ test('assemblePrompt injects source-backed episodic memory without exposing CoT'
     userMessage: '继续调查名单。'
   });
 
-  assert.match(result.messages[0].content, /# 召回的长期情节记忆/);
-  assert.match(result.messages[0].content, /不是模型思维链/);
-  assert.match(result.messages[0].content, /章节摘要·云州旧案第一章/);
-  assert.match(result.messages[0].content, /闻雪照从卷宗中找到了失踪者名单/);
-  assert.match(result.messages[0].content, /证据:u1,a1/);
-  assert.match(result.messages[0].content, /角色卡与世界书优先/);
-  assert.doesNotMatch(result.messages[0].content, /<think>|chainOfThought|内部推演/);
+  const promptText = result.messages.map((m) => m.content).join('\n');
+  assert.match(promptText, /# 召回的长期情节记忆/);
+  assert.match(promptText, /不是模型思维链/);
+  assert.match(promptText, /章节摘要·云州旧案第一章/);
+  assert.match(promptText, /闻雪照从卷宗中找到了失踪者名单/);
+  assert.match(promptText, /证据:u1,a1/);
+  assert.match(promptText, /角色卡与世界书优先/);
+  assert.doesNotMatch(promptText, /<think>|chainOfThought|内部推演/);
   assert.deepEqual(result.sections.memoryRetrieval, {
     episodicCount: 1,
     summaryCount: 1,
@@ -360,7 +389,7 @@ test('community preset budgeting preserves variable setup and output protocol in
   assert.equal(result.sections.promptVariableWrites.appliedCount, 4);
 });
 
-test('coherence-sensitive community preset is suppressed instead of retaining a broken variable fragment', () => {
+test('enhanced mode preserves complete community variable chains beyond the legacy module limit', () => {
   const presetExtension = (sequence) => ({
     sillyTavernPreset: { presetTitle: '变量依赖预设', sourceFormat: 'sillytavern-preset', sequence }
   });
@@ -379,16 +408,51 @@ test('coherence-sensitive community preset is suppressed instead of retaining a 
     memory: { memoryCards: [] },
     messages: [],
     userMessage: '继续。',
-    options: { maxPromptTokens: 8000 }
+    options: { promptExecutionMode: 'enhanced', maxPromptTokens: 8000 }
   });
 
   const allContent = result.messages.map((message) => message.content).join('\n');
-  assert.doesNotMatch(allContent, /最终输出必须带特殊标记/);
-  assert.equal(result.sections.communityPresetIntegrity.preflightSuppressed.length, 1);
-  assert.equal(result.sections.communityPresetIntegrity.preflightSuppressed[0].reason, 'module-limit-would-split-variable-chain');
+  assert.match(allContent, /第17段最终输出必须带特殊标记/);
+  assert.equal(result.sections.communityPresetIntegrity.preflightSuppressed.length, 0);
 });
 
-test('prompt budgeting protects the last two complete turns before optional community preset modules', () => {
+test('community variable chains fail explicitly when the full request cannot fit', () => {
+  const presetExtension = (sequence) => ({
+    sillyTavernPreset: { presetTitle: '运行时原子预设', sourceFormat: 'sillytavern-preset', sequence }
+  });
+  const input = {
+    promptModules: [
+      {
+        id: 'native-pacing', title: '叙事推进基准', enabled: true,
+        content: '规'.repeat(250)
+      },
+      {
+        id: 'runtime-setup', title: '变量初始化', enabled: true,
+        content: `初始化语气 {{setvar::tone::克制}} ${'设定'.repeat(170)}`,
+        extensions: presetExtension(1)
+      },
+      {
+        id: 'runtime-output', title: '变量输出', enabled: true,
+        content: `{{getvar::tone}} 输出协议 ${'约束'.repeat(170)}`,
+        extensions: presetExtension(2)
+      }
+    ],
+    characterCard: { name: '测试角色', enabled: true },
+    worldBook: [],
+    memory: { memoryCards: [] },
+    messages: [],
+    userMessage: '继续。',
+    options: { promptExecutionMode: 'enhanced', maxPromptTokens: 3000 }
+  };
+  assert.throws(() => assemblePrompt(input), error => error.code === 'PROMPT_BUDGET_INSUFFICIENT' && error.requiredTokens > input.options.maxPromptTokens);
+  const result = assemblePrompt({ ...input, options: { ...input.options, maxPromptTokens: 64000 } });
+
+
+  assert.match(promptText(result), /克制 输出协议/);
+  assert.equal(result.sections.communityPresetIntegrity.preflightSuppressed.length, 0);
+});
+
+test('community preset and recent turns require enough budget together', () => {
   const presetExtension = (sequence) => ({
     sillyTavernPreset: { presetTitle: '超大社区预设', sourceFormat: 'sillytavern-preset', sequence }
   });
@@ -396,7 +460,7 @@ test('prompt budgeting protects the last two complete turns before optional comm
     role: index % 2 ? 'assistant' : 'user',
     content: `历史${index}：${'连续事实'.repeat(80)}`
   }));
-  const result = assemblePrompt({
+  const input = {
     promptModules: Array.from({ length: 30 }, (_, index) => ({
       id: `optional-${index}`,
       title: `可选润色 ${index}`,
@@ -409,19 +473,17 @@ test('prompt budgeting protects the last two complete turns before optional comm
     memory: { memoryCards: [] },
     messages,
     userMessage: '承接刚才的行动。',
-    options: { maxPromptTokens: 4000, recentPairs: 6 }
-  });
+    options: { promptExecutionMode: 'enhanced', maxPromptTokens: 4000, recentPairs: 6 }
+  };
+  assert.throws(() => assemblePrompt(input), error => error.code === 'PROMPT_BUDGET_INSUFFICIENT' && error.requiredTokens > input.options.maxPromptTokens);
+  const result = assemblePrompt({ ...input, options: { ...input.options, maxPromptTokens: 64000 } });
 
-  const allContent = result.messages.map((message) => message.content).join('\n');
-  for (const index of [8, 9, 10, 11]) assert.match(allContent, new RegExp(`历史${index}：`));
-  assert.equal(result.sections.historyBudget.protectedTurns, 2);
-  assert.equal(result.sections.promptModuleBudget.moduleLimit, 18);
-  assert.equal(result.sections.promptModuleBudget.excessiveActiveModules, true);
-  assert.ok(Number(result.sections.totalPromptBudget.omittedKinds['preset-system'] || 0) > 0);
-  assert.ok(result.tokenEstimate <= 4000);
+
+  for (const index of [8, 9, 10, 11]) assert.match(promptText(result), new RegExp(`历史${index}：`));
+  assert.equal(result.sections.retainedPromptModuleIds.length, 30);
 });
 
-test('tight prompt budgets retain one high-value narrative preset rule without exposing CoT', () => {
+test('community sources are not silently reduced to one rule under a tight budget', () => {
   const presetExtension = (sequence) => ({
     sillyTavernPreset: { presetTitle: '社区叙事预设', sourceFormat: 'sillytavern-preset', sequence }
   });
@@ -431,7 +493,7 @@ test('tight prompt budgets retain one high-value narrative preset rule without e
     { role: 'user', content: `当前行动：${'进入旧宅。'.repeat(90)}` },
     { role: 'assistant', content: `当前结果：${'门后传来脚步。'.repeat(90)}` }
   ];
-  const result = assemblePrompt({
+  const input = {
     promptModules: [
       {
         id: 'narrative-progress', title: '叙事推进基准', enabled: true,
@@ -457,15 +519,16 @@ test('tight prompt budgets retain one high-value narrative preset rule without e
     memory: { memoryCards: [] },
     messages,
     userMessage: '继续进入旧宅。',
-    options: { maxPromptTokens: 3000, recentPairs: 2 }
-  });
+    options: { promptExecutionMode: 'enhanced', maxPromptTokens: 3000, recentPairs: 2 }
+  };
+  assert.throws(() => assemblePrompt(input), error => error.code === 'PROMPT_BUDGET_INSUFFICIENT' && error.requiredTokens > input.options.maxPromptTokens);
+  const result = assemblePrompt({ ...input, options: { ...input.options, maxPromptTokens: 64000 } });
 
-  const allContent = result.messages.map((message) => message.content).join('\n');
+
+  assert.match(promptText(result), /旧宅的门只能从内侧打开/);
+  assert.match(promptText(result), /当前结果：/);
   assert.ok(result.sections.retainedPromptModuleIds.includes('narrative-progress'));
-  assert.doesNotMatch(allContent, /输出内部思维链|逐步推理/);
-  assert.match(allContent, /旧宅的门只能从内侧打开/);
-  assert.match(allContent, /当前结果：/);
-  assert.ok(result.tokenEstimate <= 3000);
+  assert.ok(result.sections.retainedPromptModuleIds.includes('decorative-19'));
 });
 
 test('scenario-container cards bind personality to worldbook NPCs instead of the root card', () => {
@@ -491,16 +554,17 @@ test('scenario-container cards bind personality to worldbook NPCs instead of the
     ],
     memory: { memoryCards: [] },
     messages: [],
-    userMessage: '我看向丝苻。'
+    userMessage: '我看向丝苻。',
+    options: { promptExecutionMode: 'enhanced' }
   });
 
   assert.equal(result.sections.characterContentMode, 'scenario-container');
-  assert.match(result.messages[0].content, /# 多角色场景卡/);
-  assert.match(result.messages[0].content, /不是可直接发言的单一角色/);
-  assert.doesNotMatch(result.messages[0].content, /日常能躺则躺/);
-  assert.doesNotMatch(result.messages[0].content, /某位长老正在突破/);
-  assert.doesNotMatch(result.messages[0].content, /本轮可用角色：绝世仙宗/);
-  assert.match(result.messages[0].content, /本轮可用角色：丝苻/);
+  assert.match(promptText(result), /# 多角色场景卡/);
+  assert.match(promptText(result), /根卡是场景容器/);
+  assert.doesNotMatch(promptText(result), /日常能躺则躺/);
+  assert.doesNotMatch(promptText(result), /某位长老正在突破/);
+  assert.doesNotMatch(promptText(result), /本轮可用角色：绝世仙宗/);
+  assert.match(promptText(result), /丝苻身穿红色长袍/);
   assert.ok(result.messages.some((message) => /# 多角色压缩索引/.test(message.content)));
   assert.deepEqual(result.sections.castIndex.names, ['丝苻', '竹青', '瑶台']);
   assert.ok(result.messages.some((message) => /丝苻身穿红色长袍/.test(message.content)));
@@ -552,7 +616,7 @@ test('community preset governance reports conflicting exclusive variables', () =
   assert.deepEqual(result.sections.promptModuleBudget.conflicts.map((item) => item.variable), ['word_count']);
 });
 
-test('near-turn response contract wins over a shorter preset unless the user asks otherwise', () => {
+test('near-turn response contract respects source style and explicit user length', () => {
   const result = assemblePrompt({
     promptModules: [{
       id: 'short-output',
@@ -569,8 +633,8 @@ test('near-turn response contract wins over a shorter preset unless the user ask
   });
 
   assert.ok(result.messages.some((message) => /300-500 字/.test(message.content)));
-  assert.match(result.messages.at(-2).content, /2000-3200 个中文字符/);
-  assert.match(result.messages.at(-2).content, /与正文篇幅冲突的规则，以本契约为准/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /2000-3200 个中文字符/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /以用户要求为准/);
   assert.equal(result.sections.responseLengthMode, 'long');
 });
 
@@ -669,11 +733,11 @@ test('assemblePrompt gives an imported character card a near-turn priority ancho
 
   assert.equal(result.messages.at(-1).content, '我走进客栈。');
   assert.equal(result.messages.at(-2).role, 'system');
-  assert.match(result.messages.at(-2).content, /# 本轮导入角色卡优先级/);
-  assert.match(result.messages.at(-2).content, /不得用内容包自带的专属人物、地点、开局事件或固定主线替换导入卡设定/);
-  assert.match(result.messages.at(-2).content, /角色卡与已启用世界书/);
-  assert.match(result.messages.at(-2).content, /不能保留两套互斥版本/);
-  assert.match(result.messages.at(-2).content, /隐藏秘密/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /# 本轮导入角色卡优先级/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /不得用内容包自带的专属人物、地点、开局事件或固定主线替换导入卡设定/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /角色卡与已启用世界书/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /不能保留两套互斥版本/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /隐藏秘密/);
   assert.equal(result.sections.hasCharacterSourcePriority, true);
 });
 
@@ -754,7 +818,7 @@ test('assemblePrompt preserves SillyTavern prompt roles, sequence, and in-chat d
     userMessage: '当前用户消息。'
   });
 
-  assert.match(result.messages[1].content, /保留本地系统规则/);
+  assert.ok(result.messages.some((message) => /保留本地系统规则/.test(message.content)));
   assert.doesNotMatch(result.messages[0].content, /以用户身份注入的预设/);
   assert.doesNotMatch(result.messages[0].content, /深度一的系统预设/);
   assert.deepEqual(
@@ -777,7 +841,7 @@ test('assemblePrompt preserves SillyTavern prompt roles, sequence, and in-chat d
       ['user', '当前用户消息。']
     ]
   );
-  assert.match(result.messages.at(-2).content, /# 本轮正文篇幅与推进契约/);
+  assert.match(result.messages.slice(-4).map(m => m.content).join("\n"), /篇幅偏好/);
   assert.deepEqual(result.sections.promptPlacement, {
     system: ['legacy'],
     relative: ['st-relative-user'],

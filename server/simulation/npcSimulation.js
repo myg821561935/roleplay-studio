@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { projectWorldClock } from './worldClock.js';
 import { isWorldBookCharacterProfileEntry } from '../character/characterContentMode.js';
 import { deriveCalendarContext, formatCalendarTransition, hasCalendarTransition, normalizeCalendarProfile } from './calendarEngine.js';
 
@@ -37,6 +38,9 @@ export function ensureSimulationMemory(memory, { characterCard, groupMembers, ch
     .map((actor) => [actor.id, actor]));
   const actors = normalizeActors(existing.actors).flatMap((actor) => {
     if (actor?.metadata?.source !== 'worldbook') return [actor];
+    // Arbitration/replay normalizes existing memory without an authoritative
+    // worldbook input. Absence is not a request to delete its registered NPCs.
+    if (!Array.isArray(worldBook)) return [actor];
     const refreshed = worldBookSeeds.get(actor.id);
     return refreshed ? [refreshed] : [];
   });
@@ -81,6 +85,7 @@ export function ensureSimulationMemory(memory, { characterCard, groupMembers, ch
       rosterInitialized: rosterInitialized || seedActors.length > 0
     }
   };
+  next.worldState = { ...next.worldState, clock: projectWorldClock(next.worldState?.clock, next.simulation) };
   return ensureDeclaredWorldDynamics(next, { worldBook, actors, systems: next.simulation.systems });
 }
 
@@ -394,7 +399,7 @@ function extractWorldBookActorSeeds(worldBook = []) {
     const content = String(entry.content || '');
     const labeledName = extractLabeledWorldBookField(content, ['姓名', '名字', '角色名']);
     const characterTyped = /(?:character|persona|npc|角色|人物)/u.test(type);
-    const characterTitle = /^(?:(?:人物|角色)(?:档案|设定)|NPC)\s*[：:－-]\s*\S+/u.test(title)
+    const characterTitle = /^(?:(?:人物|角色)(?:档案|设定)|NPC)\s*[：:·－-]\s*\S+/iu.test(title)
       || /^.{1,32}[_·\s-]+(?:基础信息|二次解释|性格调色盘|人物档案|角色档案|人物设定|角色设定)(?:[_·\s-]|$)/u.test(title);
     if (!explicitActor && !explicitName && !(characterTyped && (characterTitle || labeledName))) return [];
     if (!explicitActor && /(?:变量|更新规则|输出格式|状态栏|模板|契约|世界观|角色速览|人物速览|总览|系统说明)/u.test(title)) return [];
@@ -437,7 +442,7 @@ function extractWorldBookActorSeeds(worldBook = []) {
 
 function normalizeWorldBookActorName(title) {
   return String(title || '')
-    .replace(/^(?:(?:人物|角色)(?:档案|设定)?|NPC)\s*[：:－-]?\s*/iu, '')
+    .replace(/^(?:(?:人物|角色)(?:档案|设定)?|NPC)\s*[：:·－-]?\s*/iu, '')
     .replace(/[_·\s-]+(?:基础信息|二次解释|性格调色盘|人物档案|角色档案|人物设定|角色设定)(?:[_·\s-].*)?$/u, '')
     .trim();
 }

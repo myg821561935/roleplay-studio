@@ -1,86 +1,12 @@
 import { extractRoleplayPresentation } from './roleplayResponse.js';
-import { createHttpError, parseJsonResponse } from './apiClient.js';
 import { renderNarrativeMarkdown } from './narrativeText.js';
 import { buildSpeakerPortraitMap } from './characterPresentation.js';
 import { renderStreamingActionPreview } from './streamingActionPreview.js';
+import { readSseResponse } from './streamingTransport.js';
 import { createStreamAbortManager, fetchRetainedSession, isAbortedError } from './streamAbort.js';
-import { createSseError, originalOpeningStatus, parseSseEvent } from './sseProtocol.js';
+import { originalOpeningStatus, parseSseEvent } from './sseProtocol.js';
 
-export { originalOpeningStatus, parseSseEvent };
-
-async function assertStreamingResponse(response) {
-  if (response.ok) return;
-  const text = await response.text();
-  throw createHttpError(response, text, parseJsonResponse(text));
-}
-
-export async function readSseResponse(response, {
-  onToken = () => {},
-  onPhase = () => {},
-  missingBodyMessage = '当前浏览器不支持流式响应',
-  missingDoneMessage = '流式响应缺少完成事件'
-} = {}) {
-  await assertStreamingResponse(response);
-  if (!response.body) throw new Error(missingBodyMessage);
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let donePayload;
-  let doneReceived = false;
-
-  async function consumeEvent(eventText) {
-    const event = parseSseEvent(eventText);
-    if (!event) return;
-    if (event.event === 'token') {
-      const content = String(event.data?.content || '');
-      if (content) await onToken(content);
-      return;
-    }
-    if (event.event === 'phase') {
-      const phase = String(event.data?.phase || '').trim();
-      if (phase) await onPhase(phase);
-      return;
-    }
-    if (event.event === 'done') {
-      doneReceived = true;
-      donePayload = event.data;
-      return;
-    }
-    if (event.event === 'error') throw createSseError(event.data);
-  }
-
-  async function drainCompleteEvents({ flush = false } = {}) {
-    let boundary = buffer.match(/\r?\n\r?\n/);
-    while (boundary) {
-      const eventText = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary[0].length);
-      if (eventText.trim()) await consumeEvent(eventText);
-      boundary = buffer.match(/\r?\n\r?\n/);
-    }
-    if (flush && buffer.trim()) {
-      const eventText = buffer;
-      buffer = '';
-      await consumeEvent(eventText);
-    }
-  }
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      await drainCompleteEvents();
-    }
-    buffer += decoder.decode();
-    await drainCompleteEvents({ flush: true });
-  } finally {
-    await reader.cancel().catch(() => {});
-  }
-
-  if (!doneReceived) throw new Error(missingDoneMessage);
-  return donePayload || {};
-}
+export { readSseResponse, originalOpeningStatus, parseSseEvent };
 
 export function createConversationStreamController({
   state = {},
@@ -166,18 +92,17 @@ export function createConversationStreamController({
       speaker: presentation.speaker || '',
       portraitBySpeaker: buildSpeakerPortraitMap(state.config)
     });
-    renderStreamingActionPreview({ preview, presentation, state, documentObject });
     restoreScrollState(scrollState);
   }
 
-  async function requestStream(path, body, onToken, onPhase, signal = null) {
+  async function requestStream(path, body, onToken, onPhase, signal = null, onTurnReady = () => {}) {
     const response = await fetchImpl(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
       signal
     });
-    return readSseResponse(response, { onToken, onPhase });
+    return readSseResponse(response, { onToken, onPhase, onTurnReady });
   }
 
   function renderMemorySnapshot() {
@@ -228,6 +153,7 @@ export function createConversationStreamController({
       && pendingQuickReply.content === content
     );
     const originalDraft = state.pendingJourneyDraft;
+    let committedTurnRendered = false;
     state.pendingQuickReply = null;
     setStreamingState(true, originalOpeningStatus(originalDraft));
     const signal = abortManager.beginScope();
@@ -245,9 +171,22 @@ export function createConversationStreamController({
         hideUserMessage
       }, (token) => updateStreamingPreview(preview, token), (phase) => {
         if (phase === 'finalizing' && isCurrentSession(requestSessionId)) {
+          renderStreamingActionPreview({ preview, documentObject });
           setStreamingState(true, '正文已生成，正在同步世界状态与记忆…', 'finalizing');
         }
-      }, signal);
+      }, signal, (turnPayload) => {
+        if (!isCurrentSession(requestSessionId) || !turnPayload?.session) return;
+        replaceSession(turnPayload.session, {
+          fallback: state.session,
+          expectedSessionId: requestSessionId
+        });
+        committedTurnRendered = true;
+        renderMessages();
+        renderMemorySnapshot();
+        refreshInspector();
+        renderTargetSpeakerIndicator();
+        setStatus(els.sessionStatus, '下一步行动已就绪，正在整理长期记忆…', 'busy');
+      });
 
       if (!isCurrentSession(requestSessionId)) return payload;
       replaceSession(payload.session, {
@@ -256,8 +195,9 @@ export function createConversationStreamController({
       });
       state.openingError = '';
       state.targetSpeaker = '';
-      renderMessages();
+      if (!committedTurnRendered) renderMessages();
       renderMemorySnapshot();
+      refreshInspector();
       renderTargetSpeakerIndicator();
       setStatus(els.appStatus, '对话已更新', 'ok');
       return payload;
@@ -296,6 +236,7 @@ export function createConversationStreamController({
     }
 
     const requestSessionId = String(getSessionId() || 'main');
+    let committedTurnRendered = false;
     setStreamingState(true, '正在继续生成...');
     const signal = abortManager.beginScope();
     try {
@@ -305,17 +246,32 @@ export function createConversationStreamController({
         sessionId: requestSessionId
       }, (token) => updateStreamingPreview(preview, token), (phase) => {
         if (phase === 'finalizing' && isCurrentSession(requestSessionId)) {
+          renderStreamingActionPreview({ preview, documentObject });
           setStreamingState(true, '正文已生成，正在同步世界状态与记忆…', 'finalizing');
         }
-      }, signal);
+      }, signal, (turnPayload) => {
+        if (!isCurrentSession(requestSessionId) || !turnPayload?.session) return;
+        replaceSession(turnPayload.session, {
+          fallback: state.session,
+          expectedSessionId: requestSessionId
+        });
+        committedTurnRendered = true;
+        renderMessages();
+        renderMemorySnapshot();
+        refreshInspector();
+        renderTargetSpeakerIndicator();
+        setStatus(els.sessionStatus, '下一步行动已就绪，正在整理长期记忆…', 'busy');
+      });
 
       if (!isCurrentSession(requestSessionId)) return payload;
       replaceSession(payload.session, {
         fallback: state.session,
         expectedSessionId: requestSessionId
       });
-      renderMessages();
+      if (!committedTurnRendered) renderMessages();
+      renderMemorySnapshot();
       refreshInspector();
+      renderTargetSpeakerIndicator();
       setStatus(els.appStatus, '已继续生成', 'ok');
       return payload;
     } catch (error) {

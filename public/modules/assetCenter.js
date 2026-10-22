@@ -608,6 +608,24 @@ export function createAssetCenterController({
       return;
     }
 
+    if (action === 'delete') {
+      if (item.raw?.custom === false) {
+        setStatus('内置题材包为系统受保护资源，无法删除', 'warning');
+        return;
+      }
+      if (!window.confirm(`从本地素材库移除“${item.title}”？已创建的故事与对话不会受到影响。`)) return;
+      try {
+        setStatus(`正在移除：${item.title}`);
+        await onDeleteAsset?.(item);
+        localState.selectedKey = '';
+        localState.detailOpen = false;
+        await refresh({ announce: false });
+        setStatus(`已从素材库移除：${item.title}`, 'ok');
+      } catch (error) {
+        setStatus(`移除失败：${error.message}`, 'error');
+      }
+      return;
+    }
     if (action === 'quick-launch') {
       close();
       onQuickLaunch?.(item);
@@ -1565,12 +1583,25 @@ function createMetadataEditor(item) {
     createField('标签', 'tags', (item.tags || []).join('、'), 'input', '用逗号或顿号分隔'),
     createField('集合', 'collections', (item.collections || []).join('、'), 'input', '例如：仙侠主线、待整理')
   );
+  const saveRow = document.createElement('div');
+  saveRow.className = 'asset-metadata-btn-row';
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'asset-secondary-button';
   button.dataset.assetAction = 'save';
   button.textContent = '保存馆藏资料';
-  section.append(button);
+
+  saveRow.append(button);
+  if (item.raw?.custom !== false) {
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'asset-text-danger-button';
+    deleteBtn.dataset.assetAction = 'delete';
+    deleteBtn.textContent = '🗑️ 移除此素材';
+    deleteBtn.title = '从本地素材库删除此素材';
+    saveRow.append(deleteBtn);
+  }
+  section.append(saveRow);
   return section;
 }
 
@@ -1591,6 +1622,15 @@ function createDetailActions(item) {
   composeBtn.title = '在剧本工坊中混合搭配多个素材';
 
   footer.append(quickBtn, useBtn, composeBtn);
+
+  // 4. 删除/移除按钮 (非受保护内置包)
+  if (item.raw?.custom !== false) {
+    const deleteLabel = item.kind === 'pack' ? '🗑️ 删除此剧本包' : '🗑️ 移除此素材';
+    const deleteBtn = createActionButton(deleteLabel, 'delete', 'asset-bottom-danger-btn');
+    deleteBtn.title = item.kind === 'pack' ? '从本地删除此自定义剧本' : '从本地素材库删除此素材';
+    footer.append(deleteBtn);
+  }
+
   return footer;
 }
 

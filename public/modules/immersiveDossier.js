@@ -182,31 +182,7 @@ export function formatImmersiveMemoryMeta(fact) {
   return [timestamp ? String(timestamp).slice(0, 16).replace('T', ' ') : '', category].filter(Boolean).join(' · ');
 }
 
-export function resolveLatestRoleplayPanels(messages, extractRoleplayPresentation) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== 'assistant') continue;
-    const parsed = extractRoleplayPresentation(message.content);
-    const materialized = message.roleplayPanels && typeof message.roleplayPanels === 'object'
-      ? message.roleplayPanels
-      : {};
-    const recovered = parsed?.panels && typeof parsed.panels === 'object'
-      ? parsed.panels
-      : {};
-    const panels = { ...recovered, ...materialized };
-    if (Object.keys(panels).length) return panels;
-  }
-  return {};
-}
-
-export function resolveLatestTurnFrame(messages) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== 'assistant') continue;
-    if (message?.turnFrame?.validation?.status === 'accepted') return message.turnFrame;
-  }
-  return null;
-}
+export { resolveLatestRoleplayPanels, resolveLatestTurnFrame } from './immersiveTurnView.js';
 
 export function inferStatusProtagonistName(characterStatus) {
   const matches = Array.from(String(characterStatus || '').matchAll(/^[『【\[]([^\n』】\]]+?)(?:状态|档案)[』】\]]/gm));

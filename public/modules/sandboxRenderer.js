@@ -1,13 +1,13 @@
-// 沙箱渲染模块：将已审核的 HTML/JavaScript replacement 在隔离 iframe 中渲染。
+// 沙箱渲染模块：将第三方 HTML/JavaScript replacement 在隔离 iframe 中渲染。
 // 安全策略：
-// - iframe 使用 sandbox="allow-scripts"（无 allow-same-origin），阻止访问父页面 DOM、Cookie、localStorage
-// - CSP 默认拒绝网络、外部资源、嵌套 frame、表单和对象
-// - 只有内容哈希与当前审核记录完全匹配的规则才会执行
+// - iframe 始终不带 allow-same-origin，阻止访问父页面 DOM、Cookie、localStorage
+// - CSP 默认拒绝网络、外部资源、嵌套 frame、表单和对象；开发兼容探针才会显式放开浏览器侧能力
+// - 本地探索与开发兼容探针允许未拒绝的当前内容进入沙箱；严格模式要求哈希审核
 // - assessScriptRisk() 评估脚本风险等级，审核和运行时 UI 均展示风险
 
 const SANDBOX_IFRAME_STYLE = 'width:100%;border:none;border-radius:6px;overflow:hidden;background:transparent;';
 const MAX_SANDBOX_FRAGMENTS = 16;
-const SANDBOX_CSP = [
+const LOCAL_OBSERVE_CSP = [
   "default-src 'none'",
   "script-src 'unsafe-inline'",
   "style-src 'unsafe-inline'",
@@ -22,7 +22,21 @@ const SANDBOX_CSP = [
   "base-uri 'none'",
   "form-action 'none'"
 ].join('; ');
-const SANDBOX_POLICY_HEAD = `<meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${SANDBOX_CSP}"><meta name="referrer" content="no-referrer"><style>html,body{margin:0;padding:0;background:transparent;}</style>`;
+const COMPATIBILITY_PROBE_CSP = [
+  'default-src * data: blob:',
+  "script-src * data: blob: 'unsafe-inline' 'unsafe-eval'",
+  "style-src * 'unsafe-inline'",
+  'img-src * data: blob:',
+  'font-src * data: blob:',
+  'media-src * data: blob:',
+  'connect-src *',
+  'frame-src *',
+  'child-src *',
+  'worker-src * data: blob:',
+  'object-src *',
+  'base-uri *',
+  'form-action *'
+].join('; ');
 const SANDBOX_BOOTSTRAP_SCRIPT = `<script>
 (function(){
   var pendingHeight = 0;
@@ -34,11 +48,20 @@ const SANDBOX_BOOTSTRAP_SCRIPT = `<script>
     }
   }
   window.addEventListener('load', function() {
+    notifyAudit('loaded', '');
     notifyHeight();
     setTimeout(notifyHeight, 200);
     setTimeout(notifyHeight, 1000);
   });
   var mo = new MutationObserver(function() { notifyHeight(); });
+  var auditCount = 0;
+  function notifyAudit(status, errorCode) {
+    if (auditCount >= 3) return;
+    auditCount += 1;
+    parent.postMessage({ __lraSandbox: true, type: 'audit', status: status, errorCode: errorCode }, '*');
+  }
+  window.addEventListener('error', function() { notifyAudit('failed', 'SANDBOX_RUNTIME_ERROR'); });
+  window.addEventListener('unhandledrejection', function() { notifyAudit('failed', 'SANDBOX_UNHANDLED_REJECTION'); });
   document.addEventListener('DOMContentLoaded', function() {
     mo.observe(document.body, { childList: true, subtree: true, attributes: true });
   });
@@ -97,10 +120,10 @@ export function assessScriptRisk(htmlContent) {
   }
 
   const summary = level === 'high'
-    ? '高风险：脚本包含网络请求、存储访问或动态执行，必须逐项审核'
+    ? '高风险：脚本包含网络、存储访问或动态执行；默认仅在隔离沙箱中本地观察，并建议切换严格审核'
     : level === 'medium'
-      ? '中风险：脚本将在受限沙箱中执行，仍需确认行为'
-      : '低风险：未识别高危能力，仍仅限审核后的沙箱执行';
+      ? '中风险：脚本仅在无网络、无父页面权限的受限沙箱中观察运行；建议核对其行为'
+      : '低风险：未识别高危能力，仍仅在受控沙箱中本地观察运行';
 
   return { level, risks, summary };
 }
@@ -109,22 +132,32 @@ export function assessScriptRisk(htmlContent) {
  * 创建沙箱 iframe 元素
  * @param {string} htmlContent - 要渲染的 HTML 内容（含 script/style）
  * @param {object} context - 渲染上下文（user/char/mvu 等变量）
+ * @param {object} options - 运行策略；compatibility-probe 只放开子 iframe 浏览器能力
  * @returns {HTMLIFrameElement}
  */
-export function createSandboxedFrame(htmlContent, context = {}) {
+export function createSandboxedFrame(htmlContent, context = {}, { executionMode = 'local-observe' } = {}) {
+  const mode = normalizeSandboxExecutionMode(executionMode);
+  const isCompatibilityProbe = mode === 'compatibility-probe';
+  const policy = isCompatibilityProbe ? COMPATIBILITY_PROBE_CSP : LOCAL_OBSERVE_CSP;
   const iframe = document.createElement('iframe');
-  iframe.setAttribute('sandbox', 'allow-scripts');
+  iframe.setAttribute(
+    'sandbox',
+    isCompatibilityProbe
+      ? 'allow-scripts allow-forms allow-modals allow-popups allow-downloads'
+      : 'allow-scripts'
+  );
   iframe.setAttribute('style', SANDBOX_IFRAME_STYLE);
   iframe.setAttribute('scrolling', 'no');
   iframe.setAttribute('frameborder', '0');
   iframe.setAttribute('referrerpolicy', 'no-referrer');
-  iframe.setAttribute('csp', SANDBOX_CSP);
+  iframe.setAttribute('csp', policy);
+  iframe.dataset.sandboxExecutionMode = mode;
 
   // 注入上下文变量
   const contextScript = `<script>window.__lraContext = ${serializeForInlineScript(sanitizeContext(context))};</script>`;
 
   // 构建完整文档
-  const fullDoc = buildSandboxDocument(htmlContent, contextScript);
+  const fullDoc = buildSandboxDocument(htmlContent, contextScript, policy);
 
   // 使用 srcdoc 而非 blob URL，确保无网络请求
   iframe.setAttribute('srcdoc', fullDoc);
@@ -142,10 +175,13 @@ export function createSandboxedFrame(htmlContent, context = {}) {
  * @param {string} htmlContent - HTML 内容
  * @param {object} context - 渲染上下文
  */
-export function mountSandboxedContent(container, htmlContent, context = {}, { onAudit } = {}) {
+export function mountSandboxedContent(container, htmlContent, context = {}, {
+  onAudit,
+  executionMode = context?.scriptExecutionMode
+} = {}) {
   // 清空容器
   container.innerHTML = '';
-  const frame = createSandboxedFrame(htmlContent, context);
+  const frame = createSandboxedFrame(htmlContent, context, { executionMode });
   if (typeof onAudit === 'function') onAudit({ status: 'launched' });
   container.appendChild(frame);
 
@@ -153,6 +189,10 @@ export function mountSandboxedContent(container, htmlContent, context = {}, { on
   const messageHandler = (event) => {
     if (!event.data || event.data.__lraSandbox !== true) return;
     if (event.source !== frame.contentWindow) return;
+    if (event.data.type === 'audit') {
+      if (typeof onAudit === 'function') onAudit({ status: event.data.status, errorCode: event.data.errorCode });
+      return;
+    }
     if (event.data.type !== 'height') return;
     const height = Number(event.data.height) || 0;
     if (height > 0 && height < 10000) {
@@ -176,7 +216,7 @@ export function requiresSandbox(htmlContent) {
 }
 
 /**
- * 应用沙箱渲染：仅对通过内容哈希审核的 requiresSandbox 规则生成 iframe 占位符
+ * 应用沙箱渲染：本地观察模式下运行可隔离规则；严格模式下仅运行通过当前内容哈希审核的规则
  * @param {string} text - 原始文本
  * @param {object[]} rules - regex 规则列表
  * @param {object[]} reviews - 内容哈希绑定的审核记录
@@ -216,9 +256,10 @@ export function applySandboxTransforms(text, rules = [], reviews = [], context =
     try {
       const flags = normalizeFlags(rule.flags);
       const regex = new RegExp(pattern, flags);
-      if (!isRuleApproved(rule, reviews)) {
+      const execution = resolveRuleExecution(rule, reviews, context.scriptExecutionMode);
+      if (!execution.allowed) {
         const probe = new RegExp(pattern, flags.replace(/g/g, ''));
-        if (probe.test(output)) blockedAssessments.push(assessment);
+        if (probe.test(output)) blockedAssessments.push({ ...assessment, blockedReason: execution.reason });
         continue;
       }
       const replacement = String(rule.replacement || '').slice(0, 524288);
@@ -252,8 +293,9 @@ export function applySandboxTransforms(text, rules = [], reviews = [], context =
   return { text: output, sandboxFragments, riskAssessments, blockedAssessments };
 }
 
-function buildSandboxDocument(htmlContent, contextScript) {
-  const policyBootstrap = `${SANDBOX_POLICY_HEAD}${contextScript}${SANDBOX_BOOTSTRAP_SCRIPT}`;
+function buildSandboxDocument(htmlContent, contextScript, policy) {
+  const policyHead = `<meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><style>html,body{margin:0;padding:0;background:transparent;}</style>`;
+  const policyBootstrap = `${policyHead}${contextScript}${SANDBOX_BOOTSTRAP_SCRIPT}`;
   // 检测是否已经是完整 HTML 文档
   const isFullDoc = /<\s*!doctype|<\s*html[\s>]/i.test(htmlContent);
   if (isFullDoc) {
@@ -308,19 +350,47 @@ function serializeForInlineScript(value) {
     .replace(/\u2029/g, '\\u2029');
 }
 
-function isRuleApproved(rule, reviews) {
+function resolveRuleExecution(rule, reviews, executionMode = 'local-observe') {
   const scriptId = String(rule?.id || '').trim();
   const contentHash = String(rule?.contentHash || '').trim();
-  if (!scriptId || !/^sha256:[a-f0-9]{64}$/.test(contentHash)) return false;
+  if (!scriptId || !/^sha256:[a-f0-9]{64}$/.test(contentHash)) {
+    return { allowed: false, reason: 'invalid-script-identity' };
+  }
   const values = Array.isArray(reviews) ? reviews : [];
+  let latest = null;
   for (let index = values.length - 1; index >= 0; index -= 1) {
     const review = values[index];
-    if (String(review?.scriptId || '') !== scriptId) continue;
-    return review?.decision === 'approved'
-      && review?.contentHash === contentHash
-      && Number(review?.policyVersion) === 1;
+    if (String(review?.scriptId || '') === scriptId) {
+      latest = review;
+      break;
+    }
   }
-  return false;
+  const currentReview = latest
+    && latest.contentHash === contentHash
+    && Number(latest.policyVersion) === 1
+    ? latest
+    : null;
+  if (currentReview && ['rejected', 'revoked'].includes(currentReview.decision)) {
+    return { allowed: false, reason: 'explicitly-rejected' };
+  }
+  if (String(executionMode || '') === 'review-required') {
+    return currentReview?.decision === 'approved'
+      ? { allowed: true, reason: 'approved' }
+      : { allowed: false, reason: 'review-required' };
+  }
+  const mode = normalizeSandboxExecutionMode(executionMode);
+  return {
+    allowed: true,
+    reason: currentReview?.decision === 'approved'
+      ? 'approved'
+      : mode === 'compatibility-probe' ? 'compatibility-probe' : 'local-observe'
+  };
+}
+
+export function normalizeSandboxExecutionMode(value) {
+  return String(value || '').trim().toLowerCase() === 'compatibility-probe'
+    ? 'compatibility-probe'
+    : 'local-observe';
 }
 
 function expandContextMacros(text, context = {}) {

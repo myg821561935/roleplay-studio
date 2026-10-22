@@ -1,13 +1,11 @@
 import { extractRoleplayPresentation } from './roleplayResponse.js';
-import {
-  buildSpeakerPortraitMap,
-  resolveSpeakerCharacter
-} from './characterPresentation.js';
+import { buildSpeakerPortraitMap, resolveSpeakerCharacter } from './characterPresentation.js';
 import { renderAgentActionCards } from './agentActionCards.js';
 import { filterLegacyRuntimeFallbackActions } from './recommendedActionFilters.js';
 import { chooseRecommendedActionPresentation } from './recommendedActionPresentation.js';
 import { createRecommendedActionsViewNode } from './recommendedActionsView.js';
 import { normalizeRoleplayPanelsForPresentation } from './roleplayPanelsPresentation.js';
+import { createTurnClosureViewNode, resolveCommittedTurnMessage } from './turnClosureView.js';
 
 const WEB_SEARCH_TOOL_NAMES = new Set(['websearch', 'visitlinks', 'web search', 'visit links']);
 
@@ -49,28 +47,30 @@ export function createMessagePresentationController({
   canSpeakMessages = () => false,
   isMessageSpeaking = () => false,
   documentObject = globalThis.document
-} = {}) {
+  } = {}) {
   function createMessageNode(message = {}) {
+    const committedTurn = resolveCommittedTurnMessage(message, state.session?.turnViewSnapshot);
+    const viewMessage = committedTurn.message;
     const article = documentObject.createElement('article');
-    const role = message.role === 'user' ? 'user' : 'assistant';
+    const role = viewMessage.role === 'user' ? 'user' : 'assistant';
     article.className = `message ${role}`;
-    if (message.excluded) article.classList.add('excluded');
-    if (message.aborted === true && role === 'assistant') article.classList.add('is-aborted');
-    const toolActivity = getWebSearchToolActivity(message);
+    if (viewMessage.excluded) article.classList.add('excluded');
+    if (viewMessage.aborted === true && role === 'assistant') article.classList.add('is-aborted');
+    const toolActivity = getWebSearchToolActivity(viewMessage);
     if (toolActivity) article.classList.add('message-auxiliary');
 
     const presentation = role === 'assistant'
-      ? extractPresentation(message.content)
+      ? extractPresentation(viewMessage.content)
       : null;
-    const displaySpeaker = toolActivity ? '检索工具' : (message.speaker || presentation?.speaker);
+    const displaySpeaker = toolActivity ? '检索工具' : (viewMessage.speaker || presentation?.speaker);
     if (displaySpeaker && role === 'assistant') {
       article.classList.add('has-speaker');
     }
-    const emotion = presentation?.emotion || message.emotion || '';
-    const meta = createMessageMeta(message, role, displaySpeaker, emotion);
+    const emotion = presentation?.emotion || viewMessage.emotion || '';
+    const meta = createMessageMeta(viewMessage, role, displaySpeaker, emotion);
     const content = documentObject.createElement('div');
     content.className = 'message-content';
-    const rawVisibleContent = toolActivity ? '' : (presentation ? presentation.content : (message.content || ''));
+    const rawVisibleContent = toolActivity ? '' : (presentation ? presentation.content : (viewMessage.content || ''));
 
     renderMessageContent({
       container: content,
@@ -82,29 +82,37 @@ export function createMessagePresentationController({
         speaker: displaySpeaker || '',
         portraitBySpeaker: buildSpeakerPortraitMap(state.config)
       },
-      messageId: message.id
+      messageId: viewMessage.id
     });
 
     article.append(meta, content);
     const mergedRoleplayPanels = normalizeRoleplayPanelsForPresentation({
       ...(presentation?.panels || {}),
-      ...(message.roleplayPanels || {}),
+      ...(viewMessage.roleplayPanels || {}),
       ...(toolActivity ? { toolActivity } : {})
-    }, { message, presentation });
+    }, { message: viewMessage, presentation });
     const communityPanels = role === 'assistant'
       ? createCommunityPanelsNode(mergedRoleplayPanels)
       : null;
-    if (communityPanels) article.append(communityPanels);
     const presentationActions = presentation?.recommendedActions;
-    const recommendation = chooseRecommendedActionPresentation(message, { ...presentation, recommendedActions: presentationActions });
+    const recommendation = chooseRecommendedActionPresentation(viewMessage, { ...presentation, recommendedActions: presentationActions });
     const actions = createRecommendedActionsNode(
       filterLegacyRuntimeFallbackActions(recommendation.actions),
       recommendation.presentation,
-      message,
+      viewMessage,
       mergedRoleplayPanels
     );
-    if (actions) article.append(actions);
-    article.append(createMessageTools(message, role));
+    const turnClosure = role === 'assistant'
+      ? createTurnClosureViewNode({
+        message: viewMessage,
+        actionsNode: actions,
+        auxiliaryPanelsNode: communityPanels,
+        committed: committedTurn.committed,
+        documentObject
+      })
+      : null;
+    if (turnClosure) article.append(turnClosure);
+    article.append(createMessageTools(viewMessage, role));
 
     return article;
   }

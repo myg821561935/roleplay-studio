@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile, rename, readdir, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile, rename, readdir, rm, link } from 'node:fs/promises';
 import path from 'node:path';
 
 export class JsonStore {
@@ -32,6 +33,18 @@ export class JsonStore {
     const tmpPath = `${filePath}.tmp`;
     await writeFile(tmpPath, body, 'utf8');
     await rename(tmpPath, filePath);
+    return value;
+  }
+
+  // Exclusive creation is used for isolated copies; no global state propagation.
+  async createExclusive(relativePath, value) {
+    const filePath = this.resolve(relativePath);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    const temporary = `${filePath}.${randomUUID()}.pending`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      await link(temporary, filePath);
+    } finally { await rm(temporary, { force: true }); }
     return value;
   }
 

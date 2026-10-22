@@ -95,7 +95,7 @@ test('golden journey: a 118-module preset is a management warning rather than an
   assert.doesNotMatch(prompt.title, /导入失败/);
 });
 
-test('golden journey: an unreviewed third-party script exposes an audit action and remains disabled', () => {
+test('golden journey: a third-party script enters local observation with an audit action', () => {
   const session = createSession({
     config: {
       ...createConfig(),
@@ -119,7 +119,35 @@ test('golden journey: an unreviewed third-party script exposes an audit action a
     kind: 'open-script-audit',
     scriptIds: ['community-panel']
   });
-  assert.match(scripts.detail, /本次不会执行/);
+  assert.match(scripts.title, /本地观察模式运行/);
+  assert.match(scripts.detail, /无网络、无父页面权限的沙箱中运行并记录/);
+});
+
+test('golden journey: development compatibility probe is visible as a local-debugging warning', () => {
+  const session = createSession({
+    config: {
+      ...createConfig(),
+      lightFrontend: {
+        scriptExecutionMode: 'compatibility-probe',
+        regexTransforms: [{
+          id: 'community-panel',
+          name: '社区面板',
+          pattern: '<panel>([\\s\\S]*?)</panel>',
+          replacement: '<script>document.body.textContent = "ready"</script>',
+          requiresSandbox: true,
+          enabled: true
+        }]
+      }
+    }
+  });
+  const report = inspectSessionHealth(session, createContext());
+  const scripts = report.checks.find((item) => item.id === 'script-governance');
+
+  assert.equal(scripts.status, 'warning');
+  assert.match(scripts.title, /开发兼容探针/);
+  assert.match(scripts.detail, /外部资源、使用网络、表单、嵌套页面与 Worker/);
+  assert.match(scripts.recommendation, /仅用于本地角色卡兼容调试/);
+  assert.equal(scripts.metrics.executionMode, 'compatibility-probe');
 });
 
 test('golden journey: a safe derivative exposes every disabled source capability', () => {

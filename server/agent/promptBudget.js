@@ -31,6 +31,8 @@ const WORLD_STATE_IDENTITY_KEYS = new Set([
 ]);
 
 const PROTECTED_MESSAGE_KINDS = new Set([
+  'protagonist-identity',
+  'scene-continuity',
   'current-user',
   'response-contract',
   'interaction-contract',
@@ -58,15 +60,16 @@ const EXCLUSIVE_PRESET_VARIABLES = new Set([
 export function compilePromptModulesForRuntime(promptModules = [], {
   worldBook = [],
   maxTokens,
-  maxModules
+  maxModules,
+  preserveSourceModules = false
 } = {}) {
   const active = (Array.isArray(promptModules) ? promptModules : [])
     .filter((module) => module?.enabled !== false && String(module?.content || '').trim());
   const worldBookTitles = new Set((Array.isArray(worldBook) ? worldBook : [])
     .map((entry) => String(entry?.title || '').trim())
     .filter(Boolean));
-  const noopModules = active.filter(isNoopPromptModule);
-  const runnable = active.filter((module) => !isNoopPromptModule(module));
+  const noopModules = preserveSourceModules ? [] : active.filter(isNoopPromptModule);
+  const runnable = preserveSourceModules ? active : active.filter((module) => !isNoopPromptModule(module));
   const dependencies = collectWorldBookDependencies(runnable, worldBookTitles);
   const budget = normalizeOptionalBudget(maxTokens);
   const moduleLimit = normalizeOptionalLimit(maxModules);
@@ -307,14 +310,15 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
   if (!budget) return {
     messages: stripPromptMetadata(source),
     messageInspection: inspectPromptMessages(source),
-    report: {
-      maxTokens: null,
-      beforeTokens: estimateMessageTokens(source),
-      afterTokens: estimateMessageTokens(source),
-      omittedKinds: {},
-      retainedPromptModuleIds: sourcePromptModuleIds,
-      omittedPromptModuleIds: []
-    }
+      report: {
+        maxTokens: null,
+        beforeTokens: estimateMessageTokens(source),
+        afterTokens: estimateMessageTokens(source),
+        omittedKinds: {},
+        retainedPromptModuleIds: sourcePromptModuleIds,
+        omittedPromptModuleIds: [],
+        omittedMessageInspection: []
+      }
   };
 
   const beforeTokens = estimateMessageTokens(source);
@@ -328,7 +332,8 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
         afterTokens: beforeTokens,
         omittedKinds: {},
         retainedPromptModuleIds: sourcePromptModuleIds,
-        omittedPromptModuleIds: []
+        omittedPromptModuleIds: [],
+        omittedMessageInspection: []
       }
     };
   }
@@ -339,6 +344,7 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
     'preset-relative': 12,
     'preset-in-chat': 14,
     history: 20,
+    'dynamic-context-tail': 25,
     'preset-critical': 30,
     worldbook: 40
   };
@@ -347,7 +353,13 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
   // pathological result where every preset module disappears even though the
   // final prompt has enough residual room for one focused narrative rule.
   const reservedCritical = source
-    .filter((message) => message._promptKind === 'preset-critical')
+    // A coherence-sensitive community bundle must be kept or removed as a
+    // whole. Reserving one of its messages would turn the reservation into an
+    // accidental partial execution path.
+    .filter((message) => (
+      message._promptKind === 'preset-critical'
+      && !String(message._promptIntegrityGroup || '')
+    ))
     .sort((left, right) => (
       Number(right._promptPriority || 0) - Number(left._promptPriority || 0)
       || left._index - right._index
@@ -364,22 +376,34 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
       || left._index - right._index
     ));
   const removed = new Set();
+  const removalReasons = new Map();
   const processedHistoryTurns = new Set();
+  const processedIntegrityGroups = new Set();
   let currentTokens = beforeTokens;
   for (const message of removable) {
     if (currentTokens <= budget) break;
     const historyTurnId = message._promptKind === 'history' ? String(message._promptTurnId || '') : '';
+    const integrityGroup = String(message._promptIntegrityGroup || '');
     if (historyTurnId && processedHistoryTurns.has(historyTurnId)) continue;
-    const removalGroup = historyTurnId
+    if (integrityGroup && processedIntegrityGroups.has(integrityGroup)) continue;
+    const removalGroup = integrityGroup
+      ? source.filter((candidate) => candidate._promptIntegrityGroup === integrityGroup)
+      : historyTurnId
       ? source.filter((candidate) => candidate._promptTurnId === historyTurnId)
       : [message];
-    if (removalGroup.some((candidate) => PROTECTED_MESSAGE_KINDS.has(candidate._promptKind))) continue;
+    if (removalGroup.some((candidate) => (
+      PROTECTED_MESSAGE_KINDS.has(candidate._promptKind)
+      || candidate._index === reservedCritical?._index
+    ))) continue;
     if (historyTurnId) processedHistoryTurns.add(historyTurnId);
+    if (integrityGroup) processedIntegrityGroups.add(integrityGroup);
     const messageTokens = estimateMessageTokens(removalGroup);
     const overflow = currentTokens - budget;
     if (message._promptKind === 'worldbook' && messageTokens - overflow >= 160) {
       const targetContentTokens = Math.max(80, messageTokens - overflow - 4);
       message.content = limitTextToTokenBudget(message.content, targetContentTokens);
+      message._promptBudgetStatus = 'truncated';
+      message._promptBudgetReason = '按最终提示词预算保留了截断版本';
       currentTokens = estimateMessageTokens(source.filter((candidate) => !removed.has(candidate._index)));
       omittedKinds['worldbook-truncated'] = (omittedKinds['worldbook-truncated'] || 0) + 1;
       continue;
@@ -387,11 +411,21 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
     if (message._promptKind === 'preset-critical' && messageTokens - overflow >= 120) {
       const targetContentTokens = Math.max(80, messageTokens - overflow - 4);
       message.content = limitTextToTokenBudget(message.content, targetContentTokens);
+      message._promptBudgetStatus = 'truncated';
+      message._promptBudgetReason = '按最终提示词预算保留了截断版本';
       currentTokens = estimateMessageTokens(source.filter((candidate) => !removed.has(candidate._index)));
       omittedKinds['preset-critical-truncated'] = (omittedKinds['preset-critical-truncated'] || 0) + 1;
       continue;
     }
-    removalGroup.forEach((candidate) => removed.add(candidate._index));
+    removalGroup.forEach((candidate) => {
+      removed.add(candidate._index);
+      removalReasons.set(
+        candidate._index,
+        integrityGroup
+          ? '完整性保护：最终提示词预算无法保留社区预设的完整变量链'
+          : '超出最终提示词预算'
+      );
+    });
     currentTokens -= messageTokens;
     omittedKinds[message._promptKind] = (omittedKinds[message._promptKind] || 0) + removalGroup.length;
   }
@@ -403,6 +437,8 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
     if (core) {
       const otherTokens = currentTokens - estimateTokens(`${core.role || 'system'}: ${core.content || ''}`);
       core.content = limitTextToTokenBudget(core.content, Math.max(1, budget - otherTokens - 4));
+      core._promptBudgetStatus = 'truncated';
+      core._promptBudgetReason = '核心保护层按最终提示词预算压缩';
       currentTokens = estimateMessageTokens(kept);
     }
   }
@@ -415,6 +451,8 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
         reservedCritical.content,
         Math.max(80, messageTokens - overflow - 4)
       );
+      reservedCritical._promptBudgetStatus = 'truncated';
+      reservedCritical._promptBudgetReason = '按最终提示词预算保留了截断版本';
       omittedKinds['preset-critical-truncated'] = (omittedKinds['preset-critical-truncated'] || 0) + 1;
       currentTokens = estimateMessageTokens(kept);
     }
@@ -422,7 +460,22 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
 
   if (currentTokens > budget) {
     currentTokens = truncateProtectedMessagesToBudget(kept, {
-      kinds: ['history-recent', 'history-user-anchor', 'worldbook-anchor', 'cast-index', 'psychological-progression-contract'],
+      // These contracts are protected from eviction, not from a last-resort
+      // compression.  Without this final pass, splitting the prompt into
+      // independently inspectable blocks could make a small configured total
+      // budget impossible to honour.
+      kinds: [
+        'history-recent',
+        'history-user-anchor',
+        'worldbook-anchor',
+        'cast-index',
+        'psychological-progression-contract',
+        'character-anchor',
+        'interaction-contract',
+        'hard-facts-tail',
+        'author-note',
+        'response-contract'
+      ],
       budget,
       omittedKinds
     });
@@ -440,14 +493,15 @@ export function enforcePromptMessageBudget(messages = [], { maxTokens } = {}) {
       afterTokens: currentTokens,
       omittedKinds,
       retainedPromptModuleIds,
-      omittedPromptModuleIds: sourcePromptModuleIds.filter((id) => !retainedPromptModuleIdSet.has(id))
+      omittedPromptModuleIds: sourcePromptModuleIds.filter((id) => !retainedPromptModuleIdSet.has(id)),
+      omittedMessageInspection: inspectOmittedPromptMessages(source, removed, removalReasons)
     }
   };
 }
 
 function inspectPromptMessages(messages = []) {
   return (Array.isArray(messages) ? messages : []).map((message, index) => ({
-    order: index + 1,
+    order: Number.isInteger(message?._index) ? message._index + 1 : index + 1,
     role: String(message?.role || 'system'),
     kind: String(message?._promptKind || 'message'),
     moduleId: String(message?._promptModuleId || ''),
@@ -455,9 +509,23 @@ function inspectPromptMessages(messages = []) {
     depth: Number.isFinite(Number(message?._promptDepth)) ? Number(message._promptDepth) : null,
     trigger: String(message?._promptTrigger || ''),
     turnId: String(message?._promptTurnId || ''),
+    status: String(message?._promptBudgetStatus || 'running'),
+    evictionReason: String(message?._promptBudgetReason || ''),
     tokenEstimate: estimateTokens(`${message?.role || 'system'}: ${message?.content || ''}`),
     content: String(message?.content || '')
   }));
+}
+
+function inspectOmittedPromptMessages(source = [], removed = new Set(), removalReasons = new Map()) {
+  return inspectPromptMessages(
+    source
+      .filter((message) => removed.has(message._index))
+      .map((message) => ({
+        ...message,
+        _promptBudgetStatus: 'evicted-by-budget',
+        _promptBudgetReason: removalReasons.get(message._index) || '超出最终提示词预算'
+      }))
+  );
 }
 
 export function limitTextToTokenBudget(value, maxTokens) {
@@ -639,6 +707,8 @@ function truncateProtectedMessagesToBudget(messages, { kinds, budget, omittedKin
     const nextContent = limitTextToTokenBudget(message.content, targetTokens);
     if (!nextContent || nextContent === message.content) continue;
     message.content = nextContent;
+    message._promptBudgetStatus = 'truncated';
+    message._promptBudgetReason = '核心保护信息按最终提示词预算压缩';
     omittedKinds[`${message._promptKind}-truncated`] = (omittedKinds[`${message._promptKind}-truncated`] || 0) + 1;
     currentTokens = estimateMessageTokens(messages);
   }
@@ -764,7 +834,7 @@ function estimateMessageTokens(messages) {
 
 function stripPromptMetadata(messages) {
   return messages.map((message) => Object.fromEntries(
-    Object.entries(message).filter(([key]) => !key.startsWith('_prompt'))
+    Object.entries(message).filter(([key]) => !key.startsWith('_prompt') && key !== '_index')
   ));
 }
 

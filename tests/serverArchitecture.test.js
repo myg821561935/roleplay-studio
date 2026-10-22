@@ -6,6 +6,8 @@ test('server entry delegates bounded API areas to route modules', async () => {
   const app = await readFile('server/app.js', 'utf8');
   const routeModules = [
     'chatRoutes',
+    'characterPresetRoutes',
+    'coreMemoryRoutes',
     'importRoutes',
     'mcpRoutes',
     'providerRoutes',
@@ -29,12 +31,14 @@ test('server entry delegates bounded API areas to route modules', async () => {
 });
 
 test('route modules own their endpoint families', async () => {
-  const [imports, stories, resources, repairs, configMigrations] = await Promise.all([
+  const [imports, stories, resources, repairs, configMigrations, coreMemory, characterPresets] = await Promise.all([
     readFile('server/routes/importRoutes.js', 'utf8'),
     readFile('server/routes/storyProjectRoutes.js', 'utf8'),
     readFile('server/routes/resourceLibraryRoutes.js', 'utf8'),
     readFile('server/routes/referenceRepairRoutes.js', 'utf8'),
-    readFile('server/routes/sessionConfigMigrationRoutes.js', 'utf8')
+    readFile('server/routes/sessionConfigMigrationRoutes.js', 'utf8'),
+    readFile('server/routes/coreMemoryRoutes.js', 'utf8'),
+    readFile('server/routes/characterPresetRoutes.js', 'utf8')
   ]);
 
   assert.match(imports, /\/api\/import\/preview/);
@@ -43,4 +47,6 @@ test('route modules own their endpoint families', async () => {
   assert.match(resources, /\/api\/resource-library\/resources/);
   assert.match(repairs, /\/api\/reference-repairs\/orphans/);
   assert.match(configMigrations, /\/api\/session-config-migrations\/incomplete/);
+  assert.match(coreMemory, /\/api\/memory\/core/);
+  assert.match(characterPresets, /\/api\/character-presets/);
 });

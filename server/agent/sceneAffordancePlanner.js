@@ -124,7 +124,7 @@ function collectNarrativeScene(value) {
     .map((match) => compact(match[1], 48))
     .filter((label) => label && !/(?:时候|刹那|一瞬|片刻|同时)$/u.test(label))
     .filter((label) => !/(?:像|仿佛|似乎|宛如|好似|声音|目光|语气|光|影)/u.test(label));
-  const named = [...source.matchAll(/(?:那|这|一|两|几|每|脚下的|面前的|身后的|远处的|深处的)?([\u3400-\u9fffA-Za-z0-9·‘’“”_-]{1,22}?(?:门|通道|甬道|隧道|石阶|台阶|出口|入口|岔路|路径|门缝|裂缝|石缝|凹槽|刻字|铭文|石碑|令牌|腰牌|玉简|陶片|残片|碎片|器物|光点|亮点|机关|铜铃|尸体|干尸|铜镜|玉板|印记|箱|柜|窗|梯|桥|井|祭坛|阵法))/gu)]
+  const named = [...source.matchAll(/(?:那|这|一|两|几|每|脚下的|面前的|身后的|远处的|深处的)?([\u3400-\u9fffA-Za-z0-9·‘’“”_-]{1,22}?(?:门|通道|甬道|隧道|石阶|台阶|出口|入口|岔路|路径|门缝|裂缝|石缝|凹槽|刻字|铭文|石碑|令牌|腰牌|玉简|陶片|残片|碎片|器物|光点|亮点|机关|铜铃|尸体|干尸|铜镜|玉板|印记|匣|盒|箱|柜|瓶|盏|窗|梯|桥|井|祭坛|阵法))/gu)]
     .map((match) => cleanNarrativeObjectLabel(compact(match[1], 36)))
     .filter((label) => label.length >= 2)
     .filter((label) => !/(?:像|仿佛|似乎|宛如|好似|声音|目光|语气|光点$)/u.test(label));

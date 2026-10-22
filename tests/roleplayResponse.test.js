@@ -217,6 +217,28 @@ test('unnumbered Tianji bullet choices become the single native action source', 
   }
 });
 
+test('mixed compatible action protocols resolve to one native menu instead of merged duplicate menus', () => {
+  const raw = `门外的风声停了，石阶下传来一声轻响。
+
+> [天机选项：来人尚未现身，门缝外有新的动静。]
+- 选项1：隔着门缝先问来者是谁
+- 选项2：按住门闩，听清外面的脚步
+- 选项3：退到侧窗旁，给自己留出退路
+
+<recommended_actions>["直接推门查看", "高声喝问", "翻墙离开"]</recommended_actions>
+<w2g>A: 随手开门</w2g>`;
+
+  for (const parsed of [parseRoleplayResponse(raw), extractRoleplayPresentation(raw)]) {
+    assert.deepEqual(parsed.recommendedActions, [
+      '隔着门缝先问来者是谁',
+      '按住门闩，听清外面的脚步',
+      '退到侧窗旁，给自己留出退路'
+    ]);
+    assert.equal(parsed.recommendedActionPresentation?.source, 'community-choice-block');
+    assert.doesNotMatch(parsed.content, /recommended_actions|随手开门|天机选项/u);
+  }
+});
+
 test('an incomplete unnumbered Tianji block stays hidden while streaming', () => {
   const raw = '夜深人静，神识正在靠近。\n\n> [天机选项：异状尚未收束]\n- 立刻躺回木板';
   const parsed = extractRoleplayPresentation(raw);

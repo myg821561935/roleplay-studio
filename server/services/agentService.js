@@ -1,3 +1,9 @@
+import { agreementScope, enforceAgreementReply } from '../agent/agreementGuard.js';
+import { resolveProtagonistIdentity, normalizeProtagonistPresentation } from '../agent/protagonistIdentity.js';
+import { attachNarrativeQuality, inspectNarrativeQuality } from '../agent/narrativeQuality.js';
+import { buildFactEvidenceContext } from '../agent/factProvenance.js';
+import { resolveEnhancements } from '../agent/enhancements.js';
+import { BackgroundMaintenance } from './backgroundMaintenance.js';
 import { assemblePrompt } from '../agent/promptAssembler.js';
 import { selectGroupSpeaker } from '../agent/groupSpeakerSelector.js';
 import { buildSummaryPrompt, parseSummaryResult, shouldSummarize } from '../agent/summaryScheduler.js';
@@ -48,14 +54,25 @@ import {
   listTimelineBranches
 } from '../agent/timelineStore.js';
 import { ensureEventLog } from '../agent/sessionEventLog.js';
+import { tickOffscreenSimulation } from '../simulation/offscreenSimulation.js';
+import { evaluateStoryGraph } from '../simulation/storyGraph.js';
+import { resolveTieredProvider } from '../provider/tieredTaskEngine.js';
+import { buildTurnViewSnapshot } from '../agent/turnViewSnapshot.js';
+import { runPiRuntime } from '../agent/runtime/piRuntime.js';
 
 const MAX_CONSECUTIVE_SUMMARY_FAILURES = 3;
 const INTERACTIVE_PROVIDER_TASKS = new Set(['chat', 'rewrite']);
+const FAST_BACKGROUND_PROVIDER_TASKS = new Set(['fact', 'summary']);
 // 中止留存的可见正文下限：低于该长度视为尚未开始有效生成，静默丢弃
 const MIN_ABORTED_PARTIAL_CHARS = 12;
+// “继续推进”是交互语义，不是空白用户消息。统一传入安全、非叙事的
+// 指令，让 PromptAssembler 在保留上一回合的同时明确模型从其落点继续。
+const CONTINUATION_PROMPT_MESSAGE = '[玩家请求继续推进：从上一条正文已经发生的最后事实之后，沿用原有文风自然推进并写出行动的实质后果；禁止复述、改写或重演上一条正文，不替玩家行动、发言或作决定。若形成真实未决节点，请交还选择权。]';
 
 export class AgentService {
-  constructor({ configService, sessionService, providerClient, vectorMemoryService, memoryService, worldSimulationService, mcpRegistry }) {
+  constructor({ configService, sessionService, providerClient, vectorMemoryService, memoryService, worldSimulationService, mcpRegistry, agentRuntime = process.env.ROLEPLAY_AGENT_RUNTIME || 'native' }) {
+    if (!['native', 'pi'].includes(agentRuntime)) throw new Error('ROLEPLAY_AGENT_RUNTIME must be native or pi');
+    this.agentRuntime = agentRuntime;
     this.configService = configService;
     this.sessionService = sessionService;
     this.providerClient = providerClient;
@@ -64,6 +81,7 @@ export class AgentService {
     this.worldSimulationService = worldSimulationService || new WorldSimulationService({ sessionService });
     this.mcpRegistry = mcpRegistry || null;
     this.sessionLocks = new Map();
+    this.backgroundMaintenance = new BackgroundMaintenance(this);
   }
 
   /**
@@ -87,6 +105,7 @@ export class AgentService {
    * 兼容旧调用名；实际由统一 MemoryService 返回情节、向量与图谱检索上下文。
    */
   async maybeRetrieveVectorMemory({ session, userMessage, excludeMessageIds = [] }) {
+    if (!resolveEnhancements(session.settings).memoryRecall) return { vectorHits: [], vectorEnabled: false, memoryContext: null };
     const memoryContext = await this.memoryService.retrieveContext({
       session,
       userMessage,
@@ -121,7 +140,7 @@ export class AgentService {
       groupMembers: activeConfig.groupMembers,
       worldSystems: activeConfig.worldSystems
     });
-    const provider = getActiveProvider(globalConfig, session);
+    const provider = getProviderForTask(globalConfig, session, taskKey);
     const fallbackChain = getProviderChain(globalConfig, session, provider, taskKey).slice(1);
     return { globalConfig, session, activeConfig, provider, fallbackChain };
   }
@@ -157,22 +176,18 @@ export class AgentService {
       lifecycleReports: [userLifecycle.report]
     });
 
-    session.messages.push(userMessage, assistantMessage);
-    if (assistantMessage.contextExcluded !== true) {
-      this.worldSimulationService.applyTurn({
-        session,
-        userMessage,
-        assistantMessage,
-        actionEnvelope,
-        actionError
-      });
-      this.memoryService.observeTurn({ session, userMessage, assistantMessage });
-    }
-
-    await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig });
-
-    session.updatedAt = new Date().toISOString();
-    await this.sessionService.saveSession(session);
+    await this.commitAssistantTurn({
+      session,
+      userMessage,
+      assistantMessage,
+      actionEnvelope,
+      actionError,
+      assembled,
+      activeConfig,
+      speaker: targetSpeaker || assistantMessage.speaker,
+      provider,
+      globalConfig
+    });
     return {
       session,
       reply: assistantMessage,
@@ -180,7 +195,7 @@ export class AgentService {
     };
   }
 
-  async sendMessageStream({ sessionId = 'main', content, targetSpeaker, hideUserMessage = false, onToken, onPhase, signal = null }) {
+  async sendMessageStream({ sessionId = 'main', content, targetSpeaker, hideUserMessage = false, onToken, onPhase, onTurnReady, signal = null }) {
     const { globalConfig, session, activeConfig, provider, fallbackChain } = await this.prepareChatContext({ sessionId, taskKey: 'chat' });
     const continuation = isContinuationSignal(content);
     const userMessage = createMessage('user', content, {
@@ -213,7 +228,7 @@ export class AgentService {
       memory: session.memory,
       authoring: session.authoring,
       messages: session.messages,
-      userMessage: continuation ? '' : userMessage.content,
+      userMessage: continuation ? CONTINUATION_PROMPT_MESSAGE : userMessage.content,
       persona: activeConfig.persona,
       groupMembers: activeConfig.groupMembers,
       targetSpeaker: resolvedStreamSpeaker,
@@ -226,13 +241,14 @@ export class AgentService {
       options: session.settings
     });
 
+    const guardedAgreement = agreementScope(session.memory, userMessage).active;
     const streamFilter = createHiddenBlockStreamFilter(onToken);
     let assistantResult;
     try {
       assistantResult = await this.completeAssistantContentStream({
         provider,
         messages: assembled.messages,
-        onToken: streamFilter.push,
+        onToken: guardedAgreement ? async () => {} : streamFilter.push,
         fallbackChain,
         taskKey: 'chat',
         signal
@@ -260,110 +276,56 @@ export class AgentService {
       }
       throw error;
     }
+    assistantResult = await this.guardAgreementResult({ assistantResult, session, userMessage, assembled, provider, fallbackChain, signal });
+    if (guardedAgreement) await streamFilter.push(assistantResult.content);
     await streamFilter.end();
     await emitStreamPhase(onPhase, 'finalizing');
-    const parsedOutput = parseAssistantOutput(assistantResult.content);
-    const consistency = validateNarrativeHardFacts(parsedOutput?.reply?.content, session.memory);
-    if (!consistency.valid) session.memory = memoryBeforeGeneration;
-    const mvuUpdate = consistency.valid
-      ? applyAssistantMvuUpdate(session, parsedOutput)
-      : { patches: [], error: { code: 'NARRATIVE_CONSISTENCY_REJECTED', detail: consistencyConflictDetail(consistency) } };
-    const assistantLifecycle = consistency.valid
-      ? applySessionLifecycle(session, activeConfig.lightFrontend, 'onAssistant')
-      : skippedLifecycle('onAssistant', 'narrative-consistency-rejected');
-    const speaker = parsedOutput.speaker;
-    const parsedReply = parsedOutput.reply;
-    const turnFrame = resolveNarrativeTurnFrame(parsedOutput.turnFrame, {
-      consistencyValid: consistency.valid,
-      content: parsedReply.content,
-      memory: session.memory
+    const finalized = this.finalizeAssistantTurn({
+      config: activeConfig,
+      session,
+      provider,
+      userMessage,
+      groupMembers: activeConfig.groupMembers,
+      resolvedSpeaker: resolvedStreamSpeaker,
+      assembled,
+      assistantResult,
+      memoryBeforeGeneration,
+      generationType: continuation ? 'continue' : 'normal',
+      lifecyclePatches: userLifecycle.envelopes,
+      lifecycleReports: [userLifecycle.report]
     });
-    const fallbackStateEnvelope = buildTurnFrameStateEnvelope(turnFrame, session.memory, parsedOutput.actionEnvelope, {
-      content: parsedReply.content
+    await this.commitAssistantTurn({
+      session,
+      userMessage,
+      ...finalized,
+      activeConfig,
+      speaker: resolvedStreamSpeaker || finalized.assistantMessage.speaker,
+      provider,
+      globalConfig,
+      onCommitted: typeof onTurnReady === 'function'
+        ? ({ session: committedSession, assistantMessage: committedMessage }) => onTurnReady({
+          session: committedSession,
+          reply: committedMessage
+        })
+        : null
     });
-    const effectiveActionEnvelope = mergeActionEnvelopes(parsedOutput.actionEnvelope, fallbackStateEnvelope);
-    const roleplayPanels = applyConsistencyNotice(
-      mergeRoleplayPanels({}, {
-        ...materializeTurnFramePanels(turnFrame),
-        ...parsedOutput.roleplayPanels
-      }, assembled),
-      consistency
-    );
-    const decisionMemory = consistency.valid
-      ? this.worldSimulationService.projectDecisionMemory({
-        session,
-        assistantMessage: {
-          id: 'decision-preview',
-          role: 'assistant',
-          content: parsedReply.content,
-          roleplayPanels,
-          speaker,
-          turnFrame
-        },
-        actionEnvelope: effectiveActionEnvelope
-      })
-      : session.memory;
-    const recommendationPlan = consistency.valid
-      ? resolveRecommendationPlan(parsedReply.recommendedActions, decisionMemory, {
-        userMessage,
-        assistantContent: parsedReply.content,
-        recentMessages: session.messages,
-        generationType: continuation ? 'continue' : 'normal',
-        roleplayMode: activeConfig?.settings?.roleplayMode || session.settings?.roleplayMode,
-        characterCard: activeConfig?.characterCard,
-        groupMembers: activeConfig?.groupMembers,
-        turnFrame,
-        recommendationSource: parsedReply.recommendedActionPresentation?.source
-      })
-      : emptyRecommendationPlan();
-    const usage = buildUsageSnapshot({ provider, assembled, content: parsedReply.content, providerResult: assistantResult });
-    const assistantMessage = createMessage('assistant', parsedReply.content, {
-      recommendedActions: recommendationPlan.actions,
-      recommendedActionOptions: recommendationPlan.actionOptions,
-      recommendedActionPresentation: parsedReply.recommendedActionPresentation || recommendationPlan.presentation,
-      decisionNode: recommendationPlan.decision,
-      turnFrame,
-      turnFrameError: parsedOutput.turnFrameError,
-      narrativeConsistency: consistency,
-      contextExcluded: !consistency.valid,
-      contextExclusionReason: !consistency.valid ? 'narrative-hard-fact-conflict' : '',
-      usage,
-      actionEnvelope: effectiveActionEnvelope,
-      actionError: parsedOutput.actionError,
-      mvuPatches: [...userLifecycle.envelopes, ...mvuUpdate.patches, ...assistantLifecycle.envelopes],
-      mvuError: mvuUpdate.error,
-      lifecycleReports: [userLifecycle.report, assistantLifecycle.report],
-      roleplayPanels,
-      worldBookActivation: assembled.sections.worldBookActivation,
-      speaker
-    });
-    recordPromptRuntime(session, assembled);
-    appendUsageLedgerEntry(session, {
-      taskKey: 'chat',
-      messageId: assistantMessage.id,
-      usage,
-      routing: assistantResult.routing
-    });
-
-    session.messages.push(userMessage, assistantMessage);
-    if (assistantMessage.contextExcluded !== true) {
-      this.worldSimulationService.applyTurn({
-        session,
-        userMessage,
-        assistantMessage,
-        actionEnvelope: effectiveActionEnvelope,
-        actionError: parsedOutput.actionError
-      });
-      this.memoryService.observeTurn({ session, userMessage, assistantMessage });
-    }
-    await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig });
-
-    session.updatedAt = new Date().toISOString();
-    await this.sessionService.saveSession(session);
-    return { session, reply: assistantMessage, debug: assembled };
+    return { session, reply: finalized.assistantMessage, debug: finalized.assembled };
   }
 
   async completeAssistantContentStream({ provider, messages, onToken, fallbackChain = [], taskKey = 'chat', signal = null }) {
+    if (this.agentRuntime === 'pi') return this.completeWithToolLoop({ provider, messages, onToken, fallbackChain, taskKey, signal });
+    const mcpTools = await this.listMcpTools();
+    if (mcpTools.length) {
+      if (signal?.aborted) {
+        const abortError = new Error('GENERATION_ABORTED');
+        abortError.code = 'GENERATION_ABORTED';
+        throw abortError;
+      }
+      return this.completeWithToolLoop({
+        provider, fallbackChain, messages, taskKey, tools: mcpTools, onToken, signal
+      });
+    }
+
     if (typeof this.providerClient.stream === 'function') {
       const result = await this.streamWithFallback({
         primaryProvider: provider,
@@ -380,11 +342,12 @@ export class AgentService {
       primaryProvider: provider,
       fallbackChain,
       messages,
-      taskKey
+      taskKey, signal
     });
     const actionParsed = extractActionEnvelope(result.content);
-    const parsed = extractRecommendedActions(actionParsed.content);
-    for (const token of chunkText(parsed.content)) {
+    const presentation = parseRoleplayResponse(actionParsed.content);
+    for (const token of chunkText(presentation.content)) {
+      signal?.throwIfAborted();
       await onToken?.(token);
     }
     return result;
@@ -408,6 +371,7 @@ export class AgentService {
       session.messages = session.messages.slice(0, index + 1);
       this.invalidateVectorIndex(session);
       session.memory = this.memoryService.rebuildRange({ session, messages: session.messages });
+      session.turnViewSnapshot = buildTurnViewSnapshot({ session, assistantMessage: message });
       session.updatedAt = new Date().toISOString();
       await this.sessionService.saveSession(session);
       return { session, reply: message };
@@ -443,19 +407,19 @@ export class AgentService {
       promptMessages: session.messages.slice(0, -1)
     });
 
-    session.messages.push(assistantMessage);
-    this.worldSimulationService.applyTurn({
+    await this.commitAssistantTurn({
       session,
       userMessage: message,
       assistantMessage,
       actionEnvelope,
-      actionError
+      actionError,
+      assembled,
+      activeConfig,
+      speaker: assistantMessage.speaker,
+      provider,
+      globalConfig,
+      appendUserMessage: false
     });
-    this.memoryService.observeTurn({ session, userMessage: message, assistantMessage });
-    await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig });
-
-    session.updatedAt = new Date().toISOString();
-    await this.sessionService.saveSession(session);
     return { session, reply: assistantMessage, debug: assembled };
   }
 
@@ -476,6 +440,7 @@ export class AgentService {
     applySwipeMetadata(message, message.swipeMetadata[targetIndex]);
     message.updatedAt = new Date().toISOString();
     session.memory = this.memoryService.rebuildRange({ session, messages: session.messages });
+    session.turnViewSnapshot = buildTurnViewSnapshot({ session, assistantMessage: message });
     session.updatedAt = new Date().toISOString();
     this.invalidateVectorIndex(session);
     await this.sessionService.saveSession(session);
@@ -491,6 +456,7 @@ export class AgentService {
     const userMessage = session.messages[index - 1];
     if (!userMessage || userMessage.role !== 'user') throw new Error('MISSING_USER_MESSAGE');
 
+    const repairAudit = inspectNarrativeQuality({ content: assistantMessage.content, userMessage, messages: session.messages.slice(0, index - 1), playerName: activeConfig.persona?.name || session.memory?.worldState?.protagonist?.name || '' });
     session.messages = session.messages.slice(0, index);
     session.memory = this.memoryService.rebuildRange({ session, messages: session.messages });
     this.invalidateVectorIndex(session);
@@ -509,6 +475,7 @@ export class AgentService {
       fallbackChain,
       vectorHits,
       memoryContext,
+      repairAudit,
       promptMessages: session.messages.slice(0, -1),
       targetSpeaker: assistantMessage.speaker,
       generationType: Array.isArray(activeConfig.groupMembers)
@@ -539,7 +506,13 @@ export class AgentService {
       actionError: result.actionError
     });
     this.memoryService.observeTurn({ session, userMessage, assistantMessage });
+    applyTurnStatePostProcessing(session, {
+      assistantMessage,
+      activeConfig,
+      speaker: assistantMessage.speaker
+    });
     await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled: result.assembled, globalConfig });
+    session.turnViewSnapshot = buildTurnViewSnapshot({ session, assistantMessage });
 
     session.updatedAt = new Date().toISOString();
     await this.sessionService.saveSession(session);
@@ -560,6 +533,7 @@ export class AgentService {
     memoryContext = null,
     promptMessages = session.messages,
     generationType = 'normal',
+    repairAudit = null,
     lifecyclePatches = [],
     lifecycleReports = []
   }) {
@@ -579,7 +553,7 @@ export class AgentService {
       memory: session.memory,
       authoring: session.authoring,
       messages: promptMessages,
-      userMessage: generationType === 'continue' ? '' : userMessage.content,
+      userMessage: generationType === 'continue' ? CONTINUATION_PROMPT_MESSAGE : userMessage.content,
       persona: config.persona,
       groupMembers,
       targetSpeaker: resolvedSpeaker,
@@ -589,15 +563,53 @@ export class AgentService {
       memoryContext,
       lightFrontend: config.lightFrontend,
       activationContext: { seed: session.id || '', generationType },
-      options: session.settings
+      options: { ...session.settings, repairAudit }
     });
 
-    const assistantResult = await this.completeWithToolLoop({
+    let assistantResult = await this.completeWithToolLoop({
       provider,
       fallbackChain,
       messages: assembled.messages
     });
+    assistantResult = await this.guardAgreementResult({ assistantResult, session, userMessage, assembled, provider, fallbackChain });
+    return this.finalizeAssistantTurn({
+      config,
+      session,
+      provider,
+      userMessage,
+      groupMembers,
+      resolvedSpeaker,
+      assembled,
+      assistantResult,
+      memoryBeforeGeneration,
+      generationType,
+      lifecyclePatches,
+      lifecycleReports
+    });
+  }
+
+  async guardAgreementResult({ assistantResult, session, userMessage, assembled, provider, fallbackChain, signal }) {
+    return enforceAgreementReply({ result: assistantResult, memory: session.memory, userMessage, messages: assembled.messages, signal,
+      complete: messages => this.completeWithFallback({ primaryProvider: provider, fallbackChain, messages, taskKey: 'chat', signal }) });
+  }
+
+  finalizeAssistantTurn({
+    config,
+    session,
+    provider,
+    userMessage,
+    groupMembers,
+    resolvedSpeaker,
+    assembled,
+    assistantResult,
+    memoryBeforeGeneration,
+    generationType = 'normal',
+    repairAudit = null,
+    lifecyclePatches = [],
+    lifecycleReports = []
+  }) {
     const parsedOutput = parseAssistantOutput(assistantResult.content);
+    normalizeProtagonistPresentation(parsedOutput, resolveProtagonistIdentity(config.persona, session.memory));
     const consistency = validateNarrativeHardFacts(parsedOutput?.reply?.content, session.memory);
     if (!consistency.valid) session.memory = memoryBeforeGeneration;
     const mvuUpdate = consistency.valid
@@ -611,10 +623,13 @@ export class AgentService {
     const turnFrame = resolveNarrativeTurnFrame(parsedOutput.turnFrame, {
       consistencyValid: consistency.valid,
       content: parsedReply.content,
+      userContent: userMessage?.content,
       memory: session.memory
     });
     const fallbackStateEnvelope = buildTurnFrameStateEnvelope(turnFrame, session.memory, parsedOutput.actionEnvelope, {
-      content: parsedReply.content
+      content: parsedReply.content,
+      userContent: userMessage?.content,
+      initializeInventory: !session.messages.some(message => message.role === 'assistant' && !message.contextExcluded && !message.excluded)
     });
     const effectiveActionEnvelope = mergeActionEnvelopes(parsedOutput.actionEnvelope, fallbackStateEnvelope);
     const roleplayPanels = applyConsistencyNotice(
@@ -627,6 +642,7 @@ export class AgentService {
     const decisionMemory = consistency.valid
       ? this.worldSimulationService.projectDecisionMemory({
         session,
+        userMessage,
         assistantMessage: {
           id: 'decision-preview',
           role: 'assistant',
@@ -648,17 +664,21 @@ export class AgentService {
         characterCard: config?.characterCard,
         groupMembers,
         turnFrame,
-        recommendationSource: parsedReply.recommendedActionPresentation?.source
+        executionMode: assembled.sections.executionMode,
+        actionSuggestions: assembled.sections.enhancements?.actionSuggestions,
+        recommendationPresentation: parsedReply.recommendedActionPresentation
       })
       : emptyRecommendationPlan();
     const usage = buildUsageSnapshot({ provider, assembled, content: parsedReply.content, providerResult: assistantResult });
     const assistantMessage = createMessage('assistant', parsedReply.content, {
       recommendedActions: recommendationPlan.actions,
       recommendedActionOptions: recommendationPlan.actionOptions,
-      recommendedActionPresentation: parsedReply.recommendedActionPresentation || recommendationPlan.presentation,
+      // 与流式与续写路径相同：展示标题必须属于通过决策校验后的唯一行动集。
+      recommendedActionPresentation: recommendationPlan.presentation,
       decisionNode: recommendationPlan.decision,
       turnFrame,
       turnFrameError: parsedOutput.turnFrameError,
+      agreementIntegrity: assistantResult.agreementIntegrity,
       narrativeConsistency: consistency,
       contextExcluded: !consistency.valid,
       contextExclusionReason: !consistency.valid ? 'narrative-hard-fact-conflict' : '',
@@ -672,6 +692,7 @@ export class AgentService {
       worldBookActivation: assembled.sections.worldBookActivation,
       speaker
     });
+    attachNarrativeQuality(assistantMessage, { userMessage, messages: session.messages, playerName: config.persona?.name || session.memory?.worldState?.protagonist?.name || '' });
     recordPromptRuntime(session, assembled);
     appendUsageLedgerEntry(session, {
       taskKey: 'chat',
@@ -686,6 +707,68 @@ export class AgentService {
       actionEnvelope: effectiveActionEnvelope,
       actionError: parsedOutput.actionError
     };
+  }
+
+  async commitAssistantTurn({
+    session,
+    userMessage,
+    assistantMessage,
+    assembled,
+    actionEnvelope,
+    actionError,
+    activeConfig,
+    speaker,
+    provider,
+    globalConfig,
+    appendUserMessage = true,
+    onCommitted = null
+  }) {
+    if (appendUserMessage) session.messages.push(userMessage);
+    session.messages.push(assistantMessage);
+    if (assistantMessage.contextExcluded !== true) {
+      this.worldSimulationService.applyTurn({
+        session,
+        userMessage,
+        assistantMessage,
+        actionEnvelope,
+        actionError
+      });
+      this.memoryService.observeTurn({ session, userMessage, assistantMessage });
+      applyTurnStatePostProcessing(session, {
+        assistantMessage,
+        activeConfig,
+        speaker: speaker || assistantMessage.speaker
+      });
+    }
+
+    const persistCommittedTurn = async () => {
+      if (assistantMessage.contextExcluded !== true) {
+        session.turnViewSnapshot = buildTurnViewSnapshot({ session, assistantMessage });
+      }
+      session.updatedAt = new Date().toISOString();
+      await this.sessionService.saveSession(session);
+    };
+
+    if (typeof onCommitted === 'function') {
+      // 行动卡和本轮状态不应等待低频的事实提取/长期摘要模型调用。
+      // 先保存一份经过一致性校验的权威回合，再通知流式客户端原子替换预览。
+      await persistCommittedTurn();
+      try {
+        await onCommitted({ session, assistantMessage });
+      } catch {
+        // 客户端可能已断开；回合已经可靠落盘，记忆维护仍应继续完成。
+      }
+    }
+
+    if (typeof onCommitted === 'function') {
+      this.backgroundMaintenance.schedule({ session, provider, assembled, globalConfig });
+      return { session, assistantMessage };
+    }
+    const memoryMaintained = await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig });
+    if (typeof onCommitted !== 'function' || memoryMaintained) {
+      await persistCommittedTurn();
+    }
+    return { session, assistantMessage };
   }
 
   async rewriteText({ sessionId = 'main', target = 'chat-input', text, instruction = '' }) {
@@ -817,7 +900,7 @@ export class AgentService {
     return compareTimelineBranches(session, leftBranchId, rightBranchId);
   }
 
-  async continueMessage({ sessionId = 'main', onToken, signal = null }) {
+  async continueMessage({ sessionId = 'main', onToken, onPhase, onTurnReady, signal = null }) {
     const { globalConfig, session, activeConfig, provider, fallbackChain } = await this.prepareChatContext({ sessionId, taskKey: 'chat' });
 
     const messages = Array.isArray(session.messages) ? session.messages : [];
@@ -838,7 +921,7 @@ export class AgentService {
       worldBook: activeConfig.worldBook,
       memory: session.memory,
       messages: session.messages,
-      userMessage: '',
+      userMessage: CONTINUATION_PROMPT_MESSAGE,
       persona: activeConfig.persona,
       groupMembers: activeConfig.groupMembers,
       templates: globalConfig.macroTemplates,
@@ -851,32 +934,15 @@ export class AgentService {
       options: session.settings
     });
 
-    assembled.messages.push({
-      role: 'assistant',
-      content: applyPromptTransforms(
-        continuationContent,
-        activeConfig.lightFrontend?.regexTransforms,
-        {
-          role: 'assistant',
-          context: {
-            user: activeConfig.persona?.enabled ? activeConfig.persona.name || '用户' : '用户',
-            char: activeConfig.characterCard?.name || '',
-            characterCard: activeConfig.characterCard,
-            persona: activeConfig.persona,
-            lightFrontendState: session.memory?.lightFrontendState || {}
-          },
-          depth: 0
-        }
-      )
-    });
-
+    const agreementUserMessage = findLatestMeaningfulUserMessage(session.messages);
+    const guardedAgreement = agreementScope(session.memory, agreementUserMessage).active;
     const streamFilter = createHiddenBlockStreamFilter(onToken);
     let assistantResult;
     try {
       assistantResult = await this.completeAssistantContentStream({
         provider,
         messages: assembled.messages,
-        onToken: streamFilter.push,
+        onToken: guardedAgreement ? async () => {} : streamFilter.push,
         fallbackChain,
         taskKey: 'chat',
         signal
@@ -903,8 +969,13 @@ export class AgentService {
       }
       throw error;
     }
+    assistantResult = await this.guardAgreementResult({ assistantResult, session, userMessage: agreementUserMessage, assembled, provider, fallbackChain, signal });
+    if (guardedAgreement) await streamFilter.push(assistantResult.content);
+    lastMessage.agreementIntegrity = assistantResult.agreementIntegrity;
     await streamFilter.end();
+    if (typeof onPhase === 'function') await onPhase('finalizing');
     const parsedContinuation = parseAssistantOutput(assistantResult.content);
+    normalizeProtagonistPresentation(parsedContinuation, resolveProtagonistIdentity(activeConfig.persona, session.memory));
     const consistency = validateNarrativeHardFacts(parsedContinuation.reply.content, session.memory);
     const continuationFrame = resolveNarrativeTurnFrame(parsedContinuation.turnFrame, {
       consistencyValid: consistency.valid,
@@ -941,7 +1012,9 @@ export class AgentService {
     }
     const mvuUpdate = applyAssistantMvuUpdate(session, parsedContinuation);
     const continuedContent = continuationContent + '\n' + String(parsedContinuation.reply.content || '').trim();
-    const parsedReply = extractRecommendedActions(continuedContent);
+    // 继续生成仍走唯一的角色扮演协议解析器。此前这里再跑一次旧解析器，
+    // 会把上一条天机块与本次协议块交叉合并，并且导致 UI 与落盘不同步。
+    const parsedReply = parseRoleplayResponse(continuedContent);
 
     lastMessage.content = parsedReply.content;
     lastMessage.turnFrame = continuationFrame;
@@ -974,6 +1047,7 @@ export class AgentService {
       },
       assembled
     );
+    attachNarrativeQuality(lastMessage, { userMessage: findLatestMeaningfulUserMessage(session.messages), messages: session.messages.slice(0, -1), playerName: activeConfig.persona?.name || session.memory?.worldState?.protagonist?.name || '' });
     const continuationDecisionMemory = this.worldSimulationService.projectDecisionMemory({
       session,
       assistantMessage: lastMessage,
@@ -992,19 +1066,21 @@ export class AgentService {
         characterCard: activeConfig?.characterCard,
         groupMembers: activeConfig?.groupMembers,
         turnFrame: continuationFrame,
-        recommendationSource: parsedContinuation.reply.recommendedActionPresentation?.source
+        executionMode: assembled.sections.executionMode,
+        actionSuggestions: assembled.sections.enhancements?.actionSuggestions,
+        recommendationPresentation: parsedContinuation.reply.recommendedActionPresentation
       }
     );
     lastMessage.recommendedActions = recommendationPlan.actions;
     lastMessage.recommendedActionOptions = recommendationPlan.actionOptions;
-    const recommendationPresentation = parsedContinuation.reply.recommendedActionPresentation
-      || recommendationPlan.presentation;
+    const recommendationPresentation = recommendationPlan.presentation;
     if (recommendationPresentation) {
       lastMessage.recommendedActionPresentation = structuredClone(recommendationPresentation);
     } else {
       delete lastMessage.recommendedActionPresentation;
     }
     lastMessage.decisionNode = recommendationPlan.decision;
+    recordPromptRuntime(session, assembled);
     lastMessage.worldBookActivation = structuredClone(assembled.sections.worldBookActivation);
     delete lastMessage.adjudication;
     lastMessage.swipes = normalizeSwipes(lastMessage.swipes, lastMessage.content);
@@ -1015,25 +1091,46 @@ export class AgentService {
 
     session.memory = this.memoryService.rebuildRange({ session, messages: session.messages });
     this.worldSimulationService.refreshCurrentAct(session, lastMessage);
-    await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig });
-    session.updatedAt = new Date().toISOString();
     this.invalidateVectorIndex(session);
-    await this.sessionService.saveSession(session);
+
+    const persistContinuation = async () => {
+      session.turnViewSnapshot = buildTurnViewSnapshot({ session, assistantMessage: lastMessage });
+      session.updatedAt = new Date().toISOString();
+      await this.sessionService.saveSession(session);
+    };
+
+    if (typeof onTurnReady === 'function') {
+      await persistContinuation();
+      try {
+        await onTurnReady({ session, reply: lastMessage });
+      } catch {
+        // 客户端断开不应阻止已经提交的续写和后续长期记忆整理。
+      }
+    }
+    if (typeof onTurnReady === 'function') {
+      this.backgroundMaintenance.schedule({ session, provider, assembled, globalConfig });
+      return { session, reply: lastMessage, debug: assembled };
+    }
+    const memoryMaintained = await this.runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig });
+    if (typeof onTurnReady !== 'function' || memoryMaintained) {
+      await persistContinuation();
+    }
     return { session, reply: lastMessage, debug: assembled };
   }
 
   async runMemoryMaintenanceIfNeeded({ session, provider, assembled, globalConfig }) {
+    if (!resolveEnhancements(session.settings).memoryRecall) return false;
     const shouldRunMaintenance = shouldSummarize({
       unsummarizedTurnCount: session.memory.unsummarizedTurnCount,
       promptTokenEstimate: assembled.tokenEstimate,
       maxPromptTokens: session.settings.maxPromptTokens
     });
-    if (!shouldRunMaintenance) return;
+    if (!shouldRunMaintenance) return false;
 
     const consecutiveFailures = Number(session.memory.consecutiveSummaryFailures || 0);
     if (consecutiveFailures >= MAX_CONSECUTIVE_SUMMARY_FAILURES) {
       session.memory.lastSummaryError = session.memory.lastSummaryError || 'summary paused after repeated failures';
-      return;
+      return false;
     }
 
     // fact/summary 可使用独立 provider，并按任务回退链或全局回退链重试。
@@ -1048,6 +1145,7 @@ export class AgentService {
     });
     await this.tryExtractFacts({ session, provider: factProvider, fallbackChain: factFallback, narrativeContext });
     await this.trySummarize({ session, provider: summaryProvider, fallbackChain: summaryFallback, narrativeContext });
+    return true;
   }
 
   async tryExtractFacts({ session, provider, fallbackChain = [], narrativeContext }) {
@@ -1083,6 +1181,7 @@ export class AgentService {
       session.memory = applyFactExtractionResult(session.memory, result.content, {
         narrativeContext,
         allowWorldStatePatch,
+        evidenceContext: buildFactEvidenceContext(session.config, recent),
         registryContext: {
           characterCard: session.config?.characterCard,
           characterPresets: session.config?.characterPresets,
@@ -1101,9 +1200,11 @@ export class AgentService {
   }
 
   async appendDynamicWorldBookEntries({ session, content, narrativeContext }) {
-    const entries = normalizeDynamicWorldBookEntries(content, { narrativeContext });
+    const entries = normalizeDynamicWorldBookEntries(content, { narrativeContext, evidenceContext: buildFactEvidenceContext(session.config, session.messages) });
     if (!entries.length) return;
-    const activeConfig = await this.resolveSessionConfig(session);
+    // Maintenance works only on the detached session config; never persist here.
+    const activeConfig = session.config;
+    if (!activeConfig) return;
     const existing = Array.isArray(activeConfig.worldBook) ? activeConfig.worldBook : [];
     const existingKeys = new Set(existing.map(worldBookIdentity));
     const nextEntries = entries.filter((entry) => !existingKeys.has(worldBookIdentity(entry)));
@@ -1159,16 +1260,18 @@ export class AgentService {
    * 带回退的 complete 调用：主 provider 失败时按顺序尝试 fallbackChain
    * 全部失败时抛出最后一个错误
    */
-  async completeWithFallback({ primaryProvider, fallbackChain = [], messages, taskKey = 'chat', tools = null }) {
+  async completeWithFallback({ primaryProvider, fallbackChain = [], messages, taskKey = 'chat', tools = null, signal = null }) {
     const chain = [primaryProvider, ...fallbackChain].filter(Boolean);
     const startedAt = Date.now();
     const attempts = [];
     let lastError;
+
     for (let index = 0; index < chain.length; index += 1) {
       const provider = chain[index];
       const attemptStartedAt = Date.now();
       try {
-        const result = await this.providerClient.complete({ provider, messages, tools });
+        signal?.throwIfAborted();
+        const result = await this.providerClient.complete({ provider, messages, tools, signal });
         attempts.push(buildRoutingAttempt({ provider, status: 'success', startedAt: attemptStartedAt }));
         return attachRoutingMetadata(result, {
           taskKey,
@@ -1179,6 +1282,7 @@ export class AgentService {
           startedAt
         });
       } catch (error) {
+        if (signal?.aborted || isAbortError(error)) throw error;
         lastError = error;
         attempts.push(buildRoutingAttempt({ provider, status: 'error', startedAt: attemptStartedAt, error }));
       }
@@ -1200,28 +1304,62 @@ export class AgentService {
    * MCP function calling 循环：获取 MCP 工具，调用 provider，若有 tool_calls 则执行工具并循环。
    * 最大循环 5 次，防止无限调用。无 mcpRegistry 或无工具时退化为普通 completeWithFallback。
    */
-  async completeWithToolLoop({ provider, fallbackChain, messages, taskKey = 'chat' }) {
-    const mcpTools = await this.listMcpTools();
+  async completeWithToolLoop({ provider, fallbackChain, messages, taskKey = 'chat', tools = null, onToken = null, signal = null }) {
+    const mcpTools = Array.isArray(tools) ? tools : await this.listMcpTools();
+    if (this.agentRuntime === 'pi') {
+      let prefix = '';
+      const streamed = typeof onToken === 'function' && typeof this.providerClient.stream === 'function';
+      const result = await runPiRuntime({
+        messages, tools: mcpTools, signal,
+        executeTool: (call, toolSignal) => this.executeMcpToolCall(call, toolSignal),
+        complete: async currentMessages => {
+          const next = await this[streamed ? 'streamWithFallback' : 'completeWithFallback']({
+            primaryProvider: provider, fallbackChain, messages: currentMessages,
+            taskKey, tools: mcpTools.length ? mcpTools : null, onToken, signal
+          });
+          if (streamed && next.toolCalls?.length) prefix += next.content || '';
+          if (!streamed && onToken && !next.toolCalls?.length) {
+            for (const token of chunkText(parseRoleplayResponse(extractActionEnvelope(next.content).content).content)) {
+              signal?.throwIfAborted();
+              await onToken(token);
+            }
+          }
+          return next;
+        }
+      });
+      return prefix ? { ...result, content: prefix + result.content } : result;
+    }
     if (!mcpTools.length) {
-      return this.completeWithFallback({ primaryProvider: provider, fallbackChain, messages, taskKey });
+      return this.completeWithFallback({ primaryProvider: provider, fallbackChain, messages, taskKey, signal });
     }
 
     const MAX_TOOL_ROUNDS = 5;
     let currentMessages = [...messages];
+    let streamedPrefix = '';
     let result = null;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      result = await this.completeWithFallback({
+      signal?.throwIfAborted();
+      const streamed = typeof onToken === 'function' && typeof this.providerClient.stream === 'function';
+      result = await this[streamed ? 'streamWithFallback' : 'completeWithFallback']({
         primaryProvider: provider,
         fallbackChain,
         messages: currentMessages,
         taskKey,
-        tools: mcpTools
+        tools: mcpTools,
+        onToken,
+        signal
       });
 
       if (!Array.isArray(result.toolCalls) || result.toolCalls.length === 0) {
+        if (!streamed && onToken) for (const token of chunkText(parseRoleplayResponse(extractActionEnvelope(result.content).content).content)) {
+          signal?.throwIfAborted();
+          await onToken(token);
+        }
+        if (streamedPrefix) result = { ...result, content: streamedPrefix + result.content };
         return result;
       }
+      if (streamed && result.content) streamedPrefix += result.content;
 
       // 追加 assistant 的 tool_calls 消息（OpenAI 格式）
       currentMessages = [
@@ -1239,7 +1377,9 @@ export class AgentService {
 
       // 执行每个工具调用，追加 tool 结果消息
       for (const call of result.toolCalls) {
-        const toolResult = await this.executeMcpToolCall(call);
+        signal?.throwIfAborted();
+        const toolResult = await this.executeMcpToolCall(call, signal);
+        signal?.throwIfAborted();
         currentMessages.push({
           role: 'tool',
           tool_call_id: call.id,
@@ -1248,8 +1388,7 @@ export class AgentService {
       }
     }
 
-    // 达到最大循环次数，返回最后一次结果（可能仍有 toolCalls，但不再执行）
-    return result;
+    throw new Error('工具调用达到本轮上限，请简化操作后重试。');
   }
 
   async listMcpTools() {
@@ -1262,7 +1401,7 @@ export class AgentService {
     }
   }
 
-  async executeMcpToolCall(call) {
+  async executeMcpToolCall(call, signal = null) {
     if (!this.mcpRegistry) return JSON.stringify({ error: 'MCP registry not available' });
     const tool = await this.resolveMcpToolByName(call.name);
     if (!tool) return JSON.stringify({ error: `Tool ${call.name} not found` });
@@ -1270,7 +1409,8 @@ export class AgentService {
       const result = await this.mcpRegistry.callTool({
         serverId: tool.serverId,
         toolName: tool.toolName,
-        arguments: call.arguments || {}
+        arguments: call.arguments || {},
+        ...(signal ? { signal } : {})
       });
       return serializeToolResult(result);
     } catch (error) {
@@ -1286,11 +1426,12 @@ export class AgentService {
   /**
    * 带回退的 stream 调用；signal 中止（用户主动停止）时立即失败，不触发回退重试
    */
-  async streamWithFallback({ primaryProvider, fallbackChain = [], messages, onToken, taskKey = 'chat', signal = null }) {
+  async streamWithFallback({ primaryProvider, fallbackChain = [], messages, onToken, taskKey = 'chat', signal = null, tools = null }) {
     const chain = [primaryProvider, ...fallbackChain].filter(Boolean);
     const startedAt = Date.now();
     const attempts = [];
     let lastError;
+    let emitted = false;
     for (let index = 0; index < chain.length; index += 1) {
       if (signal?.aborted) {
         const abortError = new Error('GENERATION_ABORTED');
@@ -1300,7 +1441,7 @@ export class AgentService {
       const provider = chain[index];
       const attemptStartedAt = Date.now();
       try {
-        const result = await this.providerClient.stream({ provider, messages, onToken, signal });
+        const result = await this.providerClient.stream({ provider, messages, tools, signal, onToken: async token => { emitted = true; await onToken?.(token); } });
         attempts.push(buildRoutingAttempt({ provider, status: 'success', startedAt: attemptStartedAt }));
         return attachRoutingMetadata(result, {
           taskKey,
@@ -1325,6 +1466,7 @@ export class AgentService {
           });
           throw abortError;
         }
+        if (emitted) throw error;
         lastError = error;
         attempts.push(buildRoutingAttempt({ provider, status: 'error', startedAt: attemptStartedAt, error }));
       }
@@ -1453,6 +1595,7 @@ function createMessage(role, content, extras = {}) {
   if (extras.turnFrameError && typeof extras.turnFrameError === 'object' && !Array.isArray(extras.turnFrameError)) {
     message.turnFrameError = structuredClone(extras.turnFrameError);
   }
+  if (extras.agreementIntegrity) message.agreementIntegrity = structuredClone(extras.agreementIntegrity);
   if (extras.narrativeConsistency && typeof extras.narrativeConsistency === 'object') {
     message.narrativeConsistency = structuredClone(extras.narrativeConsistency);
   }
@@ -1627,11 +1770,25 @@ function getProviderForTask(config, session = {}, taskKey = 'chat') {
   ).trim();
   const activeProviderId = String(providersConfig.activeProviderId || '').trim();
 
-  // 会话模型只覆盖交互任务；后台 fact/summary 仍使用各自的任务路由。
-  const preferredId = sessionTaskProviderId || sessionProviderId || taskProviderId || activeProviderId;
-  const provider = providers.find((p) => p.id === preferredId)
-    || providers.find((p) => p.id === activeProviderId)
-    || providers[0];
+  // 显式会话任务路由、会话交互模型和全局任务路由的优先级都高于 fast lane。
+  // Harness 只在后台任务没有专门路由时接管，保证用户和全局设置不会被静默覆盖。
+  const explicitProviderId = sessionTaskProviderId || sessionProviderId || taskProviderId;
+  if (explicitProviderId) {
+    const explicitProvider = providers.find((p) => p.id === explicitProviderId);
+    if (explicitProvider) return explicitProvider;
+  }
+
+  if (FAST_BACKGROUND_PROVIDER_TASKS.has(taskKey)) {
+    const tiered = resolveTieredProvider({
+      session,
+      providers,
+      taskType: 'fast',
+      primaryProviderId: activeProviderId
+    });
+    if (tiered.provider) return tiered.provider;
+  }
+
+  const provider = providers.find((p) => p.id === activeProviderId) || providers[0];
   if (!provider) throw new Error('NO_ACTIVE_PROVIDER');
   return provider;
 }
@@ -1866,15 +2023,15 @@ function parseAssistantOutput(rawContent) {
   const turnFrameParsed = extractNarrativeTurnFrame(rawContent);
   const mvuParsed = extractMvuPatchEnvelope(turnFrameParsed.content);
   const actionParsed = extractActionEnvelope(mvuParsed.content);
-  const reply = extractRecommendedActions(actionParsed.content);
-  const presentation = parseRoleplayResponse(reply.content);
-  reply.content = presentation.content;
-  if (!reply.recommendedActions.length && presentation.recommendedActions.length) {
-    reply.recommendedActions = presentation.recommendedActions;
-  }
-  if (!reply.recommendedActionPresentation && presentation.recommendedActionPresentation) {
-    reply.recommendedActionPresentation = presentation.recommendedActionPresentation;
-  }
+  // 正文、社区选项块、recommended_actions 和轻前端动作块只允许经过
+  // roleplayResponse 一次。旧链路先提取一次、再由 roleplayResponse 重提取，
+  // 会让同一回合的多个兼容协议互相叠加。
+  const presentation = parseRoleplayResponse(actionParsed.content);
+  const reply = {
+    content: presentation.content,
+    recommendedActions: presentation.recommendedActions,
+    recommendedActionPresentation: presentation.recommendedActionPresentation
+  };
   if (!String(reply.content || '').trim()) throw new Error('PROVIDER_EMPTY_RESPONSE');
   return {
     reply,
@@ -2029,6 +2186,8 @@ function normalizeSwipeMetadataEntry(value) {
     decisionNode: value.decisionNode ? structuredClone(value.decisionNode) : null,
     turnFrame: value.turnFrame ? structuredClone(value.turnFrame) : null,
     turnFrameError: value.turnFrameError ? structuredClone(value.turnFrameError) : null,
+    agreementIntegrity: value.agreementIntegrity ? structuredClone(value.agreementIntegrity) : null,
+    narrativeQuality: value.narrativeQuality ? structuredClone(value.narrativeQuality) : null,
     narrativeConsistency: value.narrativeConsistency ? structuredClone(value.narrativeConsistency) : null,
     roleplayPanels: value.roleplayPanels ? structuredClone(value.roleplayPanels) : null,
     worldBookActivation: value.worldBookActivation ? structuredClone(value.worldBookActivation) : null,
@@ -2049,6 +2208,8 @@ function metadataFromMessage(message) {
     decisionNode: message?.decisionNode,
     turnFrame: message?.turnFrame,
     turnFrameError: message?.turnFrameError,
+    agreementIntegrity: message?.agreementIntegrity,
+    narrativeQuality: message?.narrativeQuality,
     narrativeConsistency: message?.narrativeConsistency,
     roleplayPanels: message?.roleplayPanels,
     worldBookActivation: message?.worldBookActivation,
@@ -2069,6 +2230,7 @@ function emptySwipeMetadata() {
     decisionNode: null,
     turnFrame: null,
     turnFrameError: null,
+    agreementIntegrity: null,
     narrativeConsistency: null,
     roleplayPanels: null,
     worldBookActivation: null,
@@ -2096,6 +2258,10 @@ function applySwipeMetadata(message, metadata) {
   else delete message.turnFrame;
   if (normalized.turnFrameError) message.turnFrameError = normalized.turnFrameError;
   else delete message.turnFrameError;
+  if (normalized.agreementIntegrity) message.agreementIntegrity = normalized.agreementIntegrity;
+  else delete message.agreementIntegrity;
+  if (normalized.narrativeQuality) message.narrativeQuality = normalized.narrativeQuality;
+  else delete message.narrativeQuality;
   if (normalized.narrativeConsistency) message.narrativeConsistency = normalized.narrativeConsistency;
   else delete message.narrativeConsistency;
   if (normalized.roleplayPanels) message.roleplayPanels = normalized.roleplayPanels;
@@ -2114,6 +2280,7 @@ function clearMessageWorldUpdate(message) {
   delete message.decisionNode;
   delete message.turnFrame;
   delete message.turnFrameError;
+  delete message.narrativeQuality;
   delete message.narrativeConsistency;
   delete message.roleplayPanels;
   delete message.worldBookActivation;
@@ -2142,11 +2309,15 @@ function resolveRecommendationPlan(modelActions, memory, {
   characterCard = null,
   groupMembers = [],
   turnFrame = null,
-  recommendationSource = ''
+  executionMode = 'enhanced',
+  actionSuggestions = executionMode !== 'faithful',
+  recommendationSource = '',
+  recommendationPresentation = null
 } = {}) {
   const resolved = Array.isArray(modelActions)
     ? modelActions.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
+  if (!actionSuggestions && !resolved.length) return emptyRecommendationPlan();
   const userText = String(userMessage?.content || userMessage || '').trim();
   if (/(?:不要|无需|不需要).{0,8}(?:选项|建议|行动卡)/u.test(userText)) return emptyRecommendationPlan(resolved);
   if (String(roleplayMode || 'dm') === 'commentary' && generationType !== 'continue') return emptyRecommendationPlan(resolved);
@@ -2165,17 +2336,33 @@ function resolveRecommendationPlan(modelActions, memory, {
     characterCard,
     groupMembers,
     turnFrame,
-    allowUngroundedModelActions: /^community-(?:choice|action)-block$/u.test(recommendationSource),
+    allowUngroundedModelActions: /^community-(?:choice|action)-block$/u.test(
+      String(recommendationPresentation?.source || recommendationSource || '')
+    ),
     maxActions: 3
   });
   if (!Array.isArray(planned.actions) || planned.actions.length < 2) return emptyRecommendationPlan();
   return {
     ...planned,
-    presentation: {
-      source: recommendationSource || (authoredActions.length >= 2 ? 'model-recommended-actions' : 'grounded-decision-fallback'),
-      title: resolveFallbackActionTitle(recentMessages),
-      hint: ''
-    }
+    presentation: resolveRecommendationPresentation({
+      presentation: recommendationPresentation,
+      fallbackSource: recommendationSource || (authoredActions.length >= 2 ? 'model-recommended-actions' : 'grounded-decision-fallback'),
+      recentMessages
+    })
+  };
+}
+
+function resolveRecommendationPresentation({ presentation = null, fallbackSource = '', recentMessages = [] } = {}) {
+  const source = String(presentation?.source || fallbackSource || 'grounded-decision-fallback').trim();
+  const hasAuthoredPresentation = Boolean(presentation && typeof presentation === 'object');
+  const authoredTitle = String(presentation?.title || '').replace(/\s+/g, ' ').trim().slice(0, 36);
+  const authoredHint = String(presentation?.hint || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  return {
+    source,
+    // 标题只是同一行动集的呈现语义（例如“天机选项”），不能再另取一份
+    // 未校验动作；保留安全的原卡标题能避免仙侠以外的剧本被固定命名污染。
+    title: authoredTitle || (hasAuthoredPresentation ? '' : resolveFallbackActionTitle(recentMessages)),
+    hint: authoredHint
   };
 }
 
@@ -2204,6 +2391,13 @@ function recordPromptRuntime(session, assembled = {}) {
   session.memory = isPlainObject(session.memory) ? session.memory : {};
   session.memory.promptRuntime = {
     updatedAt: new Date().toISOString(),
+    executionMode: assembled.sections.executionMode,
+        actionSuggestions: assembled.sections.enhancements?.actionSuggestions,
+    regexAudit: assembled.sections.regexAudit || [],
+    worldBookOmittedIds: [
+      ...(assembled.sections.worldBookBudget?.constant?.omittedIds || []),
+      ...(assembled.sections.worldBookBudget?.triggered?.omittedIds || [])
+    ],
     tokenEstimate: Number(assembled.tokenEstimate || 0),
     retainedPromptModuleIds: Array.isArray(assembled.sections.retainedPromptModuleIds)
       ? [...assembled.sections.retainedPromptModuleIds] : [],
@@ -2382,4 +2576,64 @@ function chunkText(text) {
   const value = String(text || '');
   const chunks = value.match(/[\s\S]{1,24}/g);
   return chunks || [];
+}
+
+function applyTurnStatePostProcessing(session, { assistantMessage, activeConfig, speaker } = {}) {
+  if (!session || typeof session !== 'object') return;
+  if (!session.memory || typeof session.memory !== 'object') session.memory = {};
+  if (!session.memory.worldState || typeof session.memory.worldState !== 'object') {
+    session.memory.worldState = {};
+  }
+  const worldState = session.memory.worldState;
+
+  // 1. 沉淀 TurnFrame 中的伏笔与角色已知信息
+  const frameDelta = assistantMessage?.turnFrame?.stateDelta;
+  if (frameDelta) {
+    if (Array.isArray(frameDelta.foreshadowing) && frameDelta.foreshadowing.length) {
+      const existingHooks = Array.isArray(worldState.foreshadowing) ? [...worldState.foreshadowing] : [];
+      for (const hook of frameDelta.foreshadowing) {
+        if (!hook || !hook.id) continue;
+        const idx = existingHooks.findIndex((h) => h.id === hook.id);
+        if (idx >= 0) existingHooks[idx] = { ...existingHooks[idx], ...hook };
+        else existingHooks.push(hook);
+      }
+      worldState.foreshadowing = existingHooks;
+    }
+    if (frameDelta.characterKnowledge && typeof frameDelta.characterKnowledge === 'object') {
+      worldState.characterKnowledge = {
+        ...(worldState.characterKnowledge || {}),
+        ...frameDelta.characterKnowledge
+      };
+    }
+  }
+
+  // 2. 世界时钟与离场 NPC 活态推演
+  const rejectedIds = new Set((assistantMessage?.adjudication?.rejected || []).map(item => item.id));
+  const hasVisibleClockAdvance = ['accepted', 'partial'].includes(assistantMessage?.adjudication?.status)
+    && (assistantMessage?.actionEnvelope?.actions || [])
+      .some(action => action.type === 'clock.advance' && !rejectedIds.has(action.id));
+  const offscreenResult = tickOffscreenSimulation({
+    worldState,
+    groupMembers: activeConfig?.groupMembers || session.settings?.groupMembers || [],
+    activeActor: speaker || assistantMessage?.speaker,
+    currentLocation: worldState.location,
+    narrativeText: assistantMessage?.content,
+    simulation: session.memory.simulation,
+    // 时间只投影已结算的模拟时钟；对白中的未来日期不能触发后台推进。
+    allowAmbientAdvance: false,
+    allowOffscreenEvents: hasVisibleClockAdvance && resolveEnhancements(session.settings).npcSimulation
+  });
+  worldState.clock = offscreenResult.clock;
+  worldState.offscreenEvents = offscreenResult.offscreenEvents;
+
+  // 3. 剧情拓扑状态机流转
+  if (worldState.storyGraph && resolveEnhancements(session.settings).plotGuidance) {
+    const graphResult = evaluateStoryGraph({
+      graph: worldState.storyGraph,
+      worldState,
+      memoryCards: session.memory.memoryCards,
+      timeline: worldState.timeline
+    });
+    worldState.storyGraph = graphResult.graph;
+  }
 }

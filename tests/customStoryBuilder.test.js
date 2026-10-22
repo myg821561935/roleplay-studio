@@ -41,18 +41,20 @@ test('custom story drafts normalize bounded fields and resource selections', () 
   assert.equal(draft.creationMode, STORY_IMPORT_MODES.INDEPENDENT);
   assert.deepEqual(draft.compatibilityReview, {
     fingerprint: 'sha256:review-one',
-    approvedScriptHashes: ['sha256:script-one'],
+    scriptReviews: [],
+    executionMode: 'local-observe',
     acknowledgeCompatibility: true
   });
   assert.equal(draft.customBaseline.worldName.length, 80);
   assert.equal(draft.customBaseline.premise.length, 5000);
 });
 
-test('third-party scripts run isolated in the sandbox and no longer gate creation', () => {
+test('strict custom-story mode requires a per-hash decision before a safe derivative can be created', () => {
   const state = {
     customStoryDraft: createCustomStoryDraft({
       basePackId: 'xuanhuan',
-      title: '沙箱测试卷'
+      title: '沙箱测试卷',
+      compatibilityReview: { executionMode: 'review-required' }
     }),
     customStoryComposition: {
       key: 'ready',
@@ -88,14 +90,27 @@ test('third-party scripts run isolated in the sandbox and no longer gate creatio
 
   const pending = controller.getCustomStoryReadiness();
   assert.equal(pending.canInspect, true);
-  // 第三方脚本在隔离沙箱中执行，无需人工审批，因此不阻塞创建
-  assert.equal(pending.canCreate, true);
-  assert.equal(pending.pendingScriptRules.length, 0);
+  assert.equal(pending.canCreate, false);
+  assert.equal(pending.pendingScriptRules.length, 1);
   assert.deepEqual(controller.buildCustomPackRequest().compatibilityReview, {
     fingerprint: 'sha256:review-one',
-    approvedScriptHashes: ['sha256:script-one'],
+    scriptReviews: [],
+    executionMode: 'review-required',
     acknowledgeCompatibility: false
   });
+
+  state.customStoryDraft.compatibilityReview = {
+    fingerprint: 'sha256:review-one',
+    scriptReviews: [{
+      scriptId: 'runtime-widget',
+      contentHash: 'sha256:script-one',
+      decision: 'approved',
+      note: '已核对来源、内容哈希与网络风险。'
+    }],
+    executionMode: 'review-required',
+    acknowledgeCompatibility: false
+  };
+  assert.equal(controller.getCustomStoryReadiness().canCreate, true);
 
   // 兼容确认仍是独立的创建门槛
   state.customStoryComposition.report.communityCompatibility.counts = { missing: 1, review: 0, degraded: 0 };
@@ -113,7 +128,7 @@ test('third-party scripts run isolated in the sandbox and no longer gate creatio
 
   state.customStoryDraft.compatibilityReview = {
     fingerprint: 'sha256:blocked-review',
-    approvedScriptHashes: [],
+    scriptReviews: [],
     acknowledgeCompatibility: true
   };
   assert.equal(controller.getCustomStoryReadiness().canCreate, true);
@@ -126,7 +141,7 @@ test('custom story creation requires explicit approval for a safe derivative of 
       title: '外部运行时测试卷',
       compatibilityReview: {
         fingerprint: 'sha256:blocked-review',
-        approvedScriptHashes: [],
+        scriptReviews: [],
         acknowledgeCompatibility: false
       }
     }),
@@ -168,7 +183,7 @@ test('custom story creation requires explicit approval for a safe derivative of 
 
   state.customStoryDraft.compatibilityReview = {
     fingerprint: 'sha256:blocked-review',
-    approvedScriptHashes: [],
+    scriptReviews: [],
     acknowledgeCompatibility: true
   };
   const approved = controller.getCustomStoryReadiness();
@@ -188,7 +203,7 @@ test('historical compatibility review creates a new pack through the dedicated u
       promptSelectionConfirmed: true,
       compatibilityReview: {
         fingerprint: 'sha256:upgrade-review',
-        approvedScriptHashes: [],
+        scriptReviews: [],
         acknowledgeCompatibility: false
       },
       customBaseline: {
@@ -652,6 +667,7 @@ test('quickLaunchCharacterStory creates and opens an independent story from a ch
   let createdPack = null;
   const state = {
     resourceLibrary: [
+      { id: 'unrelated-preset', kind: 'prompt', title: '不相关文风', payload: {} },
       { id: 'char-1', kind: 'character', title: '苏凌雪', payload: { name: '苏凌雪', genre: '仙侠' } },
       { id: 'wb-1', kind: 'worldbook', title: '灵虚宗秘典', payload: { name: '灵虚宗秘典' }, source: { kind: 'character-card', id: 'char-1' } }
     ]
@@ -672,5 +688,6 @@ test('quickLaunchCharacterStory creates and opens an independent story from a ch
   const result = await controller.quickLaunchCharacterStory('char-1');
   assert.equal(result.project.title, '苏凌雪的故事');
   assert.equal(createdPack.characterResourceId, 'char-1');
+  assert.deepEqual(createdPack.promptResourceIds, []);
   assert.equal(createdPack.creationMode, STORY_IMPORT_MODES.INDEPENDENT);
 });

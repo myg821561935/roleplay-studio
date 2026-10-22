@@ -71,7 +71,7 @@ test('persona description placeholder respects disabled personas', () => {
 
 test('dialogue examples placeholder joins example dialog entries', () => {
   const result = expandMacros('{{dialogueExamples}}', PLACEHOLDER_CONTEXT);
-  assert.equal(result, '{{user}}：阁下深夜到访，所为何事？\n沈观澜：*指尖敲了敲案几* 三件事。');
+  assert.equal(result, '林青阳：阁下深夜到访，所为何事？\n沈观澜：*指尖敲了敲案几* 三件事。');
   assert.equal(expandMacros('{{dialogue_examples}}', PLACEHOLDER_CONTEXT), result);
 });
 
@@ -79,7 +79,7 @@ test('dialogue examples placeholder falls back to raw mes_example strings', () =
   const result = expandMacros('{{dialogueExamples}}', {
     characterCard: { name: '沈观澜', mes_example: '{{user}}：可否借一步说话。' }
   });
-  assert.equal(result, '{{user}}：可否借一步说话。');
+  assert.equal(result, '用户：可否借一步说话。');
 });
 
 test('world info placeholders split entries by position around the character card', () => {
@@ -87,6 +87,19 @@ test('world info placeholders split entries by position around the character car
   assert.equal(expandMacros('{{world_info_before}}', PLACEHOLDER_CONTEXT), '## 玄水阁\n临水而建的剑阁。');
   assert.equal(expandMacros('{{worldInfoAfter}}', PLACEHOLDER_CONTEXT), '## 落雁夜市\n城南入夜后的集市。');
   assert.equal(expandMacros('{{world_info_after}}', PLACEHOLDER_CONTEXT), '## 落雁夜市\n城南入夜后的集市。');
+});
+
+test('numeric SillyTavern positions keep Author Note Bottom out of depth and extension slots', () => {
+  const context = {
+    worldBook: [
+      { title: '作者注释底部', content: '应在角色之后。', position: 3 },
+      { title: '历史深度', content: '不应作为 after。', position: 4 },
+      { title: '扩展前', content: '不应作为 after。', position: 5 },
+      { title: '扩展后', content: '不应作为 after。', position: 6 }
+    ]
+  };
+
+  assert.equal(expandMacros('{{worldInfoAfter}}', context), '## 作者注释底部\n应在角色之后。');
 });
 
 test('world info placeholders render empty when no entries match', () => {

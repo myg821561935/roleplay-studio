@@ -202,3 +202,46 @@ test('runMemoryMaintenanceIfNeeded uses task-routed providers for fact and summa
   assert.ok(!seenIds.includes('chat'), 'chat provider 不应被调用');
   assert.deepEqual(session.usageLedger.map((entry) => entry.taskKey), ['fact', 'summary']);
 });
+
+test('runMemoryMaintenanceIfNeeded uses the session fast lane only when background tasks lack explicit routes', async () => {
+  const providerChat = { id: 'chat', kind: 'openai-compatible' };
+  const providerFast = { id: 'fast', kind: 'openai-compatible' };
+  const seenIds = [];
+  const config = {
+    providers: {
+      activeProviderId: 'chat',
+      providers: [providerChat, providerFast],
+      taskProviders: { chat: 'chat', fact: '', summary: '' },
+      fallbackChain: []
+    }
+  };
+  const session = {
+    memory: {
+      unsummarizedTurnCount: 100,
+      worldState: { protagonist: { traits: [], injuries: [], inventory: [] }, location: { knownPlaces: [] }, relationships: [], quests: [], factions: [], flags: {}, timeline: [] },
+      memoryCards: [],
+      eventLedger: []
+    },
+    messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
+    settings: { maxPromptTokens: 100, providerId: 'chat', fastTaskProviderId: 'fast' }
+  };
+  const service = new AgentService({
+    configService: { getAll: async () => config },
+    sessionService: { saveSession: async () => {} },
+    providerClient: {
+      complete: async ({ provider }) => {
+        seenIds.push(provider.id);
+        return { content: 'ok', raw: {} };
+      }
+    }
+  });
+
+  await service.runMemoryMaintenanceIfNeeded({
+    session,
+    provider: providerChat,
+    assembled: { tokenEstimate: 200, messages: [] },
+    globalConfig: config
+  });
+
+  assert.deepEqual(seenIds, ['fast', 'fast']);
+});

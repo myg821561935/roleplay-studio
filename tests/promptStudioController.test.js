@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createPromptStudioController } from '../public/modules/promptStudio.js';
+import { humanizeApiError } from '../public/modules/utils.js';
+
+test('preview renders sent block status with valid DOM elements', async () => {
+  const documentObject = { createElement(tag) {
+    if (!/^[a-z][a-z0-9-]*$/i.test(tag)) throw new DOMException('Invalid tag', 'InvalidCharacterError');
+    return { tag, children: [], append(...children) { this.children.push(...children); }, replaceChildren(...children) { this.children = children; } };
+  } };
+  const blocks = documentObject.createElement('ol');
+  const integrity = documentObject.createElement('div');
+  const controller = createPromptStudioController({ documentObject, els: { promptStudioBlocks: blocks, promptStudioIntegrity: integrity },
+    apiRequest: async () => ({ promptStudio: { narrationDrift: { status: 'possible-conflict', message: '历史人称疑似冲突' }, blocks: [{ title: '原卡', status: 'running', role: 'system' }] }, request: { messages: [] } }) });
+  assert.ok(await controller.refreshPreview());
+  assert.match(JSON.stringify(blocks), /已发送/);
+  assert.match(JSON.stringify(integrity), /历史人称疑似冲突/);
+  assert.doesNotThrow(() => humanizeApiError(new DOMException('Invalid tag', 'InvalidCharacterError')));
+});
 
 test('prompt studio changes only the active session modules and refreshes the local request preview', async () => {
   const calls = [];

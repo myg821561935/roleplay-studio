@@ -52,6 +52,15 @@ export function buildOpenAICompatibleRequest({ provider, messages, stream = fals
     temperature: Number(provider.temperature ?? 0.9),
     max_tokens: Number(provider.maxTokens ?? 2000)
   };
+  for (const [key, wire, min, max] of [
+    ['topP', 'top_p', 0, 1], ['frequencyPenalty', 'frequency_penalty', -2, 2],
+    ['presencePenalty', 'presence_penalty', -2, 2], ['seed', 'seed', Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]
+  ]) {
+    if (provider[key] === undefined || provider[key] === null || provider[key] === '') continue;
+    const value = Number(provider[key]);
+    if (!Number.isFinite(value) || value < min || value > max || (key === 'seed' && !Number.isSafeInteger(value))) throw new Error(`Invalid provider ${key}`);
+    body[wire] = value;
+  }
   const reasoningMode = resolveDeepSeekReasoningMode(provider, validated.messages);
   if (reasoningMode !== 'auto') body.thinking = { type: reasoningMode };
   if (stream) body.stream = true;
@@ -97,15 +106,16 @@ export async function callOpenAICompatible({ provider, messages, fetchImpl = fet
   }
 }
 
-export async function streamOpenAICompatible({ provider, messages, onToken, fetchImpl = fetch, signal = null }) {
+export async function streamOpenAICompatible({ provider, messages, onToken, fetchImpl = fetch, signal = null, tools = null }) {
   try {
-    return await streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl, signal });
+    return await streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl, signal, tools });
   } catch (error) {
     if (!shouldRetryWithoutReasoning({ error, provider, messages })) throw error;
     const result = await streamOpenAICompatibleOnce({
       provider: { ...provider, reasoningMode: 'disabled' },
       messages,
       onToken,
+      tools,
       fetchImpl,
       signal
     });
@@ -120,8 +130,8 @@ async function callOpenAICompatibleOnce({ provider, messages, fetchImpl, tools, 
   return readOpenAICompatibleResponse(response);
 }
 
-async function streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl, signal }) {
-  const { url, init } = buildOpenAICompatibleRequest({ provider, messages, stream: true });
+async function streamOpenAICompatibleOnce({ provider, messages, onToken, fetchImpl, signal, tools }) {
+  const { url, init } = buildOpenAICompatibleRequest({ provider, messages, stream: true, tools });
   const response = await fetchImpl(url, signal ? { ...init, signal } : init);
   if (!response.ok) {
     const text = await response.text();
@@ -137,29 +147,44 @@ async function streamOpenAICompatibleOnce({ provider, messages, onToken, fetchIm
   let content = '';
   let reasoningObserved = false;
   let finishReason = '';
+  const toolDeltas = new Map();
 
+  const consumeEvent = async (eventText) => {
+    const delta = readStreamDelta(eventText);
+    if (!delta) return;
+    if (delta.reasoningObserved) reasoningObserved = true;
+    if (delta.finishReason) finishReason = delta.finishReason;
+    for (const call of delta.toolCalls || []) {
+      const index = Number(call.index || 0);
+      const merged = toolDeltas.get(index) || { id: '', name: '', arguments: '' };
+      if (call.id) merged.id += call.id;
+      if (call.function?.name) merged.name += call.function.name;
+      if (call.function?.arguments) merged.arguments += call.function.arguments;
+      toolDeltas.set(index, merged);
+    }
+    if (delta.content) {
+      content += delta.content;
+      await onToken?.(delta.content);
+    }
+  };
   try {
     while (true) {
+      signal?.throwIfAborted();
       const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
       buffer = events.pop() || '';
-      for (const eventText of events) {
-        const delta = readStreamDelta(eventText);
-        if (!delta) continue;
-        if (delta.reasoningObserved) reasoningObserved = true;
-        if (delta.finishReason) finishReason = delta.finishReason;
-        if (!delta.content) continue;
-        content += delta.content;
-        await onToken?.(delta.content);
+      for (const eventText of events) await consumeEvent(eventText);
+      if (done) {
+        if (buffer.trim()) await consumeEvent(buffer);
+        break;
       }
     }
   } finally {
     await reader.cancel().catch(() => {});
   }
 
-  if (!content.trim()) {
+  if (!content.trim() && !toolDeltas.size) {
     if (reasoningObserved) {
       throw new Error(`${REASONING_ONLY_ERROR}${finishReason ? `:${finishReason}` : ''}`);
     }
@@ -168,7 +193,8 @@ async function streamOpenAICompatibleOnce({ provider, messages, onToken, fetchIm
 
   return {
     content,
-    raw: { finishReason, reasoningObserved }
+    raw: { finishReason, reasoningObserved },
+    ...(toolDeltas.size ? { toolCalls: [...toolDeltas.values()].map(c => ({ ...c, arguments: parseToolArguments(c.arguments) })) } : {})
   };
 }
 
@@ -219,6 +245,7 @@ function readStreamDelta(eventText) {
     const delta = choice?.delta || {};
     return {
       content: typeof delta.content === 'string' ? delta.content : '',
+      toolCalls: Array.isArray(delta.tool_calls) ? delta.tool_calls : [],
       reasoningObserved: typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0,
       finishReason: String(choice?.finish_reason || '')
     };

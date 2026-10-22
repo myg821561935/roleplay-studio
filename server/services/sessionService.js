@@ -16,6 +16,7 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 export class SessionService {
   constructor(store, { knowledgeGraphService = null } = {}) {
     this.store = store;
+    this.writeTails = new Map();
     this.knowledgeGraphService = knowledgeGraphService;
     this.globalMvuStore = new GlobalMvuStore(store);
   }
@@ -31,8 +32,30 @@ export class SessionService {
     return hydrateKnowledgeGraph ? this.hydrateKnowledgeGraph(enriched) : enriched;
   }
 
+  withWriteLock(id, work) {
+    const run = (this.writeTails.get(id) || Promise.resolve()).then(work);
+    const tail = run.catch(() => {});
+    this.writeTails.set(id, tail);
+    tail.finally(() => { if (this.writeTails.get(id) === tail) this.writeTails.delete(id); });
+    return run;
+  }
+
   async saveSession(session) {
+    return this.withWriteLock(validateSessionId(session?.id), () => this.writeSession(session));
+  }
+
+  async saveSessionIfUnchanged(session, expectedRevision) {
+    return this.withWriteLock(validateSessionId(session?.id), async () => {
+      const stored = await this.store.read(sessionPath(session.id), null);
+      if (!stored || (stored.storageRevision || '') !== expectedRevision) return null;
+      await this.globalMvuStore.mergeIntoSession(session);
+      return this.writeSession(session);
+    });
+  }
+
+  async writeSession(session) {
     const id = validateSessionId(session?.id);
+    session.storageRevision = crypto.randomUUID();
     // 事件日志随 spread 一起进入 next（基线即日志，不依赖对象身份）
     ensureEventLog(session);
     const next = await this.hydrateKnowledgeGraph({ ...session, id });
@@ -90,10 +113,12 @@ export class SessionService {
   async deleteSession(sessionId) {
     const id = validateSessionId(sessionId);
     if (id === 'main') throw new Error('CANNOT_DELETE_MAIN_SESSION');
-    const session = await this.store.read(sessionPath(id), null);
-    if (!session) return null;
-    await this.store.remove(sessionPath(id));
-    return { id, storyProjectId: cleanSessionReference(session.storyProjectId) || '' };
+    return this.withWriteLock(id, async () => {
+      const session = await this.store.read(sessionPath(id), null);
+      if (!session) return null;
+      await this.store.remove(sessionPath(id));
+      return { id, storyProjectId: cleanSessionReference(session.storyProjectId) || '' };
+    });
   }
 }
 
@@ -119,6 +144,7 @@ function createSession(id) {
     authoring: createAuthoringLedger(),
     settings: {
       providerId: '',
+      fastTaskProviderId: '',
       taskProviderOverrides: {},
       taskFallbackOverrides: {},
       recentPairs: 8,

@@ -1,6 +1,7 @@
 import { ACTION_PROTOCOL_SPEC } from './actionProtocol.js';
 import { deriveCalendarContext } from './calendarEngine.js';
 import { isContinuationSignal } from '../agent/interactionContract.js';
+import { currentNarrativeClauses } from '../lib/narrativeEvidence.js';
 
 export const DEFAULT_TURN_ADVANCE_MINUTES = 10;
 
@@ -91,8 +92,8 @@ export function combineChronicleActionEnvelope({ chronicleEnvelope, modelEnvelop
 }
 
 export function inferTurnDuration({ content, defaultMinutes = DEFAULT_TURN_ADVANCE_MINUTES, start } = {}) {
-  const text = String(content || '').replace(/\s+/g, ' ').trim();
-  if (!text) return null;
+  if (!String(content || '').trim()) return null;
+  const text = currentNarrativeClauses(content).join('。').replace(/\s+/g, ' ').trim();
   const explicit = explicitDuration(text, start);
   if (explicit) return explicit;
   if (/(?:睡一觉|过夜|直到天亮|次日|明日)/u.test(text)) {

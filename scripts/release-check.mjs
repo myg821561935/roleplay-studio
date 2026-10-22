@@ -23,6 +23,17 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packageJson = JSON.parse(await readFile(path.join(rootDir, 'package.json'), 'utf8'));
 const requiredFiles = [
   'README.md',
+  'package-lock.json',
+  'SECURITY.md',
+  '.github/workflows/ci.yml',
+  'docs/release-v1.1.0-rc.1.md',
+  'docs/release-v1.1.0-rc.1-scope.md',
+  'server/agent/agreementGuard.js',
+  'server/simulation/itemReferences.js',
+  'server/simulation/groundedLedger.js',
+  'tests/agreementGuard.test.js',
+  'tests/itemReferences.test.js',
+  'tests/groundedLedger.test.js',
   'package.json',
   'public/index.html',
   'public/app.js',

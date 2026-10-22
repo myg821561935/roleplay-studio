@@ -56,7 +56,10 @@ export function createSessionStateCoordinator({
     const nextSession = isRecord(session)
       ? session
       : (isRecord(fallback) ? fallback : null);
-    if (nextSession) state.session = nextSession;
+    if (nextSession) {
+      state.session = nextSession;
+      markInspectorDirty(sections);
+    }
     return state.session;
   }
 

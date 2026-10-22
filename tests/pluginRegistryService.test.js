@@ -76,10 +76,10 @@ test('plugin registry prevents silent downgrade and allows removal of local plug
   assert.equal((await service.listPlugins()).some((item) => item.id === 'community.rain-night'), false);
 });
 
-async function createService() {
+async function createService(appVersion='0.2.2') {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'plugin-registry-'));
   return new PluginRegistryService(new JsonStore(rootDir), {
-    appVersion: '0.2.2',
+    appVersion,
     now: () => new Date('2026-07-15T08:00:00.000Z')
   });
 }
@@ -90,7 +90,7 @@ function createPluginManifest() {
     id: 'community.rain-night',
     version: '1.0.0',
     name: '雨夜世界书适配',
-    engine: '>=0.2.2 <1.0.0',
+    engine: '>=0.2.2 <2.0.0',
     capabilities: ['safe-macros', 'sidebar-panels'],
     adapters: [{
       id: 'rain-night-lore',
@@ -102,3 +102,10 @@ function createPluginManifest() {
     }]
   };
 }
+
+test('release upgrade preserves an external plugin explicit pre-1.0 engine restriction',async()=>{
+ const service=await createService('1.1.0-rc.1');
+ const inspected=await service.inspectManifest({...createPluginManifest(),engine:'>=0.2.2 <1.0.0'});
+ assert.equal(inspected.canInstall,false);
+ assert.ok(inspected.blockingIssues.some(x=>x.code==='plugin-engine-incompatible'));
+});

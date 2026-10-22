@@ -1,4 +1,4 @@
-import { exportCharacterCardPng } from '../character/characterCardExport.js';
+import { exportCharacterCardPng, exportCharacterCardToV3 } from '../character/characterCardExport.js';
 import { importCharacterCardFromPayload } from '../character/characterCardImport.js';
 import { writeJson } from '../lib/http.js';
 import { listImportSources } from '../services/importSourceService.js';
@@ -130,11 +130,10 @@ export async function handleImportRoutes({
   }
 
   if (req.method === 'GET' && url.pathname === '/api/character-card/export') {
-    const config = await configService.getAll();
-    const characterCard = config.characterCard;
-    const worldBook = config.worldBook;
+    const exportSource = await resolveCharacterExportSource({ url, configService, sessionService });
+    const { characterCard, worldBook, coreMemory, foreshadowing } = exportSource;
     const basePortrait = await assetService.readCharacterPortrait(characterCard?.portrait?.assetId);
-    const png = exportCharacterCardPng(characterCard, worldBook, basePortrait);
+    const png = exportCharacterCardPng(characterCard, worldBook, basePortrait, { coreMemory, foreshadowing });
     const filename = `${encodeURIComponent(characterCard?.name || 'character')}.png`;
     res.writeHead(200, {
       'content-type': 'image/png',
@@ -145,7 +144,44 @@ export async function handleImportRoutes({
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/character-card/export-v3') {
+    const { characterCard, worldBook, coreMemory, foreshadowing } = await resolveCharacterExportSource({
+      url,
+      configService,
+      sessionService
+    });
+    writeJson(res, 200, {
+      characterCard: exportCharacterCardToV3(characterCard, { worldBook, coreMemory, foreshadowing })
+    });
+    return true;
+  }
+
   return false;
+}
+
+async function resolveCharacterExportSource({ url, configService, sessionService }) {
+  const config = await configService.getAll();
+  const sessionId = String(url.searchParams.get('sessionId') || '').trim();
+  if (!sessionId) {
+    return {
+      characterCard: config.characterCard || {},
+      worldBook: Array.isArray(config.worldBook) ? config.worldBook : [],
+      coreMemory: null,
+      foreshadowing: []
+    };
+  }
+
+  const session = await sessionService.getSession(sessionId);
+  const sessionConfig = session?.config && typeof session.config === 'object' ? session.config : {};
+  const memory = session?.memory && typeof session.memory === 'object' ? session.memory : {};
+  return {
+    characterCard: sessionConfig.characterCard || config.characterCard || {},
+    worldBook: Array.isArray(sessionConfig.worldBook) ? sessionConfig.worldBook : (config.worldBook || []),
+    coreMemory: memory.episodicMemory?.coreMemory || memory.coreMemory || null,
+    foreshadowing: Array.isArray(memory.worldState?.foreshadowing)
+      ? memory.worldState.foreshadowing
+      : (Array.isArray(memory.foreshadowing) ? memory.foreshadowing : [])
+  };
 }
 
 function summarizePreviewForClient(preview = {}) {

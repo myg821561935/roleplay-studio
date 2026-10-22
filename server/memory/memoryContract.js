@@ -37,9 +37,33 @@ const HIDDEN_REASONING_BLOCK = /<(think|thinking|analysis|reasoning|planing|plan
 const UNCLOSED_REASONING_BLOCK = /<(think|thinking|analysis|reasoning|planing|planning|cot)\b[^>]*>[\s\S]*$/gi;
 const ORPHAN_REASONING_TAG = /<\/?(?:think|thinking|analysis|reasoning|planing|planning|cot)\b[^>]*>/gi;
 
+export function createCoreMemory() {
+  return {
+    personaView: '',
+    activeCommitments: [],
+    coreDirectives: []
+  };
+}
+
+export function normalizeCoreMemory(value) {
+  const source = isPlainObject(value) ? value : {};
+  return {
+    personaView: sanitizeMemoryText(source.personaView || '', 600),
+    activeCommitments: (Array.isArray(source.activeCommitments) ? source.activeCommitments : typeof source.activeCommitments === 'string' ? [source.activeCommitments] : [])
+      .map((item) => sanitizeMemoryText(item, 240))
+      .filter(Boolean)
+      .slice(0, 10),
+    coreDirectives: (Array.isArray(source.coreDirectives) ? source.coreDirectives : typeof source.coreDirectives === 'string' ? [source.coreDirectives] : [])
+      .map((item) => sanitizeMemoryText(item, 240))
+      .filter(Boolean)
+      .slice(0, 10)
+  };
+}
+
 export function createMemoryState() {
   return {
     spec: MEMORY_SPEC,
+    coreMemory: createCoreMemory(),
     episodes: [],
     summaries: {
       scenes: [],
@@ -57,6 +81,7 @@ export function normalizeMemoryState(value) {
   const defaults = createMemoryState();
   return {
     spec: MEMORY_SPEC,
+    coreMemory: normalizeCoreMemory(source.coreMemory),
     episodes: (Array.isArray(source.episodes) ? source.episodes : [])
       .map(normalizeMemoryItem)
       .filter((item) => item.kind === MEMORY_KINDS.EPISODE)

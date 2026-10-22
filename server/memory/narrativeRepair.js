@@ -110,6 +110,23 @@ export function validateNarrativeHardFacts(content, memory = {}) {
     if (!matched) continue;
     conflicts.push({ id: item.id, fact: item.fact, matched });
   }
+
+  // 检查 NPC 涉密边界（防剧透与已知事实隔离确定性校验）
+  const characterKnowledge = memory?.worldState?.characterKnowledge || {};
+  for (const [npcName, knowledge] of Object.entries(characterKnowledge)) {
+    if (!knowledge || !Array.isArray(knowledge.secretBoundaries)) continue;
+    for (const secret of knowledge.secretBoundaries) {
+      if (secret && typeof secret === 'string' && secret.trim().length >= 2 && text.includes(secret.trim())) {
+        conflicts.push({
+          id: `spoiler-${npcName}`,
+          fact: `角色【${npcName}】涉密盲区：禁止越权知晓或提及「${secret}」`,
+          matched: secret.trim(),
+          kind: 'character-secret-boundary'
+        });
+      }
+    }
+  }
+
   return {
     valid: conflicts.length === 0,
     checkedCount: getActiveNarrativeHardFacts(memory).length,

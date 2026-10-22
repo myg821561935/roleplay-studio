@@ -28,3 +28,6 @@ backups/
 .data-restore-*/
 .data-rollback-*/
 data/.schema.json
+
+# One-off local implementation helper; retained locally, not a release artifact.
+patchPlanner.cjs

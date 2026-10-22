@@ -280,6 +280,7 @@ test('frontend entry imports feature modules and documents the three-step quick 
   const composerActionMenus = await readFile('public/modules/composerActionMenus.js', 'utf8');
   const messageActions = await readFile('public/modules/messageActions.js', 'utf8');
   const conversationStream = await readFile('public/modules/conversationStream.js', 'utf8');
+  const streamingTransport = await readFile('public/modules/streamingTransport.js', 'utf8');
   const messagePresentation = await readFile('public/modules/messagePresentation.js', 'utf8');
   const agentActionCards = await readFile('public/modules/agentActionCards.js', 'utf8');
   const simulationSpaceMap = await readFile('public/modules/simulationSpaceMap.js', 'utf8');
@@ -438,6 +439,8 @@ test('frontend entry imports feature modules and documents the three-step quick 
   assert.ok(messageActions.split('\n').length < 350, 'message actions controller should remain bounded');
   assert.ok(conversationStream.split('\n').length < 350, 'conversation stream controller should remain bounded');
   assert.match(conversationStream, /from '\.\/streamingActionPreview\.js'/);
+  assert.match(conversationStream, /from '\.\/streamingTransport\.js'/);
+  assert.ok(streamingTransport.split('\n').length < 100, 'streaming transport should remain focused and bounded');
   assert.ok(messagePresentation.split('\n').length < 320, 'message presentation controller should remain bounded');
   assert.ok(agentActionCards.split('\n').length < 60, 'agent action card renderer should remain focused and bounded');
   assert.match(messagePresentation, /from '\.\/agentActionCards\.js'/);
@@ -771,7 +774,7 @@ test('frontend entry imports feature modules and documents the three-step quick 
   assert.match(messageActions, /function runMutation/);
   assert.match(messageActions, /function handleMessageClick/);
   assert.match(conversationStream, /export function createConversationStreamController/);
-  assert.match(conversationStream, /export async function readSseResponse/);
+  assert.match(streamingTransport, /export async function readSseResponse/);
   assert.match(conversationStream, /function appendStreamingPreview/);
   assert.match(conversationStream, /async function sendMessage/);
   assert.match(conversationStream, /async function continueLastMessage/);

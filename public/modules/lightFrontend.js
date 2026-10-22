@@ -17,7 +17,8 @@ export function applyLightFrontendDisplayTransforms(text, runtime = {}, { role =
     try {
       const rawReplacement = String(rule.replacement || '').slice(0, MAX_REPLACEMENT_LENGTH);
       // 可执行 replacement 完全由 scriptGovernance/sandboxRenderer 处理。
-      // 未审核脚本必须保持原始消息内容，不能在这里生成悬空占位符。
+      // 需要沙箱的规则交由 scriptGovernance/sandboxRenderer 统一处理，
+      // 避免在此生成无法审计的占位符。
       if (rule.requiresSandbox === true) {
         continue;
       }

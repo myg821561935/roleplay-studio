@@ -58,12 +58,12 @@ function createRuntime() {
   };
 }
 
-test('blocked script notice names the rule and opens the audit workflow', () => {
+test('strict mode blocked script notice names the rule and opens the audit workflow', () => {
   const documentObject = new FakeDocument();
   const opened = [];
   const controller = createScriptGovernanceController({
     elements: {},
-    getRuntime: createRuntime,
+    getRuntime: () => ({ ...createRuntime(), scriptExecutionMode: 'review-required' }),
     getSessionId: () => 'main',
     apiRequest: async () => ({}),
     onOpenAudit: (assessments) => opened.push(assessments),
@@ -86,7 +86,7 @@ test('blocked script notice names the rule and opens the audit workflow', () => 
   assert.equal(opened[0][0].id, 'w2g-style');
 });
 
-test('audit panel exposes pending count and per-rule review actions', () => {
+test('local observation audit panel exposes the runtime mode and manual stop controls', () => {
   const documentObject = new FakeDocument();
   const auditList = new FakeElement();
   const auditEmpty = new FakeElement();
@@ -102,11 +102,11 @@ test('audit panel exposes pending count and per-rule review actions', () => {
 
   controller.renderAuditPanel();
 
-  assert.equal(auditCount.hidden, false);
-  assert.equal(auditCount.textContent, '1 待处理');
-  assert.equal(auditList.children.length, 1);
-  const item = auditList.children[0];
+  assert.equal(auditCount.hidden, true);
+  assert.equal(auditList.children.length, 2);
+  assert.match(auditList.children[0].children[0].children[0].textContent, /本地探索模式/);
+  const item = auditList.children[1];
   assert.equal(item.dataset.ruleId, 'w2g-style');
   const actions = item.children.at(-1);
-  assert.deepEqual(actions.children.map((button) => button.textContent), ['审核并允许', '拒绝']);
+  assert.deepEqual(actions.children.map((button) => button.textContent), ['确认长期授权', '拒绝']);
 });

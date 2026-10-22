@@ -145,11 +145,16 @@ function inspectResourceCompatibility({ currentPack, primaryPackId }) {
     ? review.disabledCapabilities.filter(isRecord)
     : [];
   const sourceRuntimeBlocked = review.sourceRuntimeBlocked === true;
-  const safeDerivativeApproved = review.status === 'safe-derivative-approved'
+  const executionMode = ['local-observe', 'compatibility-probe', 'review-required']
+    .includes(String(review.executionMode || ''))
+    ? String(review.executionMode)
+    : 'local-observe';
+  const safeDerivativeAccepted = ['safe-derivative-approved', 'safe-derivative-local-observe', 'safe-derivative-compatibility-probe']
+    .includes(String(review.status || ''))
     && review.acknowledgedCompatibility === true;
-  if (sourceRuntimeBlocked && (!safeDerivativeApproved || !disabledCapabilities.length)) {
+  if (sourceRuntimeBlocked && (!safeDerivativeAccepted || !disabledCapabilities.length)) {
     const evidence = [
-      !safeDerivativeApproved ? '缺少有效的安全派生确认状态' : '',
+      !safeDerivativeAccepted ? '缺少有效的安全派生确认状态' : '',
       !disabledCapabilities.length ? '没有记录被禁用的源运行时能力' : ''
     ].filter(Boolean);
     return check('resource-compatibility', '素材兼容', 'error',
@@ -166,16 +171,25 @@ function inspectResourceCompatibility({ currentPack, primaryPackId }) {
     const impact = String(item.impact || item.recommendation || '已从安全派生版禁用');
     return `${label}：${impact}`;
   });
-  if (safeDerivativeApproved) {
+  if (safeDerivativeAccepted) {
     return check('resource-compatibility', '素材兼容', 'warning',
-      '当前剧本运行的是安全派生版',
-      `原资源不能直接运行；已明确禁用 ${disabledCapabilities.length} 项源运行时能力：${disabledCapabilities
+      executionMode === 'compatibility-probe'
+        ? '当前剧本运行的是安全派生版（开发兼容探针）'
+        : executionMode === 'local-observe' ? '当前剧本运行的是安全派生版（本地观察）' : '当前剧本运行的是安全派生版',
+      `${executionMode === 'compatibility-probe'
+        ? '可隔离脚本可使用子 iframe 的外部资源与网络，并记录启动、加载与错误；'
+        : executionMode === 'local-observe' ? '可隔离脚本会在本地沙箱中观察运行并记录；' : ''}原资源不能直接运行；已明确禁用 ${disabledCapabilities.length} 项源运行时能力：${disabledCapabilities
         .map((item) => String(item.label || item.id || '未知能力'))
         .join('、')}。`, {
         evidence,
-        recommendation: '需要完整网页、DOM 或宿主交互时改走受控重前端；当前会话只依赖保留下来的角色卡、世界书、Prompt 与已批准沙箱能力。',
+        recommendation: executionMode === 'compatibility-probe'
+          ? '仅用于本地兼容调试；重点检查审计中的网络、加载与异常事件。原资源仍不能接管主页面或读取密钥；完整网页、DOM 或宿主交互需改走受控重前端。'
+          : executionMode === 'local-observe'
+            ? '测试阶段可继续观察本地审计记录；需要完整网页、DOM 或宿主交互时改走受控重前端。'
+            : '需要完整网页、DOM 或宿主交互时改走受控重前端；当前会话只依赖保留下来的角色卡、世界书、Prompt 与已批准沙箱能力。',
         metrics: {
           contractVersion,
+          executionMode,
           disabledCount: disabledCapabilities.length,
           approvedScriptCount: Array.isArray(review.approvedScriptHashes) ? review.approvedScriptHashes.length : 0
         }
@@ -359,17 +373,86 @@ function inspectPromptStack(session) {
 
 function inspectScriptGovernance(session) {
   const governance = getScriptGovernanceSnapshot(session);
+  const executionMode = ['local-observe', 'compatibility-probe', 'review-required']
+    .includes(governance.executionMode)
+    ? governance.executionMode
+    : 'local-observe';
   const pending = governance.rules.filter((rule) => !rule.approved && !rule.latestReview);
   const stale = governance.rules.filter((rule) => (
     !rule.approved && rule.latestReview?.decision === 'approved'
   ));
+  if (!governance.rules.length) {
+    return check('script-governance', '第三方脚本', 'pass',
+      '当前会话没有待审核脚本',
+      '没有启用需要沙箱执行的第三方脚本。', {
+        metrics: { ruleCount: 0, approvedCount: 0, executionMode }
+      });
+  }
+  if (executionMode === 'compatibility-probe') {
+    const executable = governance.rules.filter((rule) => rule.executable).length;
+    const rejected = governance.rules.filter((rule) => ['rejected', 'revoked'].includes(rule.latestReview?.decision)).length;
+    const evidence = [
+      ...pending.map((rule) => `${rule.name}：开发兼容探针中，尚未留下长期结论`),
+      ...stale.map((rule) => `${rule.name}：旧授权已随内容变化失效，当前版本在开发兼容探针中测试`),
+      ...governance.rules
+        .filter((rule) => ['rejected', 'revoked'].includes(rule.latestReview?.decision))
+        .map((rule) => `${rule.name}：当前内容已明确拒绝，不会执行`)
+    ];
+    return check('script-governance', '第三方脚本', 'warning',
+      `${executable} 个第三方脚本处于开发兼容探针`,
+      rejected
+        ? `${rejected} 个当前版本已被明确拒绝；其余脚本可在隔离 iframe 内加载外部资源、使用网络、表单、嵌套页面与 Worker，所有启动、加载和错误会审计。`
+        : '脚本可在隔离 iframe 内加载外部资源、使用网络、表单、嵌套页面与 Worker，所有启动、加载和错误会审计；不会获得主页面、存档、Provider 密钥或本机命令权限。', {
+        evidence,
+        recommendation: '仅用于本地角色卡兼容调试。查看审计中的网络/加载/错误后，完成验证请切回本地探索或严格逐项确认。',
+        action: {
+          kind: 'open-script-audit',
+          scriptIds: governance.rules.map((rule) => rule.scriptId)
+        },
+        metrics: {
+          ruleCount: governance.rules.length,
+          executableCount: executable,
+          rejectedCount: rejected,
+          approvedCount: governance.trustedScriptIds.length,
+          executionMode
+        }
+      });
+  }
+  if (executionMode === 'local-observe') {
+    const observed = governance.rules.filter((rule) => rule.executable).length;
+    const rejected = governance.rules.filter((rule) => rule.latestReview?.decision === 'rejected').length;
+    const evidence = [
+      ...pending.map((rule) => `${rule.name}：本地观察中，尚未留下长期结论`),
+      ...stale.map((rule) => `${rule.name}：旧授权已随内容变化失效，当前版本按本地观察运行`),
+      ...governance.rules
+        .filter((rule) => rule.latestReview?.decision === 'rejected')
+        .map((rule) => `${rule.name}：当前内容已明确拒绝，不会执行`)
+    ];
+    return check('script-governance', '第三方脚本', 'warning',
+      `${observed} 个第三方脚本以本地观察模式运行`,
+      rejected
+        ? `${rejected} 个当前版本已被明确拒绝；其余可隔离脚本只在无网络、无父页面权限的沙箱中运行并记录。`
+        : '可隔离脚本只在无网络、无父页面权限的沙箱中运行并记录；可随时切换为严格逐项确认。', {
+        evidence,
+        recommendation: '测试阶段关注启动、错误和异常行为审计；需要收敛时切换为严格逐项确认。',
+        action: {
+          kind: 'open-script-audit',
+          scriptIds: governance.rules.map((rule) => rule.scriptId)
+        },
+        metrics: {
+          ruleCount: governance.rules.length,
+          observedCount: observed,
+          rejectedCount: rejected,
+          approvedCount: governance.trustedScriptIds.length,
+          executionMode
+        }
+      });
+  }
   if (!pending.length && !stale.length) {
     return check('script-governance', '第三方脚本', 'pass',
-      governance.rules.length ? '第三方脚本审核状态明确' : '当前会话没有待审核脚本',
-      governance.rules.length
-        ? `${governance.trustedScriptIds.length}/${governance.rules.length} 个脚本已通过当前内容哈希与策略校验。`
-        : '没有启用需要沙箱执行的第三方脚本。', {
-        metrics: { ruleCount: governance.rules.length, approvedCount: governance.trustedScriptIds.length }
+      '第三方脚本严格审核状态明确',
+      `${governance.trustedScriptIds.length}/${governance.rules.length} 个脚本已通过当前内容哈希与策略校验。`, {
+        metrics: { ruleCount: governance.rules.length, approvedCount: governance.trustedScriptIds.length, executionMode }
       });
   }
   const evidence = [
@@ -385,7 +468,7 @@ function inspectScriptGovernance(session) {
         kind: 'open-script-audit',
         scriptIds: [...pending, ...stale].map((rule) => rule.scriptId)
       },
-      metrics: { ruleCount: governance.rules.length, approvedCount: governance.trustedScriptIds.length }
+      metrics: { ruleCount: governance.rules.length, approvedCount: governance.trustedScriptIds.length, executionMode }
     });
 }
 

@@ -190,19 +190,23 @@ function applyPackCompatibilityReview(lightFrontend, input, review, now) {
     };
   }
   const decision = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const executionMode = normalizePackScriptExecutionMode(decision.executionMode);
+  if (executionMode === 'compatibility-probe' && decision.acknowledgeDeveloperRisk !== true) {
+    throw createResourcePackReviewError('RESOURCE_PACK_DEVELOPER_MODE_ACK_REQUIRED');
+  }
   if (decision.fingerprint && decision.fingerprint !== review.fingerprint) {
     throw createResourcePackReviewError('RESOURCE_PACK_REVIEW_STALE');
   }
   if (decision.fingerprint !== review.fingerprint) {
     throw createResourcePackReviewError('RESOURCE_PACK_REVIEW_REQUIRED');
   }
-  const approvedScriptHashes = new Set(
-    (Array.isArray(decision.approvedScriptHashes) ? decision.approvedScriptHashes : [])
-      .map((value) => String(value || ''))
-      .filter(Boolean)
-  );
-  const pendingRules = review.rules.filter((rule) => !approvedScriptHashes.has(rule.contentHash));
-  if (pendingRules.length) {
+  const suppliedReviews = normalizePackScriptReviews(decision.scriptReviews);
+  const reviewsByScriptId = new Map(suppliedReviews.map((item) => [item.scriptId, item]));
+  const pendingRules = review.rules.filter((rule) => {
+    const item = reviewsByScriptId.get(rule.scriptId);
+    return !item || item.contentHash !== rule.contentHash;
+  });
+  if (executionMode === 'review-required' && pendingRules.length) {
     const error = createResourcePackReviewError('RESOURCE_PACK_SCRIPT_APPROVAL_REQUIRED');
     error.pendingScriptIds = pendingRules.map((rule) => rule.scriptId);
     throw error;
@@ -212,21 +216,39 @@ function applyPackCompatibilityReview(lightFrontend, input, review, now) {
   }
 
   const reviewSession = { config: { lightFrontend } };
+  reviewSession.config.lightFrontend.scriptExecutionMode = executionMode;
   const reviewedAt = now().toISOString();
   review.rules.forEach((rule) => {
+    const item = reviewsByScriptId.get(rule.scriptId);
+    if (!item) return;
     applyScriptReview(reviewSession, {
       scriptId: rule.scriptId,
-      decision: 'approved',
+      decision: item.decision,
       reviewer: 'local-owner',
-      note: '剧本组装前兼容审核批准'
+      note: item.note
     }, { now: new Date(reviewedAt) });
   });
+  const persistedScriptReviews = Array.isArray(reviewSession.config.lightFrontend?.scriptReviews)
+    ? structuredClone(reviewSession.config.lightFrontend.scriptReviews)
+    : [];
+  const approvedScriptHashes = review.rules
+    .filter((rule) => reviewsByScriptId.get(rule.scriptId)?.decision === 'approved')
+    .map((rule) => rule.contentHash);
+  const hasDisabledScripts = executionMode === 'review-required'
+    && approvedScriptHashes.length !== review.rules.length;
   return {
     contractVersion: review.contractVersion,
     fingerprint: review.fingerprint,
-    status: review.sourceRuntimeBlocked ? 'safe-derivative-approved' : 'approved',
-    approvedScriptHashes: review.rules.map((rule) => rule.contentHash),
+    status: ['local-observe', 'compatibility-probe'].includes(executionMode)
+      ? (review.sourceRuntimeBlocked
+        ? executionMode === 'compatibility-probe' ? 'safe-derivative-compatibility-probe' : 'safe-derivative-local-observe'
+        : executionMode)
+      : (review.sourceRuntimeBlocked || hasDisabledScripts ? 'safe-derivative-approved' : 'approved'),
+    executionMode,
+    approvedScriptHashes,
+    scriptReviews: persistedScriptReviews,
     acknowledgedCompatibility: decision.acknowledgeCompatibility === true,
+    developerProbeAcknowledged: executionMode === 'compatibility-probe',
     sourceRuntimeBlocked: review.sourceRuntimeBlocked === true,
     disabledCapabilities: review.sourceRuntimeBlocked
       ? structuredClone(review.blockers || [])
@@ -235,6 +257,27 @@ function applyPackCompatibilityReview(lightFrontend, input, review, now) {
     interaction: structuredClone(review.interaction),
     reviewedAt
   };
+}
+
+function normalizePackScriptExecutionMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return ['local-observe', 'compatibility-probe', 'review-required'].includes(mode)
+    ? mode
+    : 'local-observe';
+}
+
+function normalizePackScriptReviews(value) {
+  const byScriptId = new Map();
+  (Array.isArray(value) ? value : []).forEach((item) => {
+    if (!isRecord(item)) return;
+    const scriptId = String(item.scriptId || '').trim().slice(0, 80);
+    const contentHash = String(item.contentHash || '').trim().slice(0, 160);
+    const decision = String(item.decision || '').trim().toLowerCase();
+    const note = String(item.note || '').trim().slice(0, 500);
+    if (!scriptId || !contentHash || !['approved', 'rejected'].includes(decision) || note.length < 8) return;
+    byScriptId.set(scriptId, { scriptId, contentHash, decision, note });
+  });
+  return [...byScriptId.values()];
 }
 
 function createResourcePackReviewError(code) {
@@ -2456,25 +2499,40 @@ function summarizeStoredPackCompatibilityAudit(pack = {}) {
     ? review.approvedScriptHashes.filter(Boolean)
     : [];
   const sourceRuntimeBlocked = review.sourceRuntimeBlocked === true;
+  const executionMode = normalizePackScriptExecutionMode(review.executionMode);
   const safeDerivative = sourceRuntimeBlocked
-    && review.status === 'safe-derivative-approved'
+    && ['safe-derivative-approved', 'safe-derivative-local-observe', 'safe-derivative-compatibility-probe'].includes(String(review.status || ''))
     && review.acknowledgedCompatibility === true
     && disabledCapabilities.length > 0;
   const directlyAudited = !sourceRuntimeBlocked
-    && ['not-required', 'approved'].includes(String(review.status || ''))
+    && ['not-required', 'approved', 'local-observe', 'compatibility-probe'].includes(String(review.status || ''))
     && Boolean(review.fingerprint);
   if (!safeDerivative && !directlyAudited) return null;
   return {
     packId: pack.id,
     title: pack.title || pack.id,
     status: safeDerivative ? 'safe-derivative' : 'audited',
-    label: safeDerivative ? '安全派生已审核' : 'v2 已审核',
+    label: safeDerivative
+      ? (executionMode === 'compatibility-probe'
+        ? '安全派生 · 开发探针'
+        : executionMode === 'local-observe' ? '安全派生 · 本地观察' : '安全派生已审核')
+      : (executionMode === 'compatibility-probe'
+        ? 'v2 开发探针'
+        : executionMode === 'local-observe' ? 'v2 本地观察' : 'v2 已审核'),
     tone: safeDerivative ? 'warning' : 'ok',
     reason: safeDerivative
-      ? `原资源运行时已阻断，并明确禁用 ${disabledCapabilities.length} 项能力。`
+      ? executionMode === 'compatibility-probe'
+        ? `原资源运行时已阻断，明确禁用 ${disabledCapabilities.length} 项能力；其余可隔离脚本正在开发兼容探针中运行并记录。`
+        : executionMode === 'local-observe'
+          ? `原资源运行时已阻断，明确禁用 ${disabledCapabilities.length} 项能力；其余可隔离脚本以本地观察模式运行并记录。`
+          : `原资源运行时已阻断，并明确禁用 ${disabledCapabilities.length} 项能力。`
       : approvedScriptHashes.length
         ? `${approvedScriptHashes.length} 个第三方脚本哈希已在组装前逐项批准。`
-        : '组装记录符合当前酒馆兼容契约。',
+        : executionMode === 'compatibility-probe'
+          ? '组装记录符合当前酒馆兼容契约，脚本将以开发兼容探针运行并记录。'
+          : executionMode === 'local-observe'
+            ? '组装记录符合当前酒馆兼容契约，脚本将以本地观察模式运行并记录。'
+            : '组装记录符合当前酒馆兼容契约。',
     canStartNewStory: true,
     action: 'none',
     contractVersion: Number(review.contractVersion || 0),

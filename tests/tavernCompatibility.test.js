@@ -75,6 +75,22 @@ test('v2 golden matrix covers every resource, rating and interaction combination
   assert.deepEqual(new Set(actualKeys), expectedKeys);
 });
 
+test('standalone world book import preserves SillyTavern extension and at-depth positions', () => {
+  const imported = importWorldBookFromPayload({
+    fileName: 'positions.json',
+    mimeType: 'application/json',
+    data: JSON.stringify({
+      entries: [
+        { uid: 1, content: '深度插入', position: 4 },
+        { uid: 2, content: '扩展前', position: 5 },
+        { uid: 3, content: '扩展后', position: 6 }
+      ]
+    })
+  });
+
+  assert.deepEqual(imported.map((entry) => entry.position), ['at_depth', 'before_eff', 'after_eff']);
+});
+
 for (const matrixCase of goldenMatrix.cases) {
   test(`v2 golden resource: ${matrixCase.id}`, () => {
     const profile = goldenMatrix.profiles[matrixCase.profile];

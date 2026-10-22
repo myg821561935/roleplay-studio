@@ -1,3 +1,5 @@
+import { buildSceneContinuity } from '../agent/sceneContinuity.js';
+import { filterNarrativeContextMessages } from './narrativeRepair.js';
 import { rebuildMemoryFromMessages } from '../agent/memoryUpdater.js';
 import {
   MEMORY_HIERARCHY_POLICY,
@@ -38,7 +40,17 @@ export class MemoryService {
     const state = this.ensureState(session);
     const episode = createTurnEpisode({ session, userMessage, assistantMessage, now: this.now });
     session.memory.episodicMemory = upsertEpisode(state, episode, { now: this.now });
+    session.memory.sceneContinuity = this.buildContinuity(session);
+    // Parsing hints survive history replay losing the transient cast registry.
+    // Rebuild always re-reads current prose; these names never restore old facts.
+    assistantMessage.sceneContinuityActors = session.memory.sceneContinuity.actors
+      .filter(event => event.sourceMessageId === assistantMessage.id).map(event => event.actor);
     return episode;
+  }
+
+  buildContinuity(session, messages = session.messages, memory = session.memory) {
+    return buildSceneContinuity({ messages: filterNarrativeContextMessages(messages || [], memory), memory,
+      worldBook: session.config?.worldBook, persona: session.config?.persona });
   }
 
   recordDecision({ session, ...input }) {
@@ -167,6 +179,28 @@ export class MemoryService {
     };
   }
 
+  getCoreMemory(session) {
+    const state = this.ensureState(session);
+    return state.coreMemory || { personaView: '', activeCommitments: [], coreDirectives: [] };
+  }
+
+  updateCoreMemory(session, patch = {}) {
+    const state = this.ensureState(session);
+    const current = state.coreMemory || { personaView: '', activeCommitments: [], coreDirectives: [] };
+    const next = {
+      personaView: patch.personaView !== undefined ? String(patch.personaView).trim() : current.personaView,
+      activeCommitments: Array.isArray(patch.activeCommitments)
+        ? patch.activeCommitments.map((i) => String(i || '').trim()).filter(Boolean)
+        : current.activeCommitments,
+      coreDirectives: Array.isArray(patch.coreDirectives)
+        ? patch.coreDirectives.map((i) => String(i || '').trim()).filter(Boolean)
+        : current.coreDirectives
+    };
+    state.coreMemory = next;
+    state.updatedAt = (typeof this.now === 'function' ? this.now() : new Date()).toISOString();
+    return state.coreMemory;
+  }
+
   rebuildRange({ session, messages = session?.messages || [] }) {
     const previousState = this.ensureState(session);
     const nextMemory = rebuildMemoryFromMessages({ memory: session.memory, messages });
@@ -206,6 +240,7 @@ export class MemoryService {
     const invalidatedSummary = [...previouslyConfirmedSummaryIds]
       .some((id) => currentSummaries.get(id)?.status !== 'confirmed');
     nextMemory.episodicMemory = nextState;
+    nextMemory.sceneContinuity = this.buildContinuity(session, messages, nextMemory);
     if (invalidatedSummary) nextMemory.rollingSummary = composeRollingSummary(nextState);
     return nextMemory;
   }

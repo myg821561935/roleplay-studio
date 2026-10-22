@@ -118,6 +118,7 @@ export function createCharacterCardController({
     status: elements.characterCardStatus,
     save: elements.saveCharacterCard,
     export: elements.exportCharacterCard,
+    exportV3: elements.exportCharacterCardV3,
     presetFavorites: elements.characterPresetFavorites,
     loadPresetFavorite: elements.loadCharacterPreset,
     savePresetFavorite: elements.saveCharacterPreset,
@@ -453,12 +454,23 @@ export function createCharacterCardController({
   function exportCharacterCardPng() {
     if (!documentRef?.body) return;
     const anchor = documentRef.createElement('a');
-    anchor.href = '/api/character-card/export';
+    anchor.href = `/api/character-card/export?sessionId=${encodeURIComponent(getSessionId())}`;
     anchor.download = `${getCharacterCard()?.name || 'character'}.png`;
     documentRef.body.append(anchor);
     anchor.click();
     anchor.remove();
     updateStatus('已导出 PNG 角色卡', 'ok');
+  }
+
+  function exportCharacterCardV3() {
+    if (!documentRef?.body) return;
+    const anchor = documentRef.createElement('a');
+    anchor.href = `/api/character-card/export-v3?sessionId=${encodeURIComponent(getSessionId())}`;
+    anchor.download = `${getCharacterCard()?.name || 'character'}.v3.json`;
+    documentRef.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    updateStatus('已导出 V3 JSON 角色卡（含本地核心记忆）', 'ok');
   }
 
   function renderCharacterPresetFavorites() {
@@ -534,29 +546,24 @@ export function createCharacterCardController({
       presetKey: `favorite:${presetId}`
     })) return;
 
+    const requestVersion = ++characterPresetLoadVersion;
+    const requestedSessionId = String(getSessionId() || 'main');
     try {
-      if (preset.characterCard) {
-        const payload = await apiRequest('/api/character-card', {
-          method: 'PUT',
-          body: { sessionId: getSessionId(), characterCard: preset.characterCard }
-        });
-        setCharacterCard(payload.characterCard);
-        setCharacterCardEditor(payload.characterCard);
-      }
-      if (Array.isArray(preset.worldBook) && preset.worldBook.length) {
-        const payload = await apiRequest('/api/world-book', {
-          method: 'PUT',
-          body: { sessionId: getSessionId(), worldBook: preset.worldBook }
-        });
-        setWorldBook(payload.worldBook);
-      }
-      if (Array.isArray(preset.promptModules) && preset.promptModules.length) {
-        const payload = await apiRequest('/api/prompt-modules', {
-          method: 'PUT',
-          body: { sessionId: getSessionId(), promptModules: preset.promptModules }
-        });
-        setPromptModules(payload.promptModules);
-      }
+      const payload = await apiRequest('/api/character-presets/apply', {
+        method: 'PUT',
+        body: {
+          sessionId: requestedSessionId,
+          characterCard: isPlainObject(preset.characterCard) ? preset.characterCard : {},
+          worldBook: Array.isArray(preset.worldBook) ? preset.worldBook : [],
+          promptModules: Array.isArray(preset.promptModules) ? preset.promptModules : []
+        }
+      });
+      if (requestVersion !== characterPresetLoadVersion
+        || String(getSessionId() || 'main') !== requestedSessionId) return;
+      setCharacterCard(payload.characterCard);
+      setCharacterCardEditor(payload.characterCard);
+      setWorldBook(payload.worldBook);
+      setPromptModules(payload.promptModules);
       updateStatus(`已加载收藏：${preset.name}`, 'ok');
     } catch (error) {
       updateStatus(`加载失败：${humanizeError(error)}`, 'error');
@@ -679,6 +686,7 @@ export function createCharacterCardController({
     ui.editor?.addEventListener('input', () => renderCharacterOverview(safeObjectFromEditor()));
     ui.save?.addEventListener('click', saveCharacterCard);
     ui.export?.addEventListener('click', exportCharacterCardPng);
+    ui.exportV3?.addEventListener('click', exportCharacterCardV3);
     ui.loadPresetFavorite?.addEventListener('click', loadCharacterPresetFavorite);
     ui.savePresetFavorite?.addEventListener('click', saveCharacterPresetFavorite);
     ui.deletePresetFavorite?.addEventListener('click', deleteCharacterPresetFavorite);
@@ -694,6 +702,7 @@ export function createCharacterCardController({
     confirmCharacterCompatibility,
     deleteCharacterPresetFavorite,
     exportCharacterCardPng,
+    exportCharacterCardV3,
     loadCharacterPresetFavorite,
     loadContentPackCharacterPresets,
     renderImportedCharacterPresets,

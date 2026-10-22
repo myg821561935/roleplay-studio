@@ -128,7 +128,7 @@ test('pack preflight exposes unresolved Character Filter tag IDs as exact compat
     customBaseline: { premise: '测试世界。' }
   });
   const audit = pack.resourceManifest.composition.compatibilityReview;
-  assert.equal(audit.status, 'approved');
+  assert.equal(audit.status, 'local-observe');
   assert.equal(audit.acknowledgedCompatibility, true);
   assert.equal(audit.compatibilityDifferences[0].id, 'worldbook-character-filter-tag-registry');
   assert.deepEqual(audit.compatibilityDifferences[0].evidence, [`仅限武侠角色：${tagId}`]);
@@ -827,7 +827,7 @@ test('resource library validates prompt id conflicts and external runtime requir
   assert.equal(pack.promptModules.length, 1);
   assert.equal(pack.promptModules[0].title, '社区叙事预设');
   assert.equal(pack.resourceManifest.composition.promptModules.promptIdConflicts, 1);
-  assert.equal(pack.resourceManifest.composition.compatibilityReview.status, 'safe-derivative-approved');
+  assert.equal(pack.resourceManifest.composition.compatibilityReview.status, 'safe-derivative-local-observe');
   assert.ok(pack.resourceManifest.composition.compatibilityReview.disabledCapabilities
     .some((item) => item.id === 'tavern-helper'));
 });
@@ -864,7 +864,7 @@ test('pack preflight stabilizes legacy resource revisions before binding approva
     ...input,
     compatibilityReview: {
       fingerprint: review.fingerprint,
-      approvedScriptHashes: review.rules.map((rule) => rule.contentHash),
+      scriptReviews: reviewedScriptRules(review),
       acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
     }
   });
@@ -1069,7 +1069,7 @@ test('custom pack creation requires the exact preflight script hash before stori
       ...input,
       compatibilityReview: {
         fingerprint: 'sha256:stale-review',
-        approvedScriptHashes: [review.rules[0].contentHash],
+        scriptReviews: reviewedScriptRules(review),
         acknowledgeCompatibility: false
       }
     }),
@@ -1080,7 +1080,13 @@ test('custom pack creation requires the exact preflight script hash before stori
       ...input,
       compatibilityReview: {
         fingerprint: review.fingerprint,
-        approvedScriptHashes: ['sha256:wrong'],
+        executionMode: 'review-required',
+        scriptReviews: [{
+          scriptId: review.rules[0].scriptId,
+          contentHash: 'sha256:wrong',
+          decision: 'approved',
+          note: '测试错误的脚本内容哈希。'
+        }],
         acknowledgeCompatibility: false
       }
     }),
@@ -1089,9 +1095,10 @@ test('custom pack creation requires the exact preflight script hash before stori
 
   const pack = await service.createPack({
     ...input,
-    compatibilityReview: {
-      fingerprint: review.fingerprint,
-      approvedScriptHashes: [review.rules[0].contentHash],
+      compatibilityReview: {
+        fingerprint: review.fingerprint,
+        executionMode: 'review-required',
+        scriptReviews: reviewedScriptRules(review),
       acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
     }
   });
@@ -1150,7 +1157,7 @@ test('legacy custom packs can be re-inspected into a new audited pack without ov
   const upgraded = await service.createPackCompatibilityUpgrade(legacy.id, {
     compatibilityReview: {
       fingerprint: review.fingerprint,
-      approvedScriptHashes: [],
+      scriptReviews: [],
       acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
     }
   });
@@ -1312,7 +1319,7 @@ test('compatibility upgrade folds legacy preset fragments into one versioned pro
   const upgraded = await service.createPackCompatibilityUpgrade(legacy.id, {
     compatibilityReview: {
       fingerprint: review.fingerprint,
-      approvedScriptHashes: review.rules.map((rule) => rule.contentHash),
+      scriptReviews: reviewedScriptRules(review),
       acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
     }
   });
@@ -1405,7 +1412,7 @@ test('pack compatibility overview separates audited, upgradeable, script-review 
     ...scriptInput,
     compatibilityReview: {
       fingerprint: scriptInspection.compatibilityReview.fingerprint,
-      approvedScriptHashes: scriptInspection.compatibilityReview.rules.map((rule) => rule.contentHash),
+      scriptReviews: reviewedScriptRules(scriptInspection.compatibilityReview),
       acknowledgeCompatibility: scriptInspection.compatibilityReview.requiresCompatibilityAcknowledgement
     }
   });
@@ -1639,10 +1646,19 @@ async function createPackWithPreflightApproval(service, input, options = {}) {
     ...input,
     compatibilityReview: {
       fingerprint: review.fingerprint,
-      approvedScriptHashes: review.rules.map((rule) => rule.contentHash),
+      scriptReviews: reviewedScriptRules(review),
       acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
     }
   }, options);
+}
+
+function reviewedScriptRules(review = {}) {
+  return (Array.isArray(review.rules) ? review.rules : []).map((rule) => ({
+    scriptId: String(rule.scriptId || ''),
+    contentHash: String(rule.contentHash || ''),
+    decision: 'approved',
+    note: '测试夹具已核对脚本内容和风险。'
+  }));
 }
 
 function createCharacterPreview(overrides = {}, worldBook = null) {

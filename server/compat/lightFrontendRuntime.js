@@ -260,8 +260,8 @@ export function inspectSafeTemplate(text = '') {
   };
 }
 
-export function renderSafeTemplate(text = '', context = {}, { unsupported = 'preserve' } = {}) {
-  const source = String(text || '').slice(0, MAX_DISPLAY_TEXT_LENGTH);
+export function renderSafeTemplate(text = '', context = {}, { unsupported = 'preserve', maxSourceLength = MAX_DISPLAY_TEXT_LENGTH } = {}) {
+  const source = String(text || '').slice(0, maxSourceLength);
   const tagRegex = /<%([=-]?)([\s\S]*?)%>/g;
   const stack = [];
   let active = true;
@@ -477,7 +477,7 @@ function normalizeRegexTransform(value, index, diagnostics) {
       code: 'executable-regex-replacement-sandboxed',
       index,
       label: String(value.scriptName || value.name || ''),
-      message: '正则替换包含可执行内容，只有人工审核并绑定当前内容哈希后才会在隔离沙箱中执行。'
+      message: '正则替换包含可执行内容：默认仅在无网络、无父页面权限的隔离沙箱中本地观察运行；可切换为严格模式，要求人工审核并绑定当前内容哈希。'
     });
     return {
       id: cleanId(value.id || value.scriptName || value.name || `regex-${index + 1}`),

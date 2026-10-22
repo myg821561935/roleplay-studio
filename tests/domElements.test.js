@@ -27,10 +27,10 @@ test('DOM registry preserves the complete explicit element contract', () => {
 
   const elements = createDomElements(documentObject);
 
-  assert.equal(DOM_ELEMENT_IDS.length, 395);
+  assert.equal(DOM_ELEMENT_IDS.length, 405);
   assert.equal(new Set(DOM_ELEMENT_IDS).size, DOM_ELEMENT_IDS.length);
-  assert.equal(Object.keys(elements).length, 411);
-  assert.equal(singleQueries.length, 399);
+  assert.equal(Object.keys(elements).length, 421);
+  assert.equal(singleQueries.length, 409);
   assert.equal(collectionQueries.length, 12);
   assert.deepEqual(elements.assetCenter, { selector: '#asset-center' });
   assert.deepEqual(elements.heavyFrontendManager, { selector: '#heavy-frontend-manager' });
@@ -48,6 +48,7 @@ test('DOM registry preserves the complete explicit element contract', () => {
   assert.deepEqual(elements.sessionResponseLength, { selector: '#session-response-length' });
   assert.deepEqual(elements.sessionRoleplayMode, { selector: '#session-roleplay-mode' });
   assert.deepEqual(elements.cardRuntimeEnabled, { selector: '#card-runtime-enabled' });
+  assert.deepEqual(elements.exportCharacterCardV3, { selector: '#export-character-card-v3' });
   assert.deepEqual(elements.storyCustomApprovals, { selector: '#story-custom-approvals' });
   assert.deepEqual(elements.referenceRepairSummary, { selector: '#reference-repair-summary' });
   assert.deepEqual(elements.applyReferenceRepair, { selector: '#apply-reference-repair' });

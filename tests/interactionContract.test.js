@@ -54,7 +54,7 @@ test('continuation signals do not replace the latest visible player utterance', 
   assert.equal(isContinuationSignal('（请继续推进剧情）'), true);
   assert.equal(findLatestMeaningfulUserMessage(messages)?.content, '我把信递给她，等她回答。');
   assert.match(result.prompt, /最近真实玩家输入：我把信递给她，等她回答/);
-  assert.match(result.prompt, /只推进一个世界反馈节拍/);
+  assert.match(result.prompt, /在需要玩家作决定时停止/);
   assert.match(result.prompt, /把话语权交还玩家/);
   assert.match(result.prompt, /对白增多不等于替玩家说话/);
 });

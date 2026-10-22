@@ -17,9 +17,13 @@ const STRONG_DECISION_KINDS = new Set([
 
 const RESPONSE_ACTION_PATTERN = /(?:回答|回应|应声|答应|接受|拒绝|反问|追问|说明|表态|报明|不答|沉默|现身|开口|出言|喝道|问道|笑道|怒道|厉声|低声|沉声|轻声|冷声|拔剑|抽刀|出手|迎上|退开|避开|闪身|纵身|跃起|跪下|低头|抬头|转身|靠近|退后|站定|抬手|伸手|握拳|咬牙|冷笑|微笑|皱眉|凝视|周旋|拖延|敷衍|掩饰|伪装|假意|佯装|承认|否认|辩解|反驳|质问|控诉|嘲讽|挑衅|威慑|安抚|哄骗|威胁|谈判|交涉|讨价|还价|妥协|让步|坚守|不从|抗命|从命|照做|依言|俯身|行礼|拱手|抱拳|摇头|点头|耸肩|叹息|冷哼|嗤笑|讥诮|嘲弄|奚落|审视|紧盯|瞪视|瞥向|望向|看向|盯住|报上名来|自报家门|一言不发|二话不说|不置可否|不卑不亢|不动声色|不露声色|虚与委蛇|顾左右而言|王顾左右)/u;
 const THREAT_ACTION_PATTERN = /(?:躲|避|挡|退|逃|迎击|反击|防守|掩护|寻找|利用|观察|警告|呼救|阻止|拉开距离|闪|掠|窜|滚|扑|跃|纵|拔|抽|斩|劈|刺|挥|扫|拍|轰|击|震|荡|爆|涌|聚|提|运|丹田|元气|真气|内力|身法|步法|刀法|剑法|掌法|拳法|暗器|轻功|内功|外门|凡俗|蜕凡|秘境|法器|符箓|阵法|禁制|反噬|走火|入魔|瓶颈|突破|渡劫|飞升|陨落|重伤|吐血|踉跄|立足不稳|千钧一发|危在旦夕|生死一线|孤注一掷|破釜沉舟|鱼死网破|同归于尽|险中求|富贵险中求)/u;
-const INVESTIGATION_ACTION_PATTERN = /(?:检查|观察|比对|询问|试探|触碰|绕开|记录|标记|追踪|调查|确认|寻找|核对|验证|判断|打量|审视|端详|凝视|翻看|翻阅|搜寻|搜索|勘查|勘察|查验|鉴别|辨识|嗅闻|聆听|倾听|感知|感应|探查|探测|鉴定|测量|掂量|擦拭|拂去|拆开|撕开|翻开|撬开|敲了敲|摸了摸|凑近|上前|蹲下|跪下|俯身|侧身|回头|四下扫了一眼)/u;
+const INVESTIGATION_ACTION_PATTERN = /(?:检查|观察|比对|询问|试探|触碰|绕开|记录|标记|追踪|调查|确认|寻找|核对|验证|判断|打量|审视|端详|凝视|翻看|翻阅|搜寻|搜索|勘查|勘察|查验|鉴别|辨识|嗅闻|聆听|倾听|感知|感应|探查|探测|鉴定|测量|掂量|擦拭|拂去|拆开|撕开|翻开|撬开|敲了敲|摸了摸|凑近|上前|蹲下|跪下|俯身|侧身|回头|四下扫了一眼|内视|运转|调息|凝神|感悟|引导|压制|催动|沉心|顺应|抵挡|炼化)/u;
 const NAVIGATION_ACTION_PATTERN = /(?:进入|离开|前往|后退|绕行|查看|观察|试探|停留|折返|靠近|穿|越|翻|跨|迈|走|奔|跑|掠|闪|窜|遁|逃|追|赶|赴|入|出|归|去|到|沿|顺|循着|朝着|望着|盯着|通向|通往|前路|去路|退路|来路|岔路|小径|密道|暗道|走廊|通道|楼梯|石阶|木梯|窗口|门口|门缝|缝隙|阴影|暗处|角落|尽头|深处)/u;
 const INTERNAL_PROTOCOL_PATTERN = /(?:recommended_actions|ira-actions|nextcharacterpanel|<\/?(?:think|plot|normal_status|relationship_status|special_status)\b|\[object Object\]|请继续推进剧情)/iu;
+// 新出现的可交互物件应成为独立叙事节点，而不是退化成“观察周围”。
+// 三处规则共用这两个模式，防止发现识别、焦点提取与建议生成相互漂移。
+const DISCOVERY_OBJECT_PATTERN = /(?:黑匣子|木匣子|铁匣子|玉匣子|匣子|黑匣|木匣|铁匣|玉匣|盒子|木盒|铁盒|玉盒|箱子|木箱|铁箱|玉箱|瓶子|瓷瓶|玉瓶|药瓶|灯盏|铜灯|符纸|令牌|玉牌)/u;
+const DISCOVERY_EVENT_PATTERN = /(?:浮(?:出|起)|升(?:出|起)|从(?:水中|井底|暗处|地底|石缝中)?(?:浮出|露出|显出|滚出)|(?:凭空|忽然|突然).{0,12}(?:出现|显现|露出|弹出)|(?:被|从).{0,12}(?:捞出|翻出|挖出|掀出))/u;
 
 /**
  * 把模型候选、本轮结尾和最近会话统一交给一个决策规划器。
@@ -70,6 +74,7 @@ export function planRecommendedActions({
     context.kind === 'open'
     && context.actor === ''
     && !hasActionableAffordances(context.affordances)
+    && !(Array.isArray(context.memory?.worldState?.foreshadowing) && context.memory.worldState.foreshadowing.some((f) => f && f.status === 'open' && f.content))
     && !(allowUngroundedModelActions && normalizedModelActions.length >= 2)
   ) {
     // A settled descriptive beat is not automatically a player decision.
@@ -174,7 +179,8 @@ export function buildDecisionContext({
     clauses,
     recentUserText,
     charTraits,
-    affordances
+    affordances,
+    memory
   };
   const nodes = [];
   if (frameNode) nodes.push(frameNode);
@@ -240,9 +246,7 @@ function decisionNodeFromTurnFrame(turnFrame, closing = '') {
       && !isHypotheticalChoice(focus, focus);
     if (!completeChoice) return null;
   }
-  const kind = decision.kind === 'new-discovery'
-    ? 'investigation'
-    : decision.kind === 'open-state' ? 'open' : String(decision.kind || 'open');
+  const kind = decision.kind === 'open-state' ? 'open' : String(decision.kind || 'open');
   return decisionNode(kind, decision.kind || kind, 120, decision.focus || turnFrame.scene?.summary, {
     blocking: decision.requiresPlayerResponse === true,
     requiresPlayerResponse: decision.requiresPlayerResponse === true,
@@ -322,6 +326,9 @@ function generateDecisionActions(context) {
       break;
     case 'awaiting-player':
       actions = buildAwaitingPlayerActions(context);
+      break;
+    case 'new-discovery':
+      actions = buildDiscoveryActions(context);
       break;
     case 'investigation':
       actions = buildInvestigationActions(context);
@@ -538,6 +545,36 @@ function buildAwaitingPlayerActions(context) {
   ];
 }
 
+
+function buildDiscoveryActions(context) {
+  const sceneEvidence = splitSentences(context.closing)
+    .flatMap((sentence) => sentence.split(/[，；：]/u))
+    .map((clause) => clause.replace(/[“”"‘’']/gu, '').trim())
+    .filter((clause) => clause.length >= 4 && clause.length <= 60);
+  const clauses = [...new Set([...context.clauses, ...sceneEvidence])];
+  const bodyReaction = pickBestEvidenceClause(clauses,
+    /(?:丹田|灵根|经脉|心口|掌心|体内|气息|灵气).{0,36}(?:跳|震|热|冷|痛|滞|乱|升温|偏移|倾斜|刺激|异动|变化|反应)/u,
+    /(?:距离|靠近|退回|偏移|倾斜|变轻|增强|回到正中)/u);
+
+  const rawEvidence = context.focus || clauses.at(-1) || '';
+  const cleanNoun = extractCleanEntityNoun(rawEvidence);
+  const nounLabel = cleanNoun ? quoteFocus(cleanNoun) : '眼前的异状';
+
+  if (bodyReaction) {
+    return [
+      `凝神静气，内视查探${quoteFocus(bodyReaction)}的具体源头与变化`,
+      `试着以神识或微弱的灵力接触引导，探明其深浅`,
+      `按兵不动，顺其自然，默默观察它接下来的动静`
+    ];
+  }
+
+  return [
+    `保持一定的安全距离，仔细观察${nounLabel}的每一个细节`,
+    `不直接触碰，试着用手边的小物件或气机试探其反应`,
+    `将眼前的异样默记于心，面上不动声色，静观其变`
+  ];
+}
+
 function buildInvestigationActions(context) {
   const sceneEvidence = splitSentences(context.closing)
     .flatMap((sentence) => sentence.split(/[，；：]/u))
@@ -598,8 +635,14 @@ function buildInvestigationActions(context) {
   // 综合比对多重线索
   if (visualAnomaly && fragmentEvidence && physicalTrace) {
     actions.push(`不再重复靠近旧痕，先比对${quoteFocus(traceLabel || '压伏痕迹')}与${quoteFocus(visualLabel || '微光')}的位置关联，判断它们是否指向同一方向`);
-  } else if (visualAnomaly || fragmentEvidence) {
-    actions.push(`停止重复试探旧痕，先把已确认的变化与新出现的异常分开，再选择只验证其中一项`);
+  }
+
+  const foreshadowing = Array.isArray(context.memory?.worldState?.foreshadowing)
+    ? context.memory.worldState.foreshadowing.filter((f) => f && f.status === 'open' && f.content)
+    : [];
+  if (foreshadowing.length) {
+    const hook = foreshadowing[0];
+    actions.unshift(`借此机会暗中探查之前留下的未解线索【${hook.content}】，核对与眼前异样的关联`);
   }
 
   return actions;
@@ -611,7 +654,7 @@ function extractCleanEntityNoun(text) {
   s = s.replace(/^(?:他|她|你|我|众人|自己)?(?:已经|早已|并未|没有|只见|隐约|悄然|暗自|面上)?(?:记下|看见|发现|察觉|注意到|露出|嵌着|留下|传来|递到|握着|拿着|看向|望向|扫过|退回|回到|挪了)/u, '');
   s = s.replace(/(?:的位置|的痕迹|的动静|的模样|的前后|的瞬间|的异样|的去向)$/u, '');
   s = s.trim();
-  const nounMatch = s.match(/(?:半片薄泥印子|薄泥印子|泥脚印|云纹靴印|脚印|泥印|铜铃|竹签|旧竹签|石阶|签面|守阁碑|灵田|残片|碎片|断片|血迹|裂痕|湿痕|暗纹|玉牌|短剑|丹药|晨雾|秋棠|录音笔|红灯|敲击声|魂火|古字|浅沟|蓟丛|绿光|微光)/u);
+  const nounMatch = s.match(/(?:黑匣子|木匣子|铁匣子|玉匣子|匣子|黑匣|木匣|铁匣|玉匣|盒子|木盒|铁盒|玉盒|箱子|木箱|铁箱|玉箱|瓶子|瓷瓶|玉瓶|药瓶|半片薄泥印子|薄泥印子|泥脚印|云纹靴印|脚印|泥印|铜铃|竹签|旧竹签|石阶|签面|守阁碑|灵田|残片|碎片|断片|血迹|裂痕|湿痕|暗纹|玉牌|短剑|丹药|晨雾|秋棠|录音笔|红灯|敲击声|魂火|古字|浅沟|蓟丛|绿光|微光)/u);
   if (nounMatch) return nounMatch[0];
   if (s.length >= 2 && s.length <= 8 && !/(?:了|过|在|是|有|并|但|却|像|被|一|为|走|站|说|道)/u.test(s)) {
     return s;
@@ -691,6 +734,18 @@ function buildOpenActions(context) {
       `${location}沉稳回应${actor}，顺势探问眼下局势的具体缘由与打算`,
       `向${actor}点头示意，面上不露声色，暗自留意对方接下来的举动与神情`,
       `暂不多言，借着手头事务的掩护，静观${actor}与周围局势的变化`
+    ];
+  }
+
+  const foreshadowing = Array.isArray(context.memory?.worldState?.foreshadowing)
+    ? context.memory.worldState.foreshadowing.filter((f) => f && f.status === 'open' && f.content)
+    : [];
+  if (foreshadowing.length) {
+    const hook = foreshadowing[0];
+    return [
+      `借此机会暗中探查之前留下的未解线索【${hook.content}】，核对与眼前异样的关联`,
+      `收敛心神，将刚才发生的所有细节在心中细细梳理，思量接下来的应对之策`,
+      `暗自调息并检查随身所携之物，为接下来的变故提前做好防备`
     ];
   }
 
@@ -923,9 +978,11 @@ function hasInvestigationCue(closing, clauses) {
 
   const tail = String(closing || '').slice(-680);
   const physicalEvidence = /(?:痕迹|拖痕|压伏|倒伏|异样|异常|残留|残片|碎片|裂痕|血迹|脚印|湿痕|敲击|录音|印记|断口|破损|微光|绿光|亮点|光点|不明气味|不明声响|莫名变化|反常|凭空|突然.{0,18}(?:亮起|闪烁|闪过|熄灭|断裂|移动|响起|震动|开合))/u.test(tail);
+  const freshObjectDiscovery = DISCOVERY_OBJECT_PATTERN.test(tail)
+    && DISCOVERY_EVENT_PATTERN.test(tail);
   const activeBodyChange = /(?:丹田|灵根|经脉|体内).{0,28}(?:跳|震|发热|发冷|刺痛|滞涩|紊乱|刺激|变化|反应)/u.test(tail)
     && !/(?:异动|变化).{0,12}(?:蛰伏|平息|散去|消失|恢复平静)/u.test(tail);
-  return physicalEvidence || activeBodyChange;
+  return physicalEvidence || freshObjectDiscovery || activeBodyChange;
 }
 
 function hasNavigationCue(closing) {
@@ -940,7 +997,11 @@ function extractDecisionClauses(closing) {
     .flatMap((sentence) => sentence.split(/[，；：]/u))
     .map((clause) => clause.replace(/[“”"‘’']/gu, '').trim())
     .filter((clause) => clause.length >= 4 && clause.length <= 72)
-    .filter((clause) => evidence.test(clause) || interaction.test(clause))
+    .filter((clause) => (
+      evidence.test(clause)
+      || interaction.test(clause)
+      || (DISCOVERY_OBJECT_PATTERN.test(clause) && DISCOVERY_EVENT_PATTERN.test(clause))
+    ))
     .slice(-4)
     .map((clause) => trimFocus(clause, 48));
 }
@@ -967,6 +1028,8 @@ function isActionAligned(action, context) {
       return isAwaitingActionAligned(action, context);
     case 'immediate-threat':
       return THREAT_ACTION_PATTERN.test(action);
+    case 'new-discovery':
+      return true; // 新发现的动作最广泛，直接放行模型原话
     case 'investigation':
       return INVESTIGATION_ACTION_PATTERN.test(action);
     case 'navigation':

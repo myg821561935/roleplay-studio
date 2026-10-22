@@ -9,7 +9,8 @@ import {
   appendScriptExecutionAudit,
   applyScriptReview,
   getScriptGovernanceSnapshot,
-  listScriptExecutionAudit
+  listScriptExecutionAudit,
+  setScriptExecutionMode
 } from '../security/scriptGovernance.js';
 
 export async function handleScriptGovernanceRoutes({
@@ -20,7 +21,7 @@ export async function handleScriptGovernanceRoutes({
   subPath,
   sessionService
 }) {
-  if (!['script-reviews', 'script-executions', 'trusted-scripts'].includes(subPath)) return false;
+  if (!['script-reviews', 'script-executions', 'script-policy', 'trusted-scripts'].includes(subPath)) return false;
 
   const session = await getSession(sessionService, sessionId);
 
@@ -65,6 +66,26 @@ export async function handleScriptGovernanceRoutes({
       writeJson(res, 200, {
         execution: executions.at(-1),
         executions
+      });
+      return true;
+    }
+    return false;
+  }
+
+  if (subPath === 'script-policy') {
+    if (req.method === 'GET') {
+      writeJson(res, 200, getScriptGovernanceSnapshot(session));
+      return true;
+    }
+    if (req.method === 'PUT') {
+      validateMutatingRequest(req);
+      const body = await readRequestJson(req);
+      const executionMode = callGovernance(() => setScriptExecutionMode(session, body));
+      await sessionService.saveSession(session);
+      writeJson(res, 200, {
+        executionMode,
+        governance: getScriptGovernanceSnapshot(session),
+        session
       });
       return true;
     }
@@ -132,7 +153,7 @@ function callGovernance(callback) {
     if (!(error instanceof ScriptGovernanceError)) throw error;
     const statusCode = error.code === 'SCRIPT_RULE_NOT_FOUND'
       ? 404
-      : error.code === 'SCRIPT_REVIEW_REQUIRED' || error.code === 'SCRIPT_CONTENT_HASH_MISMATCH'
+      : error.code === 'SCRIPT_REVIEW_REQUIRED' || error.code === 'SCRIPT_EXECUTION_BLOCKED' || error.code === 'SCRIPT_CONTENT_HASH_MISMATCH'
         ? 409
         : 400;
     throw new ApiError(statusCode, error.code);

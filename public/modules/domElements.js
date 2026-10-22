@@ -25,7 +25,7 @@ export const DOM_ELEMENT_IDS = Object.freeze(`
   messages chat-form chat-input send-message stop-generation voice-dictation composer-status
   rewrite-chat-input continue-message toggle-author-note author-note-panel author-note-input toggle-background
   background-panel background-presets background-url-input apply-background-url clear-background background-mode
-  background-status session-provider session-roleplay-mode session-response-length session-prompt-integrity card-runtime-enabled persona-enabled persona-name persona-description persona-background
+  background-status session-provider session-roleplay-mode session-response-length session-prompt-execution-mode session-prompt-budget session-prompt-integrity enhancement-memory-recall enhancement-npc-simulation enhancement-plot-guidance enhancement-action-suggestions card-runtime-enabled persona-enabled persona-name persona-description persona-background
   persona-personality save-persona persona-status quick-replies-bar quick-replies-editor add-quick-reply
   save-quick-replies quick-replies-status save-session-settings session-settings-status refresh-state memory-overview
   memory-view session-health-summary session-health-list session-health-status refresh-session-health reference-repair-summary preview-reference-repair apply-reference-repair session-config-migration-summary preview-session-config-migration apply-session-config-migration rule-status-view simulation-clock-label simulation-view-switch simulation-metrics simulation-status
@@ -45,12 +45,12 @@ export const DOM_ELEMENT_IDS = Object.freeze(`
   resource-count-worldbook resource-count-pack resource-kind-filter resource-query resource-library-status resource-library-list
   resource-pack-form resource-pack-title resource-pack-base resource-pack-character resource-pack-description resource-pack-include-base
   resource-pack-worldbooks resource-pack-prompts resource-pack-status resource-pack-list plugin-manifest-import plugin-summary
-  plugin-list adapter-count adapter-list save-character-card export-character-card character-preset-favorites
+  plugin-list adapter-count adapter-list save-character-card export-character-card export-character-card-v3 character-preset-favorites
   load-character-preset save-character-preset delete-character-preset prompt-preset-favorites apply-saved-prompt-preset save-prompt-preset
   delete-prompt-preset prompt-template-center prompt-template-summary prompt-template-grid prompt-template-detail prompt-template-detail-title
   prompt-template-detail-description prompt-template-reasons prompt-template-parameters prompt-template-apply-mode prompt-template-preview
-  prompt-studio prompt-studio-summary prompt-studio-refresh prompt-studio-show-request prompt-studio-integrity prompt-studio-modules prompt-studio-blocks prompt-studio-request prompt-studio-status
-  preview-prompt-template apply-prompt-template prompt-template-status group-members-list add-group-member save-group-members group-members-status target-speaker-btn
+  prompt-studio prompt-studio-summary prompt-studio-refresh prompt-studio-show-request prompt-studio-integrity prompt-studio-modules prompt-studio-blocks prompt-studio-request prompt-studio-status prompt-studio-changes prompt-studio-export-comparison
+  preview-prompt-template apply-prompt-template prompt-template-status group-members-list add-group-member save-group-members group-members-status group-speaker-strategy target-speaker-btn
   reset-character-card random-protagonist-genre random-protagonist character-card-status prompt-editor prompt-preset-select
   apply-prompt-preset worldbook-preset-select apply-worldbook-preset character-preset-select apply-character-preset save-prompt
   prompt-status session-status theme-select immersive-right-sidebar immersive-sidebar-content immersive-sidebar-close

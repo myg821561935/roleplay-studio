@@ -1,4 +1,6 @@
+import { groundTurnLedgerEnvelope } from '../simulation/groundedLedger.js';
 import { appendTurnEvent } from '../agent/memoryUpdater.js';
+import { projectWorldClock } from '../simulation/worldClock.js';
 import { MAX_ACTIONS_PER_ENVELOPE, normalizeActionEnvelope } from '../simulation/actionProtocol.js';
 import { appendLedgerEvent, createManualLedgerEvent, projectEventLedger } from '../simulation/eventLedger.js';
 import { ensureSimulationMemory, normalizeActors, projectSimulation } from '../simulation/npcSimulation.js';
@@ -27,12 +29,13 @@ export class WorldSimulationService {
     const resolvedSeeds = resolveSessionSeeds(session, seeds, this.resolveCharacterPresets);
     session.memory = ensureSimulationMemory(session.memory, resolvedSeeds);
     session.memory = reconcileSimulationHistory(session.memory, session.messages);
+    session.memory.worldState.clock = projectWorldClock(session.memory.worldState.clock, session.memory.simulation);
     session.memory = ensureCardRuntimeMemory(session.memory, {
       ...resolvedSeeds,
       worldBook: session.config?.worldBook
     }, { enabled: session.settings?.cardRuntimeEnabled !== false });
     session.memory = syncCharacterRegistry(session.memory, resolvedSeeds);
-    const baselineMemory = ensureSimulationMemory({ simulation: session.memory.simulationBaseline }, resolvedSeeds);
+    const baselineMemory = ensureSimulationMemory({ simulation: session.memory.simulationBaseline || session.memory.simulation }, resolvedSeeds);
     session.memory.simulationBaseline = baselineMemory.simulation;
     if (!session.memory.worldStateBaseline) {
       session.memory.worldStateBaseline = structuredClone(session.memory.worldState || {});
@@ -59,10 +62,14 @@ export class WorldSimulationService {
     };
   }
 
-  projectDecisionMemory({ session, assistantMessage, actionEnvelope = null }) {
+  projectDecisionMemory({ session, userMessage, assistantMessage, actionEnvelope = null }) {
     let memory = structuredClone(session?.memory || {});
+    actionEnvelope = groundTurnLedgerEnvelope(memory, actionEnvelope, { userMessage, assistantMessage });
+    if (actionEnvelope && this.preparedChronicles.has(session)) {
+      actionEnvelope = limitModelActionsForChronicle(actionEnvelope, 0);
+    }
     if (actionEnvelope) {
-      const projected = adjudicateActionEnvelope({ memory, envelope: actionEnvelope });
+      const projected = adjudicateActionEnvelope({ memory, envelope: actionEnvelope, evidenceContext: { userMessage, assistantMessage } });
       if (projected.result?.status !== 'rejected') memory = projected.memory;
     }
     return syncCharacterRegistry(memory, {
@@ -78,8 +85,15 @@ export class WorldSimulationService {
     if (!chronicle) chronicle = this.prepareChronicle({ session, userMessage });
     this.preparedChronicles.delete(session);
 
-    let modelEnvelope = actionEnvelope;
+    let modelEnvelope = groundTurnLedgerEnvelope(session.memory, actionEnvelope, { userMessage, assistantMessage });
     if (modelEnvelope && chronicle) {
+      const redundantClockActions = (modelEnvelope.actions || []).filter(action => action.type === 'clock.advance');
+      if (redundantClockActions.length) {
+        actionError = {
+          code: actionError?.code || 'ACTION_CLOCK_ALREADY_SETTLED',
+          detail: [actionError?.detail, '忽略模型重复推进时钟：本轮耗时已在生成前结算。'].filter(Boolean).join('；')
+        };
+      }
       modelEnvelope = limitModelActionsForChronicle(modelEnvelope, chronicle.envelope.actions.length);
     }
     let adjudication = null;
@@ -90,13 +104,13 @@ export class WorldSimulationService {
         acceptedModelActions: modelEnvelope?.actions || []
       });
       const commitMemory = restoreChronicleBaseline(session.memory, chronicle.memoryBefore);
-      const adjudicated = adjudicateActionEnvelope({ memory: commitMemory, envelope: combinedEnvelope });
+      const adjudicated = adjudicateActionEnvelope({ memory: commitMemory, envelope: combinedEnvelope, evidenceContext: { userMessage, assistantMessage } });
       session.memory = adjudicated.memory;
       adjudication = orderChronicleEffects(adjudicated.result, chronicle.envelope);
       assistantMessage.actionEnvelope = combinedEnvelope;
       assistantMessage.chronicle = structuredClone(chronicle.metadata);
     } else if (modelEnvelope) {
-      const adjudicated = adjudicateActionEnvelope({ memory: session.memory, envelope: modelEnvelope });
+      const adjudicated = adjudicateActionEnvelope({ memory: session.memory, envelope: modelEnvelope, evidenceContext: { userMessage, assistantMessage } });
       session.memory = adjudicated.memory;
       adjudication = adjudicated.result;
       assistantMessage.actionEnvelope = structuredClone(modelEnvelope);
@@ -137,6 +151,7 @@ export class WorldSimulationService {
       decisionNode: assistantMessage.decisionNode ? structuredClone(assistantMessage.decisionNode) : null,
       turnFrame: assistantMessage.turnFrame ? structuredClone(assistantMessage.turnFrame) : null,
       turnFrameError: assistantMessage.turnFrameError ? structuredClone(assistantMessage.turnFrameError) : null,
+      agreementIntegrity: assistantMessage.agreementIntegrity ? structuredClone(assistantMessage.agreementIntegrity) : null,
       narrativeConsistency: assistantMessage.narrativeConsistency ? structuredClone(assistantMessage.narrativeConsistency) : null,
       roleplayPanels: assistantMessage.roleplayPanels ? structuredClone(assistantMessage.roleplayPanels) : null,
       worldBookActivation: assistantMessage.worldBookActivation ? structuredClone(assistantMessage.worldBookActivation) : null,
@@ -378,6 +393,8 @@ function summarizeAdjudication(result, { includeEffects = false } = {}) {
 
 function limitModelActionsForChronicle(envelope, chronicleActionCount) {
   const normalized = normalizeActionEnvelope(envelope);
+  normalized.actions = normalized.actions.filter(action => action.type !== 'clock.advance');
+  if (!normalized.actions.length) return null;
   const remaining = Math.max(0, MAX_ACTIONS_PER_ENVELOPE - chronicleActionCount);
   if (normalized.actions.length <= remaining) return normalized;
   if (!remaining) return null;

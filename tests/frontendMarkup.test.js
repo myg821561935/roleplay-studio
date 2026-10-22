@@ -956,7 +956,7 @@ test('roleplay control output stays out of chat and legacy actions render as cho
   const presentation = await readFile('public/modules/messagePresentation.js', 'utf8');
   const parser = await readFile('public/modules/roleplayResponse.js', 'utf8');
 
-  assert.match(presentation, /const rawVisibleContent = toolActivity \? '' : \(presentation \? presentation\.content : \(message\.content \|\| ''\)\);/);
+  assert.match(presentation, /const rawVisibleContent = toolActivity \? '' : \(presentation \? presentation\.content : \(viewMessage\.content \|\| ''\)\);/);
   assert.match(presentation, /visibleContent: renderAgentActionCards\(rawVisibleContent\),/);
   assert.doesNotMatch(presentation, /presentation\?\.content \|\| message\.content/);
   assert.match(presentation, /isWebSearchToolMessage/);
@@ -1273,20 +1273,20 @@ test('narrative workspace separates reading, choices and structured character do
   assert.match(css, /\.message\s*\{[\s\S]*width:\s*min\(100%,\s*960px\)/);
 });
 
-test('third-party script governance is modular, review-gated and network-denied', async () => {
+test('third-party script governance is modular, locally observable and network-denied', async () => {
   const html = await readFile('public/index.html', 'utf8');
   const app = await readFile('public/app.js', 'utf8');
   const governance = await readFile('public/modules/scriptGovernance.js', 'utf8');
   const sandbox = await readFile('public/modules/sandboxRenderer.js', 'utf8');
 
-  assert.match(html, /第三方脚本只有在人工审核并绑定当前内容哈希后才会执行/);
+  assert.match(html, /本地探索模式下，第三方脚本会在无父页面权限、默认禁止联网的沙箱中观察运行并记录/);
   assert.match(app, /createScriptGovernanceController/);
   assert.doesNotMatch(app, /function renderSandboxAuditPanel/);
   assert.match(governance, /script-reviews/);
   assert.match(governance, /script-executions/);
   assert.match(sandbox, /connect-src 'none'/);
   assert.match(sandbox, /frame-src 'none'/);
-  assert.match(sandbox, /isRuleApproved/);
+  assert.match(sandbox, /resolveRuleExecution/);
   assert.match(sandbox, /contentHash/);
 });
 

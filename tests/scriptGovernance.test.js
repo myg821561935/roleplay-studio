@@ -7,7 +7,8 @@ import {
   attachScriptContentHashes,
   computeScriptContentHash,
   getScriptGovernanceSnapshot,
-  isScriptRuleApproved
+  isScriptRuleApproved,
+  setScriptExecutionMode
 } from '../server/security/scriptGovernance.js';
 
 test('script approval is bound to the current executable content hash', () => {
@@ -34,19 +35,28 @@ test('script approval is bound to the current executable content hash', () => {
   assert.equal(snapshot.rules[0].latestReview.contentHash, review.contentHash);
 });
 
-test('execution audit rejects stale hashes and unreviewed scripts', () => {
+test('local observation executes hash-bound scripts until explicitly rejected, while strict mode requires approval', () => {
   const rule = createRule();
   const session = createSession(rule);
   session.config.lightFrontend.regexTransforms = attachScriptContentHashes([rule]);
   const currentRule = session.config.lightFrontend.regexTransforms[0];
 
+  const observed = appendScriptExecutionAudit(session, {
+    scriptId: rule.id,
+    contentHash: currentRule.contentHash,
+    status: 'launched'
+  });
+  assert.equal(observed.executionMode, 'local-observe');
+  assert.equal(observed.permissionSource, 'local-observe');
+
+  setScriptExecutionMode(session, { executionMode: 'review-required' });
   assert.throws(
     () => appendScriptExecutionAudit(session, {
       scriptId: rule.id,
       contentHash: currentRule.contentHash,
       status: 'launched'
     }),
-    (error) => error instanceof ScriptGovernanceError && error.code === 'SCRIPT_REVIEW_REQUIRED'
+    (error) => error instanceof ScriptGovernanceError && error.code === 'SCRIPT_EXECUTION_BLOCKED'
   );
 
   applyScriptReview(session, {
@@ -71,8 +81,53 @@ test('execution audit rejects stale hashes and unreviewed scripts', () => {
   }, { now: new Date('2026-07-30T10:01:00.000Z') });
 
   assert.equal(execution.status, 'launched');
-  assert.equal(session.audit.scriptExecutions.length, 1);
-  assert.equal(session.audit.scriptExecutions[0].messageId, 'message-1');
+  assert.equal(session.audit.scriptExecutions.length, 2);
+  assert.equal(session.audit.scriptExecutions.at(-1).messageId, 'message-1');
+
+  setScriptExecutionMode(session, { executionMode: 'local-observe' });
+  applyScriptReview(session, { scriptId: rule.id, decision: 'rejected' });
+  assert.throws(
+    () => appendScriptExecutionAudit(session, {
+      scriptId: rule.id,
+      contentHash: currentRule.contentHash,
+      status: 'launched'
+    }),
+    (error) => error instanceof ScriptGovernanceError && error.code === 'SCRIPT_EXECUTION_BLOCKED'
+  );
+});
+
+test('development compatibility probe requires explicit acknowledgement, audits its source, and still honors rejection', () => {
+  const rule = createRule();
+  const session = createSession(rule);
+  session.config.lightFrontend.regexTransforms = attachScriptContentHashes([rule]);
+  const currentRule = session.config.lightFrontend.regexTransforms[0];
+
+  assert.throws(
+    () => setScriptExecutionMode(session, { executionMode: 'compatibility-probe' }),
+    (error) => error instanceof ScriptGovernanceError && error.code === 'SCRIPT_DEVELOPER_MODE_ACK_REQUIRED'
+  );
+
+  setScriptExecutionMode(session, {
+    executionMode: 'compatibility-probe',
+    acknowledgeDeveloperRisk: true
+  });
+  const execution = appendScriptExecutionAudit(session, {
+    scriptId: rule.id,
+    contentHash: currentRule.contentHash,
+    status: 'loaded'
+  });
+  assert.equal(execution.executionMode, 'compatibility-probe');
+  assert.equal(execution.permissionSource, 'compatibility-probe');
+
+  applyScriptReview(session, { scriptId: rule.id, decision: 'rejected' });
+  assert.throws(
+    () => appendScriptExecutionAudit(session, {
+      scriptId: rule.id,
+      contentHash: currentRule.contentHash,
+      status: 'launched'
+    }),
+    (error) => error instanceof ScriptGovernanceError && error.code === 'SCRIPT_EXECUTION_BLOCKED'
+  );
 });
 
 function createRule() {

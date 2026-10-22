@@ -415,16 +415,36 @@ export function createResourceImportController({
     assessment.append(score, assessmentCopy, verdict);
     els.importPreview.append(assessment);
 
+    // ── 类目一：入库与剧本挂载策略 (可选) ──
     if (storyImportRoute && preview.kind !== 'plugin-manifest') {
       els.importPreview.append(createStoryImportRouteSection(storyImportRoute, importBasePack));
     }
 
+    // ── 类目二：社区扩展与生态兼容 ──
+    const compatibilitySection = createCommunityCompatibilitySection(communityCompatibility, {
+      storyImport: isStoryImport,
+      onStrategyChange: (decisions) => {
+        pendingImportCompatibilityDecision = {
+          ...pendingImportCompatibilityDecision,
+          decisions
+        };
+        if (els.confirmImport) {
+          els.confirmImport.textContent = '确认以此策略导入素材';
+        }
+      }
+    });
+    if (compatibilitySection) els.importPreview.append(compatibilitySection);
+    if (pendingImportCompatibilityReview?.fingerprint) {
+      els.importPreview.append(createImportCompatibilityApprovalSection());
+    }
+
+    // ── 类目三：结构合规与质量评定 ──
     if (Array.isArray(inspection.dimensions) && inspection.dimensions.length) {
       const dimensionSection = document.createElement('section');
       dimensionSection.className = 'import-dimensions';
       const heading = document.createElement('div');
       heading.className = 'import-section-heading';
-      heading.innerHTML = '<strong>技术评定</strong><span>只评估结构、兼容性与运行质量</span>';
+      heading.innerHTML = '<strong>📊 结构合规与技术评定</strong><span>只评估格式规范、世界书与运行质量</span>';
       const dimensionList = document.createElement('div');
       dimensionList.className = 'import-dimension-list';
       inspection.dimensions.forEach((dimension) => {
@@ -449,14 +469,6 @@ export function createResourceImportController({
       });
       dimensionSection.append(heading, dimensionList);
       els.importPreview.append(dimensionSection);
-    }
-
-    const compatibilitySection = createCommunityCompatibilitySection(communityCompatibility, {
-      storyImport: isStoryImport
-    });
-    if (compatibilitySection) els.importPreview.append(compatibilitySection);
-    if (pendingImportCompatibilityReview?.fingerprint) {
-      els.importPreview.append(createImportCompatibilityApprovalSection());
     }
 
     const list = document.createElement('ul');
@@ -543,7 +555,7 @@ export function createResourceImportController({
       appendImportPreviewItem(
         list,
         '扩展兼容',
-        `${communityCompatibility.label || '待检查'} · 原生 ${Number(communityCompatibility.counts?.supported || 0)} / 转换 ${Number(communityCompatibility.counts?.degraded || 0)} / 缺失 ${Number(communityCompatibility.counts?.missing || 0)}`
+        `${communityCompatibility.label || '已适配'} · 原生 ${Number(communityCompatibility.counts?.supported || 0)} / 转换 ${Number(communityCompatibility.counts?.degraded || 0)} / 缺失 ${Number(communityCompatibility.counts?.missing || 0)}`
       );
     }
     appendImportPreviewItem(list, '预计体量', `${formatTokenCount(inspection.estimatedTokens || 0)} tokens`);
@@ -556,7 +568,7 @@ export function createResourceImportController({
     overview.className = 'import-overview';
     const overviewHeading = document.createElement('div');
     overviewHeading.className = 'import-section-heading';
-    overviewHeading.innerHTML = `<strong>导入内容</strong><span>${isPackageImport ? '安装前不会执行任何第三方代码' : '默认只进入本地素材库'}</span>`;
+    overviewHeading.innerHTML = `<strong>🏛️ 素材规格与入库详情</strong><span>${isPackageImport ? '安装前不会执行任何第三方代码' : '解析数据与本地挂载策略'}</span>`;
     overview.append(overviewHeading, list);
     els.importPreview.append(overview);
 
@@ -827,18 +839,33 @@ export function createResourceImportController({
         compatibilityReview: pendingImportCompatibilityDecision
       }
     };
+    // Script-only packs enter the local exploration lane as soon as their
+    // preflight fingerprint is known. Packs with capability degradation still
+    // require the user's explicit acknowledgement below.
+    if (pendingImportCompatibilityReview?.fingerprint
+      && !pendingImportCompatibilityReview.requiresCompatibilityAcknowledgement
+      && !reviewState.customStoryDraft.compatibilityReview?.fingerprint) {
+      reviewState.customStoryDraft.compatibilityReview = createCustomStoryCompatibilityReview({
+        fingerprint: pendingImportCompatibilityReview.fingerprint,
+        executionMode: 'local-observe'
+      });
+    }
     let controller;
     const getReadiness = () => {
       const review = pendingImportCompatibilityReview || {};
       const saved = createCustomStoryCompatibilityReview(reviewState.customStoryDraft.compatibilityReview);
       const matches = saved.fingerprint === review.fingerprint;
-      const approvedHashes = new Set(matches ? saved.approvedScriptHashes : []);
       const rules = Array.isArray(review.rules) ? review.rules : [];
+      const strictReview = saved.executionMode === 'review-required';
       return {
         compatibilityReview: review,
         sourceRuntimeBlocked: review.sourceRuntimeBlocked === true,
-        pendingScriptRules: review.requiresScriptApproval
-          ? rules.filter((rule) => !approvedHashes.has(String(rule.contentHash || '')))
+        pendingScriptRules: review.requiresScriptApproval && strictReview
+          ? rules.filter((rule) => !saved.scriptReviews.some((item) => (
+            matches
+            && item.scriptId === String(rule.scriptId || '')
+            && item.contentHash === String(rule.contentHash || '')
+          )))
           : [],
         compatibilityAcknowledgementPending: Boolean(
           review.requiresCompatibilityAcknowledgement

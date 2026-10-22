@@ -23,12 +23,29 @@ function resolveProvider(provider) {
   return { baseUrl, apiKey };
 }
 
+export const EMOTION_SPEED_MAP = Object.freeze({
+  furious: 1.15,
+  tense: 1.10,
+  playful: 1.05,
+  calm: 1.0,
+  tender: 0.9,
+  sorrowful: 0.85
+});
+
+export function resolveVoiceSpeed(speed, emotion) {
+  if (Number.isFinite(Number(speed)) && Number(speed) > 0) {
+    return Math.max(0.5, Math.min(2.0, Number(speed)));
+  }
+  const normEmotion = String(emotion || '').toLowerCase().trim();
+  return EMOTION_SPEED_MAP[normEmotion] || 1.0;
+}
+
 /**
  * 文本转语音 (TTS)
- * @param {{provider: any, text: string, voice?: string, format?: string, fetchImpl?: Function}} args
+ * @param {{provider: any, text: string, voice?: string, format?: string, emotion?: string, speed?: number, fetchImpl?: Function}} args
  * @returns {Promise<{audio: ArrayBuffer, format: string, raw: any}>}
  */
-export async function synthesizeSpeech({ provider, text, voice = 'alloy', format = 'mp3', fetchImpl = fetch }) {
+export async function synthesizeSpeech({ provider, text, voice = 'alloy', format = 'mp3', emotion = '', speed = null, fetchImpl = fetch }) {
   const { baseUrl, apiKey } = resolveProvider(provider);
   const model = String(provider.ttsModel || provider.model || '').trim();
   if (!model) throw new Error('Provider model (or ttsModel) is required for TTS');
@@ -37,12 +54,15 @@ export async function synthesizeSpeech({ provider, text, voice = 'alloy', format
   if (!trimmedText) throw new Error('TTS text is required');
   const truncated = trimmedText.slice(0, 4000);
 
+  const effectiveSpeed = resolveVoiceSpeed(speed, emotion);
+
   const url = `${baseUrl}/audio/speech`;
   const body = JSON.stringify({
     model,
     input: truncated,
     voice: String(voice || 'alloy').slice(0, 40),
-    response_format: String(format || 'mp3').slice(0, 10)
+    response_format: String(format || 'mp3').slice(0, 10),
+    speed: effectiveSpeed
   });
 
   const response = await fetchImpl(url, {

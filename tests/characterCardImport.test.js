@@ -209,6 +209,40 @@ test('extracts the original PNG portrait and keeps its pixels when exporting an 
   assert.equal(reimported.characterCard.firstMessage, '新开场。');
 });
 
+test('exports V3 PNG metadata with local core memory that can be imported again', () => {
+  const png = exportCharacterCardPng({
+    name: '沈观澜',
+    description: '谨慎的杂役弟子',
+    sourceSpec: 'chara_card_v3'
+  }, [{
+    title: '杂役院规矩',
+    keywords: ['杂役院'],
+    content: '夜间不得擅离排房。'
+  }], null, {
+    coreMemory: {
+      personaView: '先观察，再决定',
+      activeCommitments: ['查明石板秘密'],
+      coreDirectives: ['不违背已确认事实']
+    }
+  });
+
+  const imported = importCharacterCardFromPayload({
+    fileName: 'shen-v3.png',
+    mimeType: 'image/png',
+    data: png.toString('base64'),
+    encoding: 'base64'
+  });
+
+  assert.equal(imported.characterCard.sourceSpec, 'chara_card_v3');
+  assert.equal(imported.characterCard.name, '沈观澜');
+  assert.equal(imported.worldBook[0].title, '杂役院规矩');
+  assert.deepEqual(imported.worldBook[0].keywords, ['杂役院']);
+  assert.deepEqual(
+    imported.characterCard.extensions.local_roleplay_agent.coreMemory.activeCommitments,
+    ['查明石板秘密']
+  );
+});
+
 test('removes embedded character metadata before persisting a large PNG portrait', () => {
   const oversizedMetadata = Buffer.alloc(12 * 1024 * 1024 + 1, 0x41);
   const original = Buffer.concat([
@@ -409,7 +443,7 @@ function hasTextChunk(png, keyword) {
   return false;
 }
 
-test('normalizes numeric world book position to global after_character/before_character', () => {
+test('normalizes every supported SillyTavern numeric world book position through the shared mapping', () => {
   const fixture = {
     spec: 'chara_card_v2',
     data: {
@@ -420,7 +454,13 @@ test('normalizes numeric world book position to global after_character/before_ch
           { id: 1, content: '条目1', position: 0 },
           { id: 2, content: '条目2', position: 1 },
           { id: 3, content: '条目3', position: 'after_char' },
-          { id: 4, content: '条目4', position: 'before_char' }
+          { id: 4, content: '条目4', position: 'before_char' },
+          { id: 5, content: '条目5', position: 4 },
+          { id: 6, content: '条目6', position: 5 },
+          { id: 7, content: '条目7', position: 6 },
+          { id: 8, content: '条目8', position: 2 },
+          { id: 9, content: '条目9', position: 3 },
+          { id: 10, content: '条目10', position: 7 }
         ]
       }
     }
@@ -434,6 +474,12 @@ test('normalizes numeric world book position to global after_character/before_ch
   assert.equal(imported.worldBook[1].position, 'after_character');
   assert.equal(imported.worldBook[2].position, 'after_character');
   assert.equal(imported.worldBook[3].position, 'before_character');
+  assert.equal(imported.worldBook[4].position, 'at_depth');
+  assert.equal(imported.worldBook[5].position, 'before_eff');
+  assert.equal(imported.worldBook[6].position, 'after_eff');
+  assert.equal(imported.worldBook[7].position, 'after_character');
+  assert.equal(imported.worldBook[8].position, 'after_character');
+  assert.equal(imported.worldBook[9].position, 'after_eff');
 });
 
 test('filters out disabled world book entries with disable: true', () => {

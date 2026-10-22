@@ -203,8 +203,9 @@ test('AgentService only adds a fallback panel when a standard reply exposes a gr
   assert.equal(result.reply.recommendedActionPresentation, undefined);
   assert.equal(result.reply.decisionNode, undefined);
   assert.equal(result.session.memory.promptRuntime.communityPresetIntegrity.status, 'complete');
-  assert.match(result.debug.messages[0].content, /角色卡运行化层/);
-  assert.match(result.debug.messages[0].content, /本轮玩家意图/);
+  const assembledPrompt = result.debug.messages.map((message) => message.content).join('\n');
+  assert.match(assembledPrompt, /角色卡运行化层/);
+  assert.match(assembledPrompt, /本轮玩家意图/);
 });
 
 test('AgentService does not turn a vague acknowledgement into a fake recommended action', async () => {
@@ -379,6 +380,82 @@ test('AgentService signals finalizing only after the visible reply stream is com
   });
 
   assert.equal(events.at(-1), 'phase:finalizing');
+});
+
+test('AgentService publishes the committed turn before slow memory maintenance', async () => {
+  const { service } = await createHarness();
+  const events = [];
+  service.runMemoryMaintenanceIfNeeded = async () => {
+    events.push('memory-maintenance');
+    return true;
+  };
+
+  const result = await service.sendMessageStream({
+    sessionId: 'main',
+    content: '继续前行。',
+    onToken: () => {},
+    onPhase: (phase) => events.push(`phase:${phase}`),
+    onTurnReady: ({ session, reply }) => {
+      events.push('turn-ready');
+      assert.equal(session.turnViewSnapshot.turnId, reply.id);
+      assert.deepEqual(session.turnViewSnapshot.recommendedActions, reply.recommendedActions);
+    }
+  });
+
+  assert.deepEqual(events, ['phase:finalizing', 'turn-ready']);
+  await service.backgroundMaintenance.flush();
+  assert.deepEqual(events, ['phase:finalizing', 'turn-ready', 'memory-maintenance']);
+  assert.equal(result.session.turnViewSnapshot.turnId, result.reply.id);
+});
+
+test('AgentService completes MCP tool calls before emitting the final streamed reply', async () => {
+  const providerCalls = [];
+  const executedCalls = [];
+  let streamCalls = 0;
+  const mcpRegistry = {
+    listAllTools: async () => [{
+      name: 'local__inspect_scene',
+      serverId: 'local',
+      toolName: 'inspect_scene',
+      description: 'Inspect the current scene',
+      inputSchema: { type: 'object', properties: {} }
+    }],
+    callTool: async (call) => {
+      executedCalls.push(call);
+      return { content: [{ type: 'text', text: '门外有人驻足。' }] };
+    }
+  };
+  const providerClient = {
+    complete: async () => { throw new Error('MCP must use stream'); },
+    stream: async (request) => {
+      streamCalls += 1;
+      providerCalls.push(request);
+      if (providerCalls.length === 1) {
+        return {
+          content: '',
+          toolCalls: [{ id: 'call-1', name: 'local__inspect_scene', arguments: {} }]
+        };
+      }
+      await request.onToken('你听见门外传来一声极轻的脚步。');
+      return { content: '你听见门外传来一声极轻的脚步。', raw: { fake: true } };
+    }
+  };
+  const { service } = await createHarness({ providerClient, mcpRegistry });
+  const tokens = [];
+
+  const result = await service.sendMessageStream({
+    sessionId: 'main',
+    content: '仔细听门外。',
+    onToken: (token) => tokens.push(token)
+  });
+
+  assert.equal(streamCalls, 2);
+  assert.equal(providerCalls.length, 2);
+  assert.equal(providerCalls[0].tools.length, 1);
+  assert.equal(providerCalls[1].messages.at(-1).role, 'tool');
+  assert.deepEqual(executedCalls, [{ serverId: 'local', toolName: 'inspect_scene', arguments: {} }]);
+  assert.equal(tokens.join(''), result.reply.content);
+  assert.match(result.reply.content, /门外传来/);
 });
 
 test('AgentService retains an aborted partial turn when the user stops mid-stream', async () => {
@@ -736,6 +813,9 @@ test('AgentService separates roleplay protocol panels from visible story text', 
   assert.doesNotMatch(result.reply.content, /descriptive_analysis|内部导演分析|沈砚状态/);
   assert.equal(readback.messages[0].kind, 'journey-setup');
   assert.deepEqual(readback.messages[1].swipeMetadata[0].roleplayPanels, result.reply.roleplayPanels);
+  assert.equal(readback.turnViewSnapshot.spec, 'lra.turn-view-snapshot/v1');
+  assert.equal(readback.turnViewSnapshot.turnId, result.reply.id);
+  assert.deepEqual(readback.turnViewSnapshot.roleplayPanels, result.reply.roleplayPanels);
 });
 
 test('AgentService converts Tavern community panels and w2g into stored native fields', async () => {
@@ -1117,7 +1197,7 @@ test('AgentService provider failure does not persist a partial user message', as
 
 test('AgentService summary success resets count and writes rolling summary', async () => {
   let summaryCalls = 0;
-  const { service } = await createHarness({
+  const { service, sessionService } = await createHarness({
     providerClient: {
       complete: async ({ messages }) => {
         if (isSummaryRequest(messages)) {
@@ -1136,6 +1216,10 @@ test('AgentService summary success resets count and writes rolling summary', asy
     }
   });
 
+  // Exercise the four-turn trigger independently of changing prompt overhead.
+  const session = await sessionService.getSession('main');
+  session.settings.maxPromptTokens = 32000;
+  await sessionService.saveSession(session);
   let result;
   for (let turn = 1; turn <= 4; turn += 1) {
     result = await service.sendMessage({ sessionId: 'main', content: `第${turn}轮行动。` });
@@ -1173,7 +1257,7 @@ test('AgentService summary failure preserves count and records error', async () 
 test('AgentService summary retry includes every unsummarized turn', async () => {
   let summaryCalls = 0;
   const summaryPrompts = [];
-  const { service } = await createHarness({
+  const { service, sessionService } = await createHarness({
     providerClient: {
       complete: async ({ messages }) => {
         if (isSummaryRequest(messages)) {
@@ -1187,6 +1271,9 @@ test('AgentService summary retry includes every unsummarized turn', async () => 
     }
   });
 
+  const session = await sessionService.getSession('main');
+  session.settings.maxPromptTokens = 32000;
+  await sessionService.saveSession(session);
   for (let turn = 1; turn <= 5; turn += 1) {
     await service.sendMessage({ sessionId: 'main', content: `第${turn}轮行动。` });
   }
@@ -1228,7 +1315,7 @@ test('AgentService pauses summary maintenance after repeated summary failures', 
   assert.equal(chatCalls, 12);
 });
 
-test('AgentService dynamic memory trigger extracts new facts into world state', async () => {
+test('AgentService dynamic memory stores extractor world-state assertions for review instead of overwriting authoritative state', async () => {
   const { service } = await createHarness({
     providerClient: {
       complete: async ({ messages }) => {
@@ -1266,14 +1353,13 @@ test('AgentService dynamic memory trigger extracts new facts into world state', 
     result = await service.sendMessage({ sessionId: 'main', content: `第${turn}轮行动。` });
   }
 
-  assert.equal(result.session.memory.worldState.protagonist.name, '沈观澜');
-  assert.deepEqual(result.session.memory.worldState.protagonist.traits, ['守诺']);
-  assert.equal(result.session.memory.worldState.location.current, '镇武司门前');
-  assert.equal(result.session.memory.worldState.flags.已见守卫, true);
+  assert.notEqual(result.session.memory.worldState.protagonist.name, '沈观澜');
+  assert.equal(result.session.memory.pendingWorldStateExtraction.patch.protagonist.name, '沈观澜');
+  assert.equal(result.session.memory.pendingWorldStateExtraction.reviewStatus, 'candidate');
   assert.equal(result.session.memory.lastFactExtractionError, '');
 });
 
-test('AgentService dynamic memory trigger appends stable facts to world book', async () => {
+test('AgentService dynamic memory cannot promote extractor self-confirmed claims into world book', async () => {
   const { service, configService } = await createHarness({
     providerClient: {
       complete: async ({ messages }) => {
@@ -1309,10 +1395,7 @@ test('AgentService dynamic memory trigger appends stable facts to world book', a
   const session = await service.sessionService.getSession('main');
   const entry = session.config.worldBook.find((item) => item.title === '名刀雪照');
 
-  assert.ok(entry);
-  assert.deepEqual(entry.keywords, ['雪照', '名刀']);
-  assert.equal(entry.depth, 6);
-  assert.equal(entry.source, 'dynamic-memory');
+  assert.equal(entry, undefined);
 });
 
 test('AgentService dynamic memory failure preserves chat and records error', async () => {
@@ -1379,7 +1462,7 @@ test('SessionService enriches legacy genre sessions without overwriting a custom
   assert.equal(readback.memory.narrativeState.lastConfirmedBy, 'user');
 });
 
-async function createHarness({ configureProvider = true, providerClient = createEchoProviderClient(), vectorMemoryService } = {}) {
+async function createHarness({ configureProvider = true, providerClient = createEchoProviderClient(), vectorMemoryService, mcpRegistry } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-loop-'));
   const store = new JsonStore(root);
   const configService = new ConfigService(store);
@@ -1401,7 +1484,8 @@ async function createHarness({ configureProvider = true, providerClient = create
       configService,
       sessionService,
       providerClient,
-      vectorMemoryService
+      vectorMemoryService,
+      mcpRegistry
     })
   };
 }
@@ -1436,3 +1520,102 @@ function isSummaryRequest(messages) {
 function isFactExtractionRequest(messages) {
   return String(messages?.[0]?.content || '').includes('事实提取器');
 }
+
+test('a second authoritative turn completes while previous memory work is still pending', async () => {
+  const { service, sessionService } = await createHarness();
+  let release, started;
+  const pending = new Promise(r => { release = r; });
+  const entered = new Promise(r => { started = r; });
+  let count = 0;
+  service.runMemoryMaintenanceIfNeeded = async ({ session }) => {
+    count += 1;
+    if (count === 1) { started(); await pending; }
+    session.memory.rollingSummary = `维护${count}`;
+    return true;
+  };
+  try {
+    const first = await service.sendMessageStream({ sessionId: 'main', content: '第一步', onToken() {}, onTurnReady() {} });
+    await entered;
+    const second = await service.sendMessageStream({ sessionId: 'main', content: '第二步', onToken() {}, onTurnReady() {} });
+    assert.notEqual(first.reply.id, second.reply.id);
+    assert.equal(second.session.messages.filter(m => m.role === 'assistant').length, 2);
+    assert.notEqual(first.session.memory.rollingSummary, '维护1');
+  } finally { release(); await service.backgroundMaintenance.flush(); }
+  const saved = await sessionService.getSession('main');
+  assert.equal(saved.messages.filter(m => m.role === 'assistant').length, 2);
+  assert.equal(saved.memory.rollingSummary, '维护2');
+});
+
+test('MCP cancellation between tools prevents subsequent side effects and model rounds', async () => {
+  const { service } = await createHarness();
+  const controller = new AbortController();
+  let calls = 0, generations = 0;
+  service.providerClient.stream = async () => { generations++; return { content: '', toolCalls: [{ id: 'a', name: 'one' }, { id: 'b', name: 'two' }] }; };
+  service.executeMcpToolCall = async () => { calls++; controller.abort(); return 'done'; };
+  await assert.rejects(service.completeWithToolLoop({ provider: createFakeProvider(), messages: [], tools: [{ name: 'one' }], onToken() {}, signal: controller.signal }), e => e.name === 'AbortError' || e.code === 'GENERATION_ABORTED');
+  assert.equal(calls, 1); assert.equal(generations, 1);
+});
+
+test('stream failure after visible output does not mix a fallback response into the same turn', async () => {
+  const { service } = await createHarness();
+  let calls = 0;
+  service.providerClient.stream = async ({ onToken }) => { calls++; await onToken('已经可见'); throw new Error('broken stream'); };
+  await assert.rejects(service.streamWithFallback({ primaryProvider: createFakeProvider(), fallbackChain: [createFakeProvider({ id: 'fallback' })], messages: [], onToken() {} }), /broken stream/);
+  assert.equal(calls, 1);
+});
+test('MCP streamed preamble remains in the authoritative reply', async () => {
+  const { service } = await createHarness();
+  let rounds = 0;
+  const visible = [];
+  service.providerClient.stream = async ({ onToken }) => {
+    const content = rounds++ ? '门外无人。' : '我查看门外。';
+    await onToken(content);
+    return { content, ...(rounds === 1 ? { toolCalls: [{ id: 'a', name: 'inspect', arguments: {} }] } : {}) };
+  };
+  service.executeMcpToolCall = async () => '无人';
+  const result = await service.completeWithToolLoop({ provider: createFakeProvider(), messages: [], tools: [{ name: 'inspect' }], onToken: t => visible.push(t) });
+  assert.equal(result.content, visible.join(''));
+  assert.equal(result.content, '我查看门外。门外无人。');
+});
+test('faithful imported cards do not receive generic fallback action choices', async () => {
+  const { service, sessionService } = await createHarness();
+  const session = await sessionService.getSession('main');
+  await service.resolveSessionConfig(session);
+  session.config.characterCard = { name: '原卡角色', sourceSpec: 'chara_card_v3', description: '只用简洁对白。' };
+  session.config.promptModules = [];
+  session.config.worldBook = [];
+  session.settings.maxPromptTokens = 32000;
+  await sessionService.saveSession(session);
+  const result = await service.sendMessageStream({ sessionId: 'main', content: '我看向窗外。', onToken() {} });
+  assert.equal(result.debug.sections.executionMode, 'faithful');
+  assert.deepEqual(result.reply.recommendedActions || [], []);
+});
+
+test('agreement repair covers regular and streamed turns without publishing or committing a rejected draft',async()=>{
+ for(const stream of [false,true]){
+  let generations=0;
+  const complete=async({messages})=>{
+   if(isSummaryRequest(messages)||isFactExtractionRequest(messages))return {content:'{}'};
+   generations++;
+   return {content:generations===1?'「先交押金才能取回。」':'她把丹放在柜台，收回了手。',usage:{prompt_tokens:10,completion_tokens:5,total_tokens:15}};
+  };
+  const h=await createHarness({providerClient:{complete,stream:async args=>{const r=await complete(args);await args.onToken(r.content);return r;}}});
+  const s=await h.sessionService.getSession('main');
+  s.memory.worldState.commitments=[{id:'deposit',title:'短存',terms:'免费保管至酉时',status:'committed'}];
+  s.memory.worldStateBaseline=structuredClone(s.memory.worldState);await h.sessionService.saveSession(s);
+  const emitted=[];const args={sessionId:'main',content:'请把丹药放回柜台，不附加新条件。',onToken:t=>emitted.push(t)};
+  const result=await h.service[stream?'sendMessageStream':'sendMessage'](args);
+  const saved=await h.sessionService.getSession('main');
+  assert.equal(generations,2);assert.equal(result.reply.agreementIntegrity.repaired,true);
+  assert.doesNotMatch(saved.messages.at(-1).content,/押金/);assert.doesNotMatch(emitted.join(''),/押金/);
+  if(stream)assert.match(emitted.join(''),/放在柜台/);
+  assert.equal(saved.messages.at(-1).swipeMetadata[0].agreementIntegrity.repaired,true);
+ }
+});
+test('a second agreement violation fails before committing any new turn',async()=>{
+ const h=await createHarness({providerClient:{complete:async()=>({content:'「先交押金才能取回。」'})}});
+ const s=await h.sessionService.getSession('main');s.memory.worldState.commitments=[{id:'p',title:'短存',terms:'免费',status:'committed'}];await h.sessionService.saveSession(s);
+ const before=await h.sessionService.getSession('main');
+ await assert.rejects(h.service.sendMessage({sessionId:'main',content:'请归还丹药。'}),e=>e.code==='AGREEMENT_REPAIR_FAILED');
+ const after=await h.sessionService.getSession('main');assert.deepEqual(after.messages,before.messages);assert.deepEqual(after.memory.worldState,before.memory.worldState);
+});

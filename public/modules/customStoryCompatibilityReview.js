@@ -1,14 +1,27 @@
 import { createCompatibilityDifferencesNotice } from './customStoryCompatibilityDifferences.js';
-
+import {
+  findCurrentScriptReview,
+  normalizeScriptExecutionMode,
+  normalizeScriptReviews
+} from './customStoryCompatibilityReviewState.js';
+import {
+  createCustomStoryScriptControls,
+  getScriptRiskLabel
+} from './customStoryCompatibilityScriptControls.js';
+import {
+  createCompatibilityAcknowledgement,
+  createCompatibilityHeading,
+  createSafeDerivativeNotice
+} from './customStoryCompatibilityNotices.js';
 export function createCustomStoryCompatibilityReview(value = {}) {
   return {
     fingerprint: String(value.fingerprint || ''),
-    approvedScriptHashes: Array.from(new Set(
-      (Array.isArray(value.approvedScriptHashes) ? value.approvedScriptHashes : [])
-        .map((hash) => String(hash || ''))
-        .filter(Boolean)
-    )),
-    acknowledgeCompatibility: value.acknowledgeCompatibility === true
+    // 审批必须同时绑定脚本 ID、内容哈希、结论和人工说明。旧版仅保存 hash
+    // 的数据不再自动视为批准，避免内容升级后静默恢复执行。
+    scriptReviews: normalizeScriptReviews(value.scriptReviews),
+    executionMode: normalizeScriptExecutionMode(value.executionMode),
+    acknowledgeCompatibility: value.acknowledgeCompatibility === true,
+    ...(value.acknowledgeDeveloperRisk === true ? { acknowledgeDeveloperRisk: true } : {})
   };
 }
 
@@ -20,8 +33,11 @@ export function createCustomStoryApprovalController({
   renderReadiness,
   invalidateInspection,
   confirmAction = (message) => globalThis.confirm?.(message) === true,
+  promptAction = (message, value = '') => globalThis.prompt?.(message, value),
   documentObject = globalThis.document
 } = {}) {
+  const scriptControls = createCustomStoryScriptControls({ createElement, createButton });
+
   function bindEvents() {
     element?.addEventListener('click', (event) => {
       if (event.target.closest('[data-story-compatibility-ack]')) {
@@ -32,6 +48,15 @@ export function createCustomStoryApprovalController({
         invalidateInspection();
         persistDraft();
         renderReadiness();
+        return;
+      }
+      const scriptButton = event.target.closest('[data-story-script-review]');
+      if (scriptButton) {
+        reviewScript(scriptButton.dataset.storyScriptReview, scriptButton.dataset.storyScriptDecision);
+        return;
+      }
+      if (event.target.closest('[data-story-execution-mode]')) {
+        toggleExecutionMode(event.target.closest('[data-story-execution-mode]').dataset.storyExecutionMode);
       }
     });
   }
@@ -60,12 +85,15 @@ export function createCustomStoryApprovalController({
 
     const saved = createCustomStoryCompatibilityReview(state.customStoryDraft.compatibilityReview);
     const matches = saved.fingerprint === review.fingerprint;
-    const allApproved = !readiness.compatibilityAcknowledgementPending;
-    element.className = `story-custom-approvals ${allApproved ? 'is-complete' : 'is-pending'}`;
-    element.append(createHeading(allApproved));
+    const strictReview = saved.executionMode === 'review-required';
+    const allReviewed = !strictReview || !readiness.pendingScriptRules?.length;
+    const complete = allReviewed && !readiness.compatibilityAcknowledgementPending;
+    element.className = `story-custom-approvals ${complete ? 'is-complete' : 'is-pending'}`;
+    element.append(createCompatibilityHeading(complete, { createElement }));
+    if (rules.length) element.append(scriptControls.createExecutionModeNotice(saved.executionMode, rules.length));
 
     if (sourceRuntimeBlocked) {
-      element.append(createSafeDerivativeNotice(review));
+      element.append(createSafeDerivativeNotice(review, { createElement }));
     }
     if (Array.isArray(review?.differences) && review.differences.length) {
       element.append(createCompatibilityDifferencesNotice(review.differences, documentObject));
@@ -74,91 +102,74 @@ export function createCustomStoryApprovalController({
     if (rules.length) {
       const list = createElement('div');
       list.className = 'story-custom-approval-list';
-      rules.forEach((rule) => list.append(createScriptCard(rule)));
+      rules.forEach((rule) => list.append(scriptControls.createScriptCard(rule, findCurrentScriptReview(saved, rule, matches))));
       element.append(list);
     }
     if (review.requiresCompatibilityAcknowledgement) {
-      element.append(createCompatibilityAcknowledgement(review, matches && saved.acknowledgeCompatibility));
+      element.append(createCompatibilityAcknowledgement(review, matches && saved.acknowledgeCompatibility, {
+        createElement,
+        createButton
+      }));
     }
   }
-
-  function createSafeDerivativeNotice(review) {
-    const wrapper = createElement('div');
-    wrapper.className = 'story-custom-compatibility-blockers';
-    wrapper.append(
-      createElement('strong', '原资源不能直接运行，可创建安全派生版'),
-      createElement('p', '以下源运行时能力不会进入派生剧本；角色、世界书和 Prompt 会继续保留。若资源本身是完整网页，请改走独立重前端导入。')
-    );
-    const blockers = Array.isArray(review?.blockers) ? review.blockers : [];
-    if (blockers.length) {
-      const list = createElement('ul');
-      blockers.forEach((item) => {
-        const row = createElement('li');
-        row.append(
-          createElement('strong', String(item.label || item.id || '未知能力')),
-          createElement('span', String(item.impact || item.recommendation || '当前运行时不支持'))
-        );
-        list.append(row);
-      });
-      wrapper.append(list);
-    }
-    return wrapper;
+  function reviewScript(scriptId, decision) {
+    const readiness = getReadiness();
+    const rule = (readiness.compatibilityReview?.rules || []).find((item) => String(item.scriptId || '') === String(scriptId || ''));
+    if (!rule?.contentHash || !['approved', 'rejected'].includes(String(decision))) return;
+    const actionLabel = decision === 'approved' ? '批准受控运行' : '保持禁用';
+    if (!confirmAction(`确认${actionLabel}《${rule.name || rule.scriptId}》？\n\n内容哈希：${rule.contentHash}\n风险：${getScriptRiskLabel(rule.riskLevel)}\n\n此结论仅对该内容哈希有效。`)) return;
+    const note = promptAction('填写审核说明（至少 8 个字符，会保存在本地审计记录中）', '已核对脚本来源、内容哈希与风险说明。');
+    if (note === null || String(note || '').trim().length < 8) return;
+    const current = createCustomStoryCompatibilityReview(state.customStoryDraft.compatibilityReview);
+    const reviews = current.fingerprint === readiness.compatibilityReview.fingerprint
+      ? current.scriptReviews.filter((item) => item.scriptId !== String(scriptId))
+      : [];
+    reviews.push({
+      scriptId: String(scriptId),
+      contentHash: String(rule.contentHash),
+      decision,
+      note: String(note).trim()
+    });
+    state.customStoryDraft.compatibilityReview = createCustomStoryCompatibilityReview({
+      fingerprint: readiness.compatibilityReview.fingerprint,
+      scriptReviews: reviews,
+      executionMode: current.executionMode,
+      acknowledgeCompatibility: current.fingerprint === readiness.compatibilityReview.fingerprint
+        ? current.acknowledgeCompatibility
+        : false,
+      acknowledgeDeveloperRisk: current.fingerprint === readiness.compatibilityReview.fingerprint
+        ? current.acknowledgeDeveloperRisk
+        : false
+    });
+    persistDraft();
+    renderReadiness();
   }
 
-  function createHeading(allApproved) {
-    const heading = createElement('div');
-    heading.className = 'story-custom-approval-heading';
-    heading.append(
-      createElement('strong', allApproved ? '兼容审查已完成' : '创建前兼容审查'),
-      createElement('span', '所有第三方脚本均已纳入安全隔离沙箱运行，无需手动审批。')
-    );
-    return heading;
-  }
-
-  function createScriptCard(rule) {
-    const hash = String(rule.contentHash || '');
-    const sourceText = String(rule.source || '');
-    const card = createElement('article');
-    card.className = `story-custom-approval-card is-approved`;
-    const copy = createElement('div');
-    const meta = createElement('small', `隔离运行 · ${hash ? `${hash.slice(0, 18)}…` : '缺少内容哈希'}`);
-    const risks = createElement(
-      'p',
-      '检测到第三方脚本。将在 Web Worker 隔离沙箱中安全执行，不会访问敏感数据。'
-    );
-    const details = createElement('details');
-    details.className = 'story-custom-script-source';
-    const pattern = createElement('small', `匹配：${String(rule.pattern || '未声明')} · 作用域：${String(rule.scope || 'assistant')}`);
-    const source = createElement('pre', sourceText || '未提供脚本正文');
-    details.append(createElement('summary', '查看沙箱执行内容'), pattern, source);
-    copy.append(createElement('strong', String(rule.name || rule.scriptId || '未命名第三方脚本')), meta, risks, details);
-    card.append(copy);
-    return card;
-  }
-
-  function createCompatibilityAcknowledgement(review, acknowledged) {
-    const counts = review.counts || {};
-    const row = createElement('div');
-    row.className = `story-custom-compatibility-ack ${acknowledged ? 'is-approved' : 'is-pending'}`;
-    const sourceRuntimeBlocked = Boolean(review?.sourceRuntimeBlocked || Number(counts.missing || 0) > 0);
-    const copy = [
-      Number(counts.missing || 0) ? `禁用 ${Number(counts.missing)} 项源运行时能力` : '',
-      Number(counts.degraded || 0) ? `降级 ${Number(counts.degraded)}` : '',
-      Number(counts.review || 0) && !review.rules?.length ? `待转换 ${Number(counts.review)}` : ''
-    ].filter(Boolean).join(' · ') || '存在需确认的兼容处理';
-    const button = createButton(
-      acknowledged
-        ? (sourceRuntimeBlocked ? '已确认安全派生版' : '已确认安全处理')
-        : (sourceRuntimeBlocked ? '确认创建安全派生版' : '确认禁用 / 降级处理')
-    );
-    button.disabled = acknowledged;
-    button.dataset.storyCompatibilityAck = 'true';
-    row.append(createElement('span', copy), button);
-    return row;
-  }
-
-  function approveScript(contentHash) {
-    // 废弃手动审批
+  function toggleExecutionMode(requestedMode) {
+    const readiness = getReadiness();
+    const review = readiness.compatibilityReview;
+    if (!review?.fingerprint) return;
+    const current = createCustomStoryCompatibilityReview(state.customStoryDraft.compatibilityReview);
+    const executionMode = ['local-observe', 'compatibility-probe', 'review-required'].includes(requestedMode)
+      ? requestedMode
+      : current.executionMode === 'review-required' ? 'local-observe' : 'review-required';
+    const message = executionMode === 'compatibility-probe'
+      ? '启用开发兼容探针？\n\n它会在隔离 iframe 中开放外部资源、网络、表单、嵌套页面与 Worker，用于本地验证酒馆角色卡。第三方内容可能读取受限渲染上下文并上传到网络；不会获得主页面、存档、Provider 密钥或本机命令权限。'
+      : executionMode === 'local-observe'
+        ? '启用本地探索运行？脚本仍仅在无网络、无宿主数据权限的隔离沙箱执行，启动与错误会记录到本地审计。'
+        : '切换为严格逐项审批？未逐项授权的脚本将不再执行。';
+    if (!confirmAction(message)) return;
+    state.customStoryDraft.compatibilityReview = createCustomStoryCompatibilityReview({
+      fingerprint: review.fingerprint,
+      scriptReviews: current.fingerprint === review.fingerprint ? current.scriptReviews : [],
+      executionMode,
+      acknowledgeCompatibility: current.fingerprint === review.fingerprint
+        ? current.acknowledgeCompatibility
+        : false,
+      acknowledgeDeveloperRisk: executionMode === 'compatibility-probe'
+    });
+    persistDraft();
+    renderReadiness();
   }
 
   function acknowledgeCompatibility() {
@@ -170,13 +181,17 @@ export function createCustomStoryApprovalController({
     if (!confirmAction(
       sourceRuntimeBlocked
         ? `确认创建安全派生版？\n\n将禁用 ${Number(counts.missing || 0)} 项源运行时能力并保留可安全运行的角色、世界书和 Prompt。原资源保持只读，禁用项写入本地组装记录。`
-        : `确认按安全兼容策略创建？\n\n降级能力 ${Number(counts.degraded || 0)} 项。未知第三方代码仍保持禁用，并记录到本地审计。`
+        : `确认按安全兼容策略创建？\n\n降级能力 ${Number(counts.degraded || 0)} 项。可隔离脚本会以本地观察模式运行并记录；无法隔离的未知代码仍保持禁用。`
     )) return;
     const current = createCustomStoryCompatibilityReview(state.customStoryDraft.compatibilityReview);
     state.customStoryDraft.compatibilityReview = createCustomStoryCompatibilityReview({
       fingerprint: review.fingerprint,
-      approvedScriptHashes: current.fingerprint === review.fingerprint ? current.approvedScriptHashes : [],
-      acknowledgeCompatibility: true
+      scriptReviews: current.fingerprint === review.fingerprint ? current.scriptReviews : [],
+      executionMode: current.executionMode,
+      acknowledgeCompatibility: true,
+      acknowledgeDeveloperRisk: current.fingerprint === review.fingerprint
+        ? current.acknowledgeDeveloperRisk
+        : false
     });
     persistDraft();
     renderReadiness();
@@ -192,10 +207,6 @@ export function createCustomStoryApprovalController({
     const button = createElement('button', label);
     button.type = 'button';
     return button;
-  }
-
-  function riskLabel(level) {
-    return { high: '高风险', medium: '中风险', low: '低风险' }[level] || '待人工判断';
   }
 
   return { bindEvents, render };

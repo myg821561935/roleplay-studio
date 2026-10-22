@@ -9,6 +9,7 @@ import {
   createCustomStoryApprovalController,
   createCustomStoryCompatibilityReview
 } from './customStoryCompatibilityReview.js';
+import { normalizeScriptExecutionMode } from './customStoryCompatibilityReviewState.js';
 import {
   getCustomStoryInteractionReview,
   renderCustomStoryConflictSummary
@@ -533,11 +534,16 @@ export function createCustomStoryBuilderController({
       request.compatibilityReview = inspectedReview?.fingerprint
         ? createCustomStoryCompatibilityReview({
             fingerprint: inspectedReview.fingerprint,
-            approvedScriptHashes: (Array.isArray(inspectedReview.rules) ? inspectedReview.rules : [])
-              .map((rule) => String(rule?.contentHash || ''))
-              .filter(Boolean),
+            // 审批不可由前端根据预检结果自动补全；只提交用户对当前
+            // scriptId + contentHash 明确留下的结论，后端会再次校验。
+            scriptReviews: savedReview.fingerprint === inspectedReview.fingerprint
+              ? savedReview.scriptReviews
+              : [],
+            executionMode: savedReview.executionMode,
             acknowledgeCompatibility: savedReview.fingerprint === inspectedReview.fingerprint
-              && savedReview.acknowledgeCompatibility
+              && savedReview.acknowledgeCompatibility,
+            acknowledgeDeveloperRisk: savedReview.fingerprint === inspectedReview.fingerprint
+              && savedReview.acknowledgeDeveloperRisk
           })
         : savedReview;
     }
@@ -795,13 +801,21 @@ export function createCustomStoryBuilderController({
       compatibilityReview?.fingerprint
       && savedCompatibilityReview.fingerprint === compatibilityReview.fingerprint
     );
-    const approvedScriptHashes = new Set(
-      reviewFingerprintMatches ? savedCompatibilityReview.approvedScriptHashes : []
-    );
     const compatibilityRules = Array.isArray(compatibilityReview?.rules)
       ? compatibilityReview.rules
       : [];
-    const pendingScriptRules = []; // 沙箱执行，无需审批
+    const reviewedRules = reviewFingerprintMatches
+      ? new Map(savedCompatibilityReview.scriptReviews.map((item) => [
+        `${item.scriptId}:${item.contentHash}`,
+        item
+      ]))
+      : new Map();
+    const scriptExecutionMode = normalizeScriptExecutionMode(savedCompatibilityReview.executionMode);
+    const pendingScriptRules = compatibilityReview?.requiresScriptApproval && scriptExecutionMode === 'review-required'
+      ? compatibilityRules.filter((rule) => !reviewedRules.has(
+        `${String(rule.scriptId || '')}:${String(rule.contentHash || '')}`
+      ))
+      : [];
     const compatibilityAcknowledgementPending = Boolean(
       compatibilityReview?.requiresCompatibilityAcknowledgement
       && !(reviewFingerprintMatches && savedCompatibilityReview.acknowledgeCompatibility)
@@ -952,7 +966,11 @@ export function createCustomStoryBuilderController({
                   : runtimeCompatibility.degraded
                     ? '兼容降级已确认，未知能力保持禁用'
                     : runtimeCompatibility.review
-                      ? `${compatibilityRules.length} 个脚本已绑定内容哈希`
+                      ? scriptExecutionMode === 'review-required'
+                        ? `${compatibilityRules.length} 个脚本等待逐项确认`
+                        : scriptExecutionMode === 'compatibility-probe'
+                          ? `${compatibilityRules.length} 个脚本将以开发兼容探针运行并记录`
+                          : `${compatibilityRules.length} 个脚本将以本地观察模式运行并记录`
                       : '所选素材均可原生装配',
         tone: pendingScriptRules.length || compatibilityAcknowledgementPending || composition.status === 'error'
           ? 'blocked'
@@ -968,14 +986,18 @@ export function createCustomStoryBuilderController({
     else if (baseBlocked || blockingIssues.length) guidance = `存在 ${Number(basePack?.compatibility?.blockingCount || 0) + blockingIssues.length} 个阻断项，请先修复后再创建。`;
     else if (promptSelectionNeedsConfirmation) guidance = `检测到草稿保留的 ${selectedPromptGroups.length} 个 Prompt / 预设。请在第 4 步重新勾选确认，避免把上一角色的规则带入当前剧本。`;
     else if (!inspectionReady && composition.status === 'error') guidance = `组装前兼容预检失败：${composition.error || '未知错误'}。请重试后再创建。`;
-    else if (!inspectionReady) guidance = '正在执行组装前兼容预检；创建按钮会在预检完成且审批通过后开放。';
+    else if (!inspectionReady) guidance = '正在执行组装前兼容预检；预检完成后即可创建，严格模式下还需完成逐项确认。';
     else if (compatibilityAcknowledgementPending && sourceRuntimeBlocked) guidance = `原资源依赖 ${runtimeCompatibility.missing} 项当前无法直接运行的扩展能力。可确认创建安全派生版：保留角色、世界书和 Prompt，明确禁用这些能力；若它本身是完整网页，请改走重前端导入。`;
     else if (compatibilityAcknowledgementPending) guidance = '检测到需要安全降级的扩展能力。请确认接受兼容处理后再创建剧本。';
     else if (sourceRuntimeBlocked) guidance = `将创建安全派生版，并记录被禁用的 ${runtimeCompatibility.missing} 项源运行时能力；原社区资源保持只读。`;
     else if (interactionConflicts.length) guidance = `${interactionConflicts[0].message} 创建后仍可在工作台切换为导演 / 共创流；每轮运行时会按实时模式重新裁决。`;
     else if (missingFields.length) guidance = `角色卡可创建，但缺少：${missingFields.map((item) => item.label || item.field).join('、')}。这些字段将暂由模型与基线补足。`;
     else if (resourceMatching.low) guidance = `已选择 ${resourceMatching.low} 项与当前角色低匹配的世界书或预设。仍可创建，但建议确认题材冲突是否出于你的主动设计。`;
-    else if (runtimeCompatibility.review) guidance = `检测到 ${runtimeCompatibility.review} 项脚本能力。脚本默认禁用，完成人工审核、内容哈希绑定和本地审计后才可进入隔离沙箱。`;
+    else if (runtimeCompatibility.review) guidance = scriptExecutionMode === 'review-required'
+      ? `检测到 ${runtimeCompatibility.review} 项脚本能力。当前为严格模式，需完成内容哈希绑定的逐项确认后才会运行。`
+      : scriptExecutionMode === 'compatibility-probe'
+        ? `检测到 ${runtimeCompatibility.review} 项脚本能力。它们会在隔离 iframe 的开发兼容探针中运行并记录；外部资源与网络仅供本地调试，完成后应切回本地探索或严格审批。`
+        : `检测到 ${runtimeCompatibility.review} 项脚本能力。它们会在本地隔离沙箱中观察运行并记录；你可随时切换为严格逐项确认。`;
     else if (conflictCount) guidance = `检测到 ${conflictCount} 组潜在设定重叠。当前合并策略可以继续创建，也可先查看下方冲突摘要。`;
     else if (baseInheritanceMode === 'genre' && inspectedWorldBookCount === 0 && !worldBooks.length) guidance = '当前只继承题材规则，不继承基线固定剧情；如需具体世界设定，请在第 3 步选择世界书。';
     else if (worldBookStoredTokens > worldBookEstimatedTokens && worldBookEstimatedTokens > 0) guidance = `世界书原文共约 ${formatTokenCount(worldBookStoredTokens)} tokens，继续完整保存在本地；运行时按常驻、关键词与递归触发动态检索，每轮世界书最多注入 ${formatTokenCount(worldBookEstimatedTokens)} tokens。`;
@@ -1000,6 +1022,7 @@ export function createCustomStoryBuilderController({
       compatibilityReview,
       interactionReview,
       interactionConflicts,
+      scriptExecutionMode,
       pendingScriptRules,
       sourceRuntimeBlocked,
       compatibilityAcknowledgementPending,
@@ -1391,7 +1414,9 @@ export function createCustomStoryBuilderController({
     const charName = resolvedChar.title || card.name || '角色';
     const title = `${charName}之卷`;
 
-    const prompts = resources.filter(isPromptLibraryResource).slice(0, 3);
+    // Quick launch must not silently combine unrelated library presets.
+    const selectedIds = new Set(collectSelectedPromptResourceIds());
+    const prompts = resources.filter(resource => isPromptLibraryResource(resource) && selectedIds.has(resource.id));
     const preview = {
       kind: 'character-card',
       summary: {

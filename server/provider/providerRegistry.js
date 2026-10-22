@@ -5,19 +5,21 @@ import { callOpenAICompatible, streamOpenAICompatible } from './openaiCompatible
 export function buildProviderClient() {
   return {
     complete: ({ provider, messages, fetchImpl, tools, signal }) => callProvider({ provider, messages, fetchImpl, tools, signal }),
-    stream: ({ provider, messages, onToken, fetchImpl, signal }) => streamProvider({ provider, messages, onToken, fetchImpl, signal })
+    stream: ({ provider, messages, onToken, fetchImpl, signal, tools }) => streamProvider({ provider, messages, onToken, fetchImpl, signal, tools })
   };
 }
 
 async function callProvider({ provider, messages, fetchImpl = fetch, tools = null, signal = null }) {
   const kind = providerKind(provider);
+  if (tools?.length && kind !== 'openai-compatible') throw new Error('当前模型接口尚未支持工具调用，请使用 OpenAI 兼容接口或停用 MCP 工具。');
   if (kind === 'anthropic') return callAnthropic({ provider, messages, fetchImpl, signal });
   if (kind === 'gemini') return callGemini({ provider, messages, fetchImpl, signal });
   return callOpenAICompatible({ provider, messages, fetchImpl, tools, signal });
 }
 
-async function streamProvider({ provider, messages, onToken, fetchImpl = fetch, signal = null }) {
+async function streamProvider({ provider, messages, onToken, fetchImpl = fetch, signal = null, tools = null }) {
   const kind = providerKind(provider);
+  if (tools?.length && kind !== 'openai-compatible') throw new Error('当前模型接口尚未支持工具调用，请使用 OpenAI 兼容接口或停用 MCP 工具。');
   if (kind === 'anthropic') {
     return streamAnthropic({ provider, messages, onToken, fetchImpl, signal });
   }
@@ -25,7 +27,7 @@ async function streamProvider({ provider, messages, onToken, fetchImpl = fetch, 
     return streamGemini({ provider, messages, onToken, fetchImpl, signal });
   }
   if (kind === 'openai-compatible') {
-    return streamOpenAICompatible({ provider, messages, onToken, fetchImpl, signal });
+    return streamOpenAICompatible({ provider, messages, onToken, fetchImpl, signal, tools });
   }
 
   const result = await callProvider({ provider, messages, fetchImpl, signal });

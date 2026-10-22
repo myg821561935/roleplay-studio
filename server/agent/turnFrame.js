@@ -1,3 +1,5 @@
+import { actorPresenceEvents, continuityProse } from './sceneContinuity.js';
+import { currentNarrativeClauses } from '../lib/narrativeEvidence.js';
 export const NARRATIVE_TURN_FRAME_SPEC = 'lra.narrative-turn-frame/v1';
 
 // Providers occasionally normalize the documented <turn_frame> tag to
@@ -20,8 +22,8 @@ const TRUSTED_FACT_SOURCE = /(?:角色卡|character[- ]?card|世界书|world[- ]
 export function extractNarrativeTurnFrame(rawContent) {
   const source = String(rawContent || '');
   const blocks = [
-    ...source.matchAll(TURN_FRAME_PATTERN),
-    ...source.matchAll(TURN_FRAME_FENCE_PATTERN)
+    ...source.matchAll(/<turn[_-]?frame\b[^>]*>\s*([\s\S]*?)\s*<\/turn[_-]?frame\s*>/ig),
+    ...source.matchAll(/```lra-turn-frame\s*([\s\S]*?)```/ig)
   ];
   let frame = null;
   let error = null;
@@ -87,6 +89,8 @@ export function normalizeNarrativeTurnFrame(value) {
     stateDelta: {
       summary: text(stateDelta.summary, 320),
       facts: normalizeEvidence(stateDelta.facts),
+      foreshadowing: normalizeForeshadowing(stateDelta.foreshadowing),
+      characterKnowledge: normalizeCharacterKnowledge(stateDelta.characterKnowledge),
       timeAdvanceMinutes: numberOrNull(stateDelta.timeAdvanceMinutes)
     },
     panels: {
@@ -129,7 +133,7 @@ export function acceptNarrativeTurnFrame(frame, { consistencyValid = true } = {}
  * The result is only a navigation/interaction projection: it never promotes
  * prose guesses to canonical facts.
  */
-export function deriveConservativeNarrativeTurnFrame({ content, memory = {} } = {}) {
+export function deriveConservativeNarrativeTurnFrame({ content, userContent = '', memory = {} } = {}) {
   const source = String(content || '').replace(/\r/g, '').trim();
   if (!source) return null;
 
@@ -137,7 +141,7 @@ export function deriveConservativeNarrativeTurnFrame({ content, memory = {} } = 
   const presentActors = collectPresentActors(source, knownActors);
   const protagonistName = text(memory?.worldState?.protagonist?.name, 80);
   if (protagonistName && !presentActors.includes(protagonistName)) presentActors.unshift(protagonistName);
-  const location = resolveNarrativeLocation(source, memory);
+  const location = resolveNarrativeLocation(source, memory, userContent);
   const time = resolveNarrativeTime(source, memory);
   const decision = deriveNarrativeDecision(source, presentActors, protagonistName);
   const summary = deriveSceneSummary(source);
@@ -156,12 +160,13 @@ export function deriveConservativeNarrativeTurnFrame({ content, memory = {} } = 
 export function resolveNarrativeTurnFrame(frame, {
   consistencyValid = true,
   content = '',
+  userContent = '',
   memory = {}
 } = {}) {
   if (!consistencyValid) return acceptNarrativeTurnFrame(frame, { consistencyValid: false });
-  const fallback = deriveConservativeNarrativeTurnFrame({ content, memory });
+  const fallback = deriveConservativeNarrativeTurnFrame({ content, userContent, memory });
   const candidate = isRecord(frame)
-    ? reconcileNarrativeTurnFrame(frame, fallback, content)
+    ? reconcileNarrativeTurnFrame(frame, fallback, content, userContent, memory)
     : fallback;
   return acceptNarrativeTurnFrame(candidate, { consistencyValid: true });
 }
@@ -171,7 +176,9 @@ export function resolveNarrativeTurnFrame(frame, {
  * stay in the TurnFrame/current-act projection until normal fact extraction has
  * enough evidence to admit them into canonical world state.
  */
-export function buildTurnFrameStateEnvelope(frame, memory = {}, existingEnvelope = null, { content = '' } = {}) {
+export function buildTurnFrameStateEnvelope(frame, memory = {}, existingEnvelope = null, {
+  content = '', userContent = '', initializeInventory = false
+} = {}) {
   if (frame?.validation?.status !== 'accepted') return null;
   const location = text(frame?.scene?.location, 120);
   const currentLocation = resolveStoredLocation(memory);
@@ -179,6 +186,14 @@ export function buildTurnFrameStateEnvelope(frame, memory = {}, existingEnvelope
   const alreadyUpdatesLocation = existingActions
     .some((action) => action?.type === 'state.set' && action?.path === 'location.current');
   const actions = [];
+  if (initializeInventory && !memory?.worldState?.protagonist?.inventory?.length
+    && !existingActions.some(action => action?.path === 'protagonist' || action?.path?.startsWith('protagonist.inventory'))) {
+    const inventory = openingInventory(userContent, memory?.worldState?.protagonist?.name);
+    if (inventory.length) actions.push({
+      type: 'state.set', path: 'protagonist.inventory', value: inventory,
+      visibility: 'public', reason: '玩家在开场明确声明的随身物品，尚无既有库存'
+    });
+  }
   if (location && location !== currentLocation && !alreadyUpdatesLocation) {
     actions.push({
       type: 'state.set',
@@ -195,12 +210,25 @@ export function buildTurnFrameStateEnvelope(frame, memory = {}, existingEnvelope
   return {
     spec: 'lra.action/v1',
     actorId: 'narrator',
-    summary: actions.length === 1 && actions[0].type === 'state.set'
+    summary: actions.length === 1 && actions[0].path === 'location.current'
       ? `同步本轮明确地点：${location}`
       : '同步本轮正文已经明确落地的状态',
     baseRevision: null,
     actions
   };
+}
+
+function openingInventory(content, protagonist) {
+  const names = [protagonist, '我', '你', '她', '他'].filter(Boolean).map(escapeRegExp).join('|');
+  for (const clause of currentNarrativeClauses(content)) {
+    const match = clause.match(new RegExp(`(?:${names})(?:随身)?(?:带着|携带|带有|带了|有)\\s*([^，。！？；：\\n]{1,240})`, 'u'));
+    if (!match || /(?:给|交|递|取出|放|吃|用掉|失去|丢|花掉)/u.test(match[1])) continue;
+    const items = match[1].split(/[、,]|以及|和|与/u).map(item => item.trim()).filter(Boolean);
+    // Only explicit short inventories are supported. Do not turn an arbitrary
+    // opening description into possessions or infer later acquisitions.
+    if (items.length >= 2 && items.length <= 16 && items.every(item => item.length <= 48)) return items;
+  }
+  return [];
 }
 
 export function turnFrameAllowsFactAdmission(frame) {
@@ -269,7 +297,7 @@ function blockedFactAdmission() {
   return { status: 'blocked', groundedFactCount: 0, candidateFactCount: 0 };
 }
 
-function reconcileNarrativeTurnFrame(frame, fallback, content) {
+function reconcileNarrativeTurnFrame(frame, fallback, content, userContent, memory) {
   if (!isRecord(fallback)) return frame;
   const next = structuredClone(frame);
   const modelDecision = isRecord(next.decision) ? next.decision : {};
@@ -286,8 +314,10 @@ function reconcileNarrativeTurnFrame(frame, fallback, content) {
 
   const modelActors = Array.isArray(next?.scene?.presentActors) ? next.scene.presentActors : [];
   if (next.scene) {
-    next.scene.presentActors = strings([...modelActors, ...fallback.scene.presentActors], 12, 80);
-    if (!next.scene.location || hasExplicitMovementToLocation(content, fallback.scene.location)) {
+    const actors = strings([...modelActors, ...fallback.scene.presentActors], 12, 80);
+    next.scene.presentActors = actors.filter(name => actorPresenceEvents(content, name, actors).at(-1)?.status !== 'departed');
+    if (!next.scene.location || explicitPlayerDestination(content, memory)
+      || (explicitPlayerDestination(userContent, memory, true) && !hasBlockedArrival(content))) {
       next.scene.location = fallback.scene.location;
     }
     // The simulation clock is authoritative. A prose-derived label is used
@@ -301,14 +331,6 @@ function reconcileNarrativeTurnFrame(frame, fallback, content) {
       : text(next?.validation?.source, 80) || 'model-turn-frame'
   };
   return next;
-}
-
-function hasExplicitMovementToLocation(content, location) {
-  const source = String(content || '').slice(-1800);
-  const target = text(location, 120);
-  if (!source || !target) return false;
-  return new RegExp(`(?:来到|走到|行至|抵达|回到|进入|进到|停在|站在|坐在|跪在|藏进|躲进|走向|朝(?:着)?|往)[^，。！？；：\\n]{0,32}${escapeRegExp(target)}`, 'u').test(source)
-    || new RegExp(`${escapeRegExp(target)}[^，。！？；：\\n]{0,20}(?:到了|停下|站定|坐下|跪下|藏好|躲好)`, 'u').test(source);
 }
 
 function collectKnownActors(memory) {
@@ -330,49 +352,50 @@ function collectKnownActors(memory) {
 }
 
 function collectPresentActors(source, knownActors) {
-  const closing = source.slice(-1800);
+  const closing = continuityProse(source).slice(-1800);
   return knownActors
     .filter((name) => closing.includes(name))
-    .filter((name) => !new RegExp(`${escapeRegExp(name)}.{0,18}(?:已离开|离去了|走远|退场|不在场)`, 'u').test(closing))
+    .filter((name) => actorPresenceEvents(source, name, knownActors).at(-1)?.status !== 'departed')
     .slice(0, 12);
 }
 
-function resolveNarrativeLocation(source, memory) {
-  // Movement often appears at the start of a long standard turn while the
-  // closing paragraphs contain only the interaction that follows it.
-  const closing = source.slice(-6000);
-  const candidates = collectKnownLocations(memory)
-    .map((label) => ({ label, index: closing.lastIndexOf(label) }))
-    .filter((entry) => entry.index >= 0)
-    .sort((left, right) => right.index - left.index);
-  const movedTo = [...closing.matchAll(/(?:来到|走到|行至|抵达|回到|进入|进到|停在|站在|坐在|跪在|藏进|躲进|走向|朝(?:着)?|往)\s*([^，。！？；：\n]{1,28})/gu)]
-    .reverse()
-    .map((movement) => cleanMovementLocation(movement?.[1]))
-    .find(Boolean);
-  if (movedTo) return movedTo;
-  if (candidates[0]?.label) return candidates[0].label;
-  return resolveStoredLocation(memory);
+function resolveNarrativeLocation(source, memory, userContent = '') {
+  return explicitPlayerDestination(source, memory)
+    || (!hasBlockedArrival(source) && explicitPlayerDestination(userContent, memory, true))
+    || resolveStoredLocation(memory);
 }
 
-function collectKnownLocations(memory) {
-  const location = memory?.worldState?.location;
-  const values = [
-    location?.current,
-    location?.name,
-    location?.title,
-    ...(Array.isArray(location?.knownPlaces) ? location.knownPlaces : []),
-    memory?.characterRegistry?.currentAct?.location,
-    ...(Array.isArray(memory?.worldState?.characters) ? memory.worldState.characters.map((entry) => entry?.location) : []),
-    ...(Array.isArray(memory?.simulation?.actors) ? memory.simulation.actors.map((entry) => entry?.location) : [])
-  ];
-  return strings(values, 40, 120).sort((left, right) => right.length - left.length);
+function hasBlockedArrival(source) {
+  return /(?:未能|没能|无法|尚未|还没)(?:[^。！？\n]{0,8})(?:抵达|回到|走到|进入|到达)|(?:被|把你|将你)[^。！？\n]{0,12}(?:拦住|拦下|挡住)/u.test(continuityProse(source));
+}
+
+function explicitPlayerDestination(source, memory, userAction = false) {
+  const protagonist = text(memory?.worldState?.protagonist?.name, 80);
+  const others = collectKnownActors(memory).filter(name => name !== protagonist);
+  const destinations = [];
+  for (const sentence of currentNarrativeClauses(source).slice(-30)) {
+    for (const movement of sentence.matchAll(/(?:来到|走到|行至|抵达|回到|进入|进到|停在|站在|坐在|跪在|藏进|躲进)\s*([^，。！？；：\n]{1,28})/gu)) {
+      const prefix = sentence.slice(0, movement.index);
+      // Do not relocate the player when they observe somebody else moving.
+      if (/(?:目送|看着|看见|看向|望着|望见|听见|让|叫|请|派)/u.test(prefix)) continue;
+      const subjects = [protagonist, '我', '你', ...others].filter(Boolean)
+        .map(name => ({ name, index: prefix.lastIndexOf(name) }))
+        .filter(item => item.index >= 0).sort((a, b) => b.index - a.index);
+      if (!subjects.length && !userAction) continue;
+      if (subjects[0] && others.includes(subjects[0].name)
+        && !(protagonist && prefix.includes(protagonist) && /跟着|随着|一同|一起/u.test(prefix))) continue;
+      const place = cleanMovementLocation(movement[1]);
+      if (place) destinations.push(place);
+    }
+  }
+  return destinations.at(-1) || '';
 }
 
 function resolveStoredLocation(memory) {
   const location = memory?.worldState?.location;
   return text(
-    memory?.characterRegistry?.currentAct?.location
-      || location?.current
+    location?.current
+      || memory?.characterRegistry?.currentAct?.location
       || location?.name
       || location?.title
       || location?.label
@@ -416,7 +439,7 @@ function cleanMovementLocation(value) {
     .replace(/(?:的时候|之时|之际|以后|之后|时).*$/u, '')
     .replace(/(?:附近|近旁|边上|旁边|边|旁|前|后|里面|里|中|下|上)$/u, '')
     .trim();
-  const place = candidate.match(/[\p{Script=Han}]{1,16}(?:井台|井边|槐树|院子|院|屋|房|门|庭|廊|道|山|林|殿|阁|楼|室|街|巷|田|洞|谷|坡|台|场|河|岸|桥|城|镇|村|宗|寺|观|坊|园|牢|塔|营|船|车)$/u)?.[0] || '';
+  const place = candidate.match(/[\p{Script=Han}]{1,16}(?:井台|井边|槐树|院子|院|屋|房|门|庭|廊|道|山|林|殿|阁|楼|室|街|巷|田|洞|谷|坡|台|场|河|岸|桥|城|镇|村|宗|寺|观|坊|园|牢|塔|营|船|车|铺|摊|店)$/u)?.[0] || '';
   if (!place || /(?:哪里|那里|这里|什么|方向)$/u.test(place)) return '';
   return place;
 }
@@ -530,4 +553,38 @@ function compactRecord(value) {
 
 function isRecord(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeForeshadowing(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      if (!isRecord(item)) return null;
+      const content = text(item.content || item.text, 240);
+      if (!content) return null;
+      return {
+        id: text(item.id, 80) || `hook-${Math.random().toString(16).slice(2, 8)}`,
+        content,
+        targetEntity: text(item.targetEntity || item.entity, 80),
+        status: ['open', 'resolved', 'abandoned'].includes(String(item.status || ''))
+          ? String(item.status)
+          : 'open'
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 10);
+}
+
+function normalizeCharacterKnowledge(records) {
+  if (!isRecord(records)) return {};
+  const result = {};
+  for (const [name, data] of Object.entries(records)) {
+    const cleanName = text(name, 80);
+    if (!cleanName || !isRecord(data)) continue;
+    result[cleanName] = {
+      knownFacts: strings(data.knownFacts, 10, 160),
+      secretBoundaries: strings(data.secretBoundaries, 10, 160)
+    };
+  }
+  return result;
 }

@@ -1,3 +1,4 @@
+import { APP_VERSION, RELEASE_CHANNEL } from '../server/releaseInfo.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -35,6 +36,7 @@ test('POST /api/sessions/:id/prompt-preview exposes the assembled local request 
 
   assert.equal(response.status, 200);
   assert.ok(payload.tokenEstimate > 0);
+  assert.ok(payload.promptStudio.changes.some(row => row.source === '当前输入'));
   assert.ok(Array.isArray(payload.promptStudio.blocks));
   assert.ok(Array.isArray(payload.promptStudio.modules));
   assert.equal(payload.promptStudio.integrity.status, 'complete');
@@ -252,7 +254,7 @@ test('light frontend MVU API applies revisioned declarative patches', async () =
   assert.equal(conflict.json().error, 'MVU_REVISION_CONFLICT');
 });
 
-test('third-party scripts require hash-bound review and keep a local execution audit', async () => {
+test('third-party scripts observe locally by default and strict mode keeps hash-bound execution audit', async () => {
   const app = createApp({ rootDir: await createTestRoot() });
   const initialRule = {
     id: 'community-status-script',
@@ -279,6 +281,46 @@ test('third-party scripts require hash-bound review and keep a local execution a
       contentHash: appliedRule.contentHash,
       status: 'launched',
       messageId: 'message-before-review'
+    }
+  });
+  const probeWithoutAcknowledgement = await request(app, {
+    method: 'PUT',
+    url: '/api/sessions/main/script-policy',
+    headers: { 'content-type': 'application/json' },
+    body: { executionMode: 'compatibility-probe' }
+  });
+  const probeModeResponse = await request(app, {
+    method: 'PUT',
+    url: '/api/sessions/main/script-policy',
+    headers: { 'content-type': 'application/json' },
+    body: { executionMode: 'compatibility-probe', acknowledgeDeveloperRisk: true }
+  });
+  const probeExecution = await request(app, {
+    method: 'POST',
+    url: '/api/sessions/main/script-executions',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      scriptId: appliedRule.id,
+      contentHash: appliedRule.contentHash,
+      status: 'loaded',
+      messageId: 'message-compatibility-probe'
+    }
+  });
+  const strictModeResponse = await request(app, {
+    method: 'PUT',
+    url: '/api/sessions/main/script-policy',
+    headers: { 'content-type': 'application/json' },
+    body: { executionMode: 'review-required' }
+  });
+  const strictExecution = await request(app, {
+    method: 'POST',
+    url: '/api/sessions/main/script-executions',
+    headers: { 'content-type': 'application/json' },
+    body: {
+      scriptId: appliedRule.id,
+      contentHash: appliedRule.contentHash,
+      status: 'launched',
+      messageId: 'message-strict-before-review'
     }
   });
   const reviewResponse = await request(app, {
@@ -309,13 +351,23 @@ test('third-party scripts require hash-bound review and keep a local execution a
 
   assert.equal(applyResponse.status, 200);
   assert.match(appliedRule.contentHash, /^sha256:[a-f0-9]{64}$/);
-  assert.equal(unreviewedExecution.status, 409);
-  assert.equal(unreviewedExecution.json().error, 'SCRIPT_REVIEW_REQUIRED');
+  assert.equal(unreviewedExecution.status, 200);
+  assert.equal(unreviewedExecution.json().execution.permissionSource, 'local-observe');
+  assert.equal(probeWithoutAcknowledgement.status, 400);
+  assert.equal(probeWithoutAcknowledgement.json().error, 'SCRIPT_DEVELOPER_MODE_ACK_REQUIRED');
+  assert.equal(probeModeResponse.status, 200);
+  assert.equal(probeModeResponse.json().governance.executionMode, 'compatibility-probe');
+  assert.equal(probeExecution.status, 200);
+  assert.equal(probeExecution.json().execution.permissionSource, 'compatibility-probe');
+  assert.equal(strictModeResponse.status, 200);
+  assert.equal(strictModeResponse.json().governance.executionMode, 'review-required');
+  assert.equal(strictExecution.status, 409);
+  assert.equal(strictExecution.json().error, 'SCRIPT_EXECUTION_BLOCKED');
   assert.equal(reviewResponse.status, 200);
   assert.equal(reviewed.review.decision, 'approved');
   assert.deepEqual(reviewed.governance.trustedScriptIds, [appliedRule.id]);
   assert.equal(executionResponse.status, 200);
-  assert.equal(auditResponse.json().executions[0].messageId, 'message-after-review');
+  assert.equal(auditResponse.json().executions.at(-1).messageId, 'message-after-review');
 
   const changedResponse = await request(app, {
     method: 'POST',
@@ -610,6 +662,49 @@ test('PUT /api/character-card rejects non-object payload', async () => {
 
   assert.equal(response.status, 400);
   assert.deepEqual(payload, { error: 'INVALID_CHARACTER_CARD' });
+});
+
+test('PUT /api/character-presets/apply replaces the complete session bundle atomically', async () => {
+  const app = createApp({ rootDir: await createTestRoot() });
+  const headers = { 'content-type': 'application/json' };
+  const bundle = {
+    characterCard: { name: '望舒', description: '收藏角色' },
+    worldBook: [{ id: 'lore-1', title: '望舒仙市', content: '仙市规则' }],
+    promptModules: [{ id: 'prompt-1', title: '因果约束', content: '保持因果一致。', enabled: true }]
+  };
+
+  const applied = await request(app, {
+    method: 'PUT',
+    url: '/api/character-presets/apply',
+    headers,
+    body: { sessionId: 'main', ...bundle }
+  });
+  const stateAfterApply = (await request(app, { url: '/api/state?sessionId=main' })).json();
+
+  assert.equal(applied.status, 200);
+  assert.deepEqual(applied.json(), bundle);
+  assert.deepEqual(stateAfterApply.config.characterCard, bundle.characterCard);
+  assert.deepEqual(stateAfterApply.config.worldBook, bundle.worldBook);
+  assert.deepEqual(stateAfterApply.config.promptModules, bundle.promptModules);
+
+  const rejected = await request(app, {
+    method: 'PUT',
+    url: '/api/character-presets/apply',
+    headers,
+    body: {
+      sessionId: 'main',
+      characterCard: { name: '不应写入' },
+      worldBook: { invalid: true },
+      promptModules: []
+    }
+  });
+  const stateAfterReject = (await request(app, { url: '/api/state?sessionId=main' })).json();
+
+  assert.equal(rejected.status, 400);
+  assert.deepEqual(rejected.json(), { error: 'INVALID_WORLD_BOOK' });
+  assert.deepEqual(stateAfterReject.config.characterCard, bundle.characterCard);
+  assert.deepEqual(stateAfterReject.config.worldBook, bundle.worldBook);
+  assert.deepEqual(stateAfterReject.config.promptModules, bundle.promptModules);
 });
 
 test('POST /api/character-card/import saves Character Card V2 and imports character book', async () => {
@@ -1741,10 +1836,12 @@ test('custom story composition API blocks the source runtime and records an appr
       compatibilityReview: {
         fingerprint: review.fingerprint,
         approvedScriptHashes: [],
+        executionMode: 'local-observe',
         acknowledgeCompatibility: true
       }
     }
   });
+  assert.equal(approvedResponse.status, 200);
   const approvedPack = approvedResponse.json().pack;
   const record = approvedPack.resourceManifest.composition.compatibilityReview;
   const project = (await request(app, {
@@ -1774,7 +1871,7 @@ test('custom story composition API blocks the source runtime and records an appr
   assert.equal(unapprovedResponse.json().error, 'RESOURCE_PACK_REVIEW_REQUIRED');
   assert.equal(approvedResponse.status, 200);
   assert.equal(record.contractVersion, 2);
-  assert.equal(record.status, 'safe-derivative-approved');
+  assert.equal(record.status, 'safe-derivative-local-observe');
   assert.ok(record.disabledCapabilities.some((item) => item.id === 'tavern-helper'));
   assert.equal(healthResponse.status, 200);
   assert.equal(compatibilityHealth.status, 'warning');
@@ -2057,7 +2154,7 @@ test('v0.2.2 plugin manifest preview installs declarative adapters and blocks ex
     id: 'community.rain-night',
     version: '1.0.0',
     name: '雨夜适配',
-    engine: '>=0.2.2 <1.0.0',
+    engine: '>=0.2.2 <2.0.0',
     adapters: [{
       id: 'rain-night-lore',
       label: '雨夜世界书',
@@ -2141,7 +2238,7 @@ test('v0.2.2 imports, exports and applies a versioned content pack bundle', asyn
   assert.equal(applied.json().characterCard.name, '沈观澜');
 });
 
-test('content pack bundle scripts require hash-bound review before installation', async () => {
+test('strict content-pack mode requires hash-bound review before installation', async () => {
   const app = createApp({ rootDir: await createTestRoot() });
   const bundle = createContentPackBundlePayload();
   bundle.manifest.id = 'community.reviewed-panel';
@@ -2170,7 +2267,15 @@ test('content pack bundle scripts require hash-bound review before installation'
     method: 'POST',
     url: '/api/import/commit',
     headers: { 'content-type': 'application/json' },
-    body: { payload }
+    body: {
+      payload,
+      compatibilityReview: {
+        fingerprint: review.fingerprint,
+        executionMode: 'review-required',
+        scriptReviews: [],
+        acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
+      }
+    }
   });
   const approved = await request(app, {
     method: 'POST',
@@ -2180,7 +2285,13 @@ test('content pack bundle scripts require hash-bound review before installation'
       payload,
       compatibilityReview: {
         fingerprint: review.fingerprint,
-        approvedScriptHashes: review.rules.map((rule) => rule.contentHash),
+        executionMode: 'review-required',
+        scriptReviews: review.rules.map((rule) => ({
+          scriptId: rule.scriptId,
+          contentHash: rule.contentHash,
+          decision: 'approved',
+          note: '已核对脚本来源、内容哈希与运行风险。'
+        })),
         acknowledgeCompatibility: review.requiresCompatibilityAcknowledgement
       }
     }
@@ -2190,7 +2301,7 @@ test('content pack bundle scripts require hash-bound review before installation'
   assert.equal(review.requiresScriptApproval, true);
   assert.equal(review.rules.length, 1);
   assert.equal(rejected.status, 409);
-  assert.equal(rejected.json().error, 'RESOURCE_PACK_REVIEW_REQUIRED');
+  assert.equal(rejected.json().error, 'RESOURCE_PACK_SCRIPT_APPROVAL_REQUIRED');
   assert.equal(approved.status, 200);
   assert.equal(
     approved.json().pack.resourceManifest.composition.compatibilityReview.status,
@@ -2845,8 +2956,8 @@ test('GET /api/health returns ok', async () => {
   assert.deepEqual(payload, {
     ok: true,
     app: 'local-roleplay-agent',
-    version: '0.6.0-rc.1',
-    releaseChannel: 'release-candidate-local',
+    version: APP_VERSION,
+    releaseChannel: RELEASE_CHANNEL,
     dataSchemaVersion: 3,
     targetDataSchemaVersion: 3
   });
@@ -3171,6 +3282,8 @@ test('POST /api/chat/stream returns SSE chunks and persists the turn', async () 
   assert.match(response.text, /流式回应/);
   assert.match(response.text, /event: phase/);
   assert.match(response.text, /"phase":"finalizing"/);
+  assert.match(response.text, /event: turn/);
+  assert.match(response.text, /lra\.turn-view-snapshot\/v1/);
   assert.match(response.text, /event: done/);
   assert.equal(state.session.messages.length, 2);
   assert.equal(state.session.messages[1].content, '流式回应：我拔刀。');
@@ -3356,6 +3469,51 @@ test('PUT /api/memory/facts saves normalized memory facts', async () => {
   assert.equal(payload.facts[0].title, '名刀雪照');
   assert.equal(payload.facts[0].enabled, false);
   assert.equal(state.session.memory.memoryCards[0].content, '沈观澜持有名刀雪照。');
+});
+
+test('core memory and V3 character-card export are available from the active session', async () => {
+  const app = createApp({ rootDir: await createTestRoot() });
+  const headers = { 'content-type': 'application/json' };
+
+  const savedCard = await request(app, {
+    method: 'PUT',
+    url: '/api/character-card',
+    headers,
+    body: {
+      sessionId: 'main',
+      characterCard: {
+        name: '沈观澜',
+        description: '谨慎的杂役弟子',
+        sourceSpec: 'chara_card_v3'
+      }
+    }
+  });
+  assert.equal(savedCard.status, 200);
+
+  const savedMemory = await request(app, {
+    method: 'PUT',
+    url: '/api/memory/core',
+    headers,
+    body: {
+      sessionId: 'main',
+      coreMemory: {
+        personaView: '先隐忍观察，再作出选择',
+        activeCommitments: ['查明石板下的秘密'],
+        coreDirectives: ['不违背已确认的世界事实']
+      }
+    }
+  });
+  assert.equal(savedMemory.status, 200);
+  assert.equal(savedMemory.json().coreMemory.personaView, '先隐忍观察，再作出选择');
+
+  const exported = await request(app, { url: '/api/character-card/export-v3?sessionId=main' });
+  assert.equal(exported.status, 200);
+  assert.equal(exported.json().characterCard.spec, 'chara_card_v3');
+  assert.equal(exported.json().characterCard.data.name, '沈观澜');
+  assert.deepEqual(
+    exported.json().characterCard.data.extensions.local_roleplay_agent.coreMemory.activeCommitments,
+    ['查明石板下的秘密']
+  );
 });
 
 test('PUT /api/memory/facts rejects non-array facts', async () => {
@@ -3788,7 +3946,7 @@ function createContentPackBundlePayload() {
       version: '1.1.0',
       title: '听雨仙途',
       description: '雨夜旧案与仙门因果。',
-      engine: '>=0.2.2 <1.0.0',
+      engine: '>=0.2.2 <2.0.0',
       dependencies: [{ kind: 'plugin', id: 'core.character-card-v2', range: '^1.0.0', scope: 'runtime' }],
       capabilities: ['character', 'worldbook', 'prompt', 'rule-system']
     },
@@ -3823,3 +3981,67 @@ function createChunk(type, data) {
     Buffer.alloc(4)
   ]);
 }
+
+
+test('comparison preview freezes one session, reports both modes and never persists preview settings', async () => {
+  const app = createApp({ rootDir: await createTestRoot() });
+  const before = (await request(app, { url: '/api/state' })).json().session;
+  const response = await request(app, { method: 'POST', url: '/api/sessions/main/prompt-preview', headers: { 'content-type': 'application/json' }, body: { content: '原地等待', compareModes: true } });
+  assert.equal(response.status, 200);
+  const bundle = response.json().comparison;
+  assert.deepEqual(bundle.variants.map(v => v.mode), ['faithful', 'enhanced']);
+  assert.ok(bundle.variants.every(v => v.status === 'ready' || v.status === 'blocked'));
+  assert.equal(bundle.evaluation.status, 'not-run');
+  assert.equal(bundle.reference.messages, null);
+  const after = (await request(app, { url: '/api/state' })).json().session;
+  assert.deepEqual(after.settings, before.settings);
+  assert.deepEqual(after.messages, before.messages);
+});
+
+test('independent enhancements survive settings normalization and readback', async () => {
+  const app = createApp({ rootDir: await createTestRoot() });
+  const agentEnhancements = { memoryRecall: false, npcSimulation: false, plotGuidance: false, actionSuggestions: true };
+  const response = await request(app, { method: 'PUT', url: '/api/session/settings', headers: { 'content-type': 'application/json' }, body: { sessionId: 'main', settings: { agentEnhancements } } });
+  assert.equal(response.status, 200);
+  const after = (await request(app, { url: '/api/state' })).json().session;
+  assert.deepEqual(after.settings.agentEnhancements, agentEnhancements);
+});
+
+test('history repair API previews, creates an isolated readable copy and rejects a stale source', async () => {
+  const rootDir = await createTestRoot();
+  const app = createApp({ rootDir });
+  const source = { id: 'repair-source', title: '原稿', settings: { maxPromptTokens: 8000 }, memory: {}, messages: [{ id: 'u', role: 'user', content: '我问路。' }, { id: 'a', role: 'assistant', content: '你站在桥边。“你找谁？”她问。' }] };
+  await mkdir(path.join(rootDir, 'data/sessions'), { recursive: true });
+  const sourcePath = path.join(rootDir, 'data/sessions/repair-source.json');
+  await writeFile(sourcePath, JSON.stringify(source));
+  const post = (action, body) => request(app, { method: 'POST', url: `/api/sessions/repair-source/history-repair/${action}`, headers: { 'content-type': 'application/json' }, body });
+  const preview = await post('preview', { playerName: '刘一' });
+  assert.equal(preview.status, 200);
+  const plan = preview.json().plan;
+  assert.equal(plan.changes[0].after, '刘一站在桥边。“你找谁？”她问。');
+  const applied = await post('apply', { playerName: plan.playerName, sourceHash: plan.sourceHash });
+  assert.equal(applied.status, 200);
+  const id = applied.json().copy.id;
+  const copy = JSON.parse(await readFile(path.join(rootDir, `data/sessions/${id}.json`), 'utf8'));
+  assert.equal(copy.messages[1].content, plan.changes[0].after);
+  assert.deepEqual(JSON.parse(await readFile(sourcePath, 'utf8')), source);
+  const readable = await request(app, { url: `/api/state?sessionId=${id}` });
+  assert.equal(readable.json().session.id, id);
+  await writeFile(sourcePath, JSON.stringify({ ...source, title: '已改变' }));
+  assert.equal((await post('apply', { playerName: plan.playerName, sourceHash: plan.sourceHash })).status, 409);
+  app.close?.();
+});
+
+test('prompt budget failures preserve actionable details over HTTP and SSE without calling provider', async () => {
+  const rootDir = await createTestRoot(); let calls = 0;
+  const app = createApp({ rootDir, providerClient: { complete: async () => { calls++; throw new Error('must not call'); }, completeStream: async () => { calls++; throw new Error('must not call'); } } });
+  await saveHttpProvider(app);
+  await mkdir(path.join(rootDir, 'data/sessions'), { recursive: true });
+  await writeFile(path.join(rootDir, 'data/sessions/budget.json'), JSON.stringify({ id: 'budget', settings: { maxPromptTokens: 1000, promptExecutionMode: 'faithful' }, config: { characterCard: { name: '原卡', description: '长篇设定。'.repeat(5000), sourceSpec: 'chara_card_v3' }, promptModules: [], worldBook: [] }, memory: {}, messages: [] }));
+  for (const url of ['/api/chat', '/api/chat/stream']) {
+    const response = await request(app, { method: 'POST', url, headers: { 'content-type': 'application/json' }, body: { sessionId: 'budget', content: '开始故事' } });
+    if (url.endsWith('/stream')) { assert.match(response.text, /PROMPT_BUDGET_INSUFFICIENT/); assert.match(response.text, /尚未调用 Provider/); }
+    else { assert.equal(response.status, 409); assert.equal(response.json().error, 'PROMPT_BUDGET_INSUFFICIENT'); assert.match(response.json().detail, /至少需要约/); }
+  }
+  assert.equal(calls, 0); app.close?.();
+});

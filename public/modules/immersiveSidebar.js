@@ -101,7 +101,8 @@ export function createImmersiveSidebarController({
 
   const getLatestPanels = () => resolveLatestRoleplayPanels(
     Array.isArray(state.session?.messages) ? state.session.messages : [],
-    extractRoleplayPresentation
+    extractRoleplayPresentation,
+    state.session?.turnViewSnapshot
   );
 
   function bindEvents() {

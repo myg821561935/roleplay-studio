@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createApp } from '../server/app.js';
 
-test('heavy frontend runtime requires hash-bound review and serves a managed isolated gateway', async (t) => {
+test('heavy frontend runtime starts in local observation and serves a managed isolated gateway', async (t) => {
   const rootDir = await createTestRoot();
   const observedCalls = [];
   const providerClient = {
@@ -33,18 +33,9 @@ test('heavy frontend runtime requires hash-bound review and serves a managed iso
   });
   assert.equal(importResponse.status, 200);
   const imported = importResponse.json().package;
-  assert.equal(imported.currentRevision.review.status, 'required');
+  assert.equal(imported.currentRevision.review.status, 'local-observe');
   assert.ok(imported.currentRevision.findings.some((finding) => finding.id === 'api-credential-storage'));
   assert.ok(imported.currentRevision.findings.some((finding) => finding.id === 'remote-cors-proxy'));
-
-  const blockedLaunch = await request(app, {
-    method: 'POST',
-    url: `/api/heavy-frontends/${encodeURIComponent(imported.id)}/launch`,
-    headers: mainHeaders(),
-    body: {}
-  });
-  assert.equal(blockedLaunch.status, 409);
-  assert.equal(blockedLaunch.json().error, 'HEAVY_FRONTEND_REVIEW_REQUIRED');
 
   const reviewResponse = await request(app, {
     method: 'POST',
@@ -188,7 +179,7 @@ test('heavy frontend runtime requires hash-bound review and serves a managed iso
   assert.doesNotMatch(JSON.stringify(auditResponse.json()), /应用自己的提示词|继续剧情|super-secret-key/);
 });
 
-test('heavy frontend update invalidates approval and path traversal is rejected', async (t) => {
+test('heavy frontend update returns to local observation, and explicit rejection blocks launch', async (t) => {
   const rootDir = await createTestRoot();
   const app = createApp({
     rootDir,
@@ -218,8 +209,23 @@ test('heavy frontend update invalidates approval and path traversal is rejected'
   })).json().package;
   assert.equal(second.id, first.id);
   assert.equal(second.revisions.length, 2);
-  assert.equal(second.currentRevision.review.status, 'required');
+  assert.equal(second.currentRevision.review.status, 'local-observe');
 
+  const observed = await request(app, {
+    method: 'POST',
+    url: `/api/heavy-frontends/${first.id}/launch`,
+    headers: mainHeaders(),
+    body: {}
+  });
+  assert.equal(observed.status, 200);
+
+  const rejected = await request(app, {
+    method: 'POST',
+    url: `/api/heavy-frontends/${first.id}/review`,
+    headers: mainHeaders(),
+    body: { decision: 'rejected', contentHash: second.currentRevision.contentHash, note: '本地测试中发现不可接受行为。' }
+  });
+  assert.equal(rejected.status, 200);
   const blocked = await request(app, {
     method: 'POST',
     url: `/api/heavy-frontends/${first.id}/launch`,
@@ -227,6 +233,7 @@ test('heavy frontend update invalidates approval and path traversal is rejected'
     body: {}
   });
   assert.equal(blocked.status, 409);
+  assert.equal(blocked.json().error, 'HEAVY_FRONTEND_REJECTED');
 
   const traversal = await request(app, {
     method: 'POST',

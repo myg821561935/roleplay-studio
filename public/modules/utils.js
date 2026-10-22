@@ -38,6 +38,7 @@ export function formatTokenCount(value) {
 }
 
 export function humanizeApiError(error) {
+  if (error.code === 'PROMPT_BUDGET_INSUFFICIENT') return error.message && error.message !== error.code ? error.message : '上下文预算不足，请在会话设置提高预算，或减少启用的预设与世界书；本轮尚未调用 Provider。';
   if (error.code === 'NO_ACTIVE_PROVIDER') return '未配置可用 Provider';
   if (error.code === 'CANNOT_DELETE_MAIN_SESSION') return '默认会话不可删除';
   if (error.code === 'FORK_MESSAGE_NOT_FOUND') return '找不到要分支的消息';
@@ -60,7 +61,7 @@ export function humanizeApiError(error) {
   if (error.code === 'BACKUP_OPERATION_IN_PROGRESS') return '已有备份或恢复操作正在执行';
   if (error.code === 'BACKUP_TOO_LARGE') return '备份范围过大，请先在“数据与发布”中导出或清理旧素材后重试';
   if (error.code === 'BACKUP_SCOPED_SCHEMA_MISMATCH') return '该范围备份来自旧版数据结构，请升级后使用完整备份恢复';
-  if (error.code?.startsWith('BACKUP_')) return `备份操作失败：${error.code}`;
+  if (typeof error.code === 'string' && error.code.startsWith('BACKUP_')) return `备份操作失败：${error.code}`;
   if (error.code === 'UNSUPPORTED_MEDIA_TYPE') return '请求格式错误';
   if (error.code === 'INVALID_IMPORT_PAYLOAD') return '无法识别导入文件，请确认是 Character Card V2/V3 PNG/JSON、YAML 角色卡、世界书 JSON/文本、SillyTavern Prompt/Regex 预设或叙界内容包';
   if (error.code === 'IMPORT_SOURCE_NOT_FOUND') return '未知素材源';

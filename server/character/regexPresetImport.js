@@ -44,7 +44,7 @@ export function createSillyTavernRegexCompanion(documentOrRules, {
     id: 'st-regex-runtime-companion',
     title: `${title} · Regex 配套`,
     enabled: false,
-    content: '配套 Regex 声明式运行时。该资源不注入模型提示词；安全规则按作用域运行，第三方脚本保持禁用。',
+    content: '配套 Regex 声明式运行时。该资源不注入模型提示词；安全规则按作用域运行，可隔离脚本在本地观察模式中运行并记录。',
     role: 'system',
     position: 'relative',
     depth: 0,

@@ -1,3 +1,4 @@
+import { createPromptExecutionSettings } from './promptExecutionSettings.js';
 import {
   NARRATIVE_MODE_LABELS,
   RESPONSE_LENGTH_LABELS,
@@ -19,6 +20,7 @@ export function createSessionSettingsController({
   humanizeApiError = (error) => error?.message || String(error),
   documentObject = globalThis.document
 } = {}) {
+  const promptExecution = createPromptExecutionSettings({ state, els, saveSettingsPatch, renderSessionSettings, setStatus, humanizeApiError });
   let eventsBound = false;
   let operationPending = false;
   let settingsWriteTail = Promise.resolve();
@@ -72,6 +74,7 @@ export function createSessionSettingsController({
     if (els.sessionRoleplayMode) {
       els.sessionRoleplayMode.value = normalizeRoleplayMode(state.session?.settings?.roleplayMode);
     }
+    promptExecution.render();
     renderSessionPromptIntegrity({ state, element: els.sessionPromptIntegrity });
     cardRuntimeSettingController.render();
   }
@@ -223,6 +226,7 @@ export function createSessionSettingsController({
     els.sessionResponseLength?.addEventListener('change', () => { void saveResponseLength(); });
     els.sessionRoleplayMode?.addEventListener('change', () => { void saveRoleplayMode(); });
     cardRuntimeSettingController.bindEvents();
+    promptExecution.bind();
     (els.narrativeModeButtons || []).forEach((button) => {
       button.addEventListener('click', () => { void saveNarrativeMode(button.dataset.narrativeMode); });
     });

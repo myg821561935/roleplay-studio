@@ -1,3 +1,4 @@
+import { groundExtractedFact } from './factProvenance.js';
 import { createDefaultMemory } from './memoryUpdater.js';
 import { normalizeFactCards, worldBookIdentity } from './factCards.js';
 import { buildNarrativeMaintenanceAnchor, normalizeNarrativeMode } from './narrativeControl.js';
@@ -38,11 +39,15 @@ export function buildFactExtractionPrompt({ worldState, messages, narrativeConte
 export function applyFactExtractionResult(memory, content, {
   narrativeContext,
   allowWorldStatePatch = true,
-  registryContext = {}
+  registryContext = {},
+  evidenceContext
 } = {}) {
   const next = structuredClone(memory || createDefaultMemory());
   const payload = parseFactExtractionResult(content);
-  if (allowWorldStatePatch && payload.worldState && typeof payload.worldState === 'object') {
+  if (evidenceContext && payload.worldState) {
+    next.pendingWorldStateExtraction = { patch: payload.worldState, origin: 'model-inference', sourceMessageIds: (evidenceContext.messages || []).map(m => m.id).filter(Boolean), reviewStatus: 'candidate' };
+  }
+  if (!evidenceContext && allowWorldStatePatch && payload.worldState && typeof payload.worldState === 'object') {
     const patch = sanitizeWorldStatePatch(payload.worldState, next.worldState, narrativeContext);
     next.worldState = mergeWorldState(next.worldState || createDefaultMemory().worldState, patch);
   }
@@ -50,7 +55,7 @@ export function applyFactExtractionResult(memory, content, {
     const safeNow = new Date().toISOString();
     const existingCards = normalizeFactCards(next.memoryCards, { now: safeNow });
     const incomingCards = normalizeFactCards(
-      payload.memoryCards.map((card) => applyNarrativeAdmission(card, narrativeContext)),
+      payload.memoryCards.map((card) => applyNarrativeAdmission(evidenceContext ? groundExtractedFact(card, evidenceContext) : card, narrativeContext)),
       { now: safeNow }
     );
     const seen = new Set();
@@ -71,11 +76,13 @@ export function parseFactExtractionResult(content) {
   return parseJsonObject(content);
 }
 
-export function normalizeDynamicWorldBookEntries(content, { narrativeContext } = {}) {
+export function normalizeDynamicWorldBookEntries(content, { narrativeContext, evidenceContext } = {}) {
   const payload = parseFactExtractionResult(content);
   const entries = Array.isArray(payload.worldBook) ? payload.worldBook : [];
   return entries
     .filter((entry) => entry && stringValue(entry.content))
+    .map(entry => evidenceContext ? groundExtractedFact(entry, evidenceContext) : entry)
+    .filter(entry => !evidenceContext || entry.extensions.provenance.verified)
     .filter((entry) => canAutoPromoteWorldBookEntry(entry, narrativeContext))
     .map((entry) => ({
       id: stringValue(entry.id) || `dynamic-memory-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -154,6 +161,15 @@ function mergeWorldState(current, patch, path = []) {
 function sanitizeWorldStatePatch(patch, current, narrativeContext) {
   if (!isPlainObject(patch)) return patch;
   const nextPatch = structuredClone(patch);
+  // Maintenance cannot override evidence-checked event ledgers or their views.
+  delete nextPatch.itemLedger;
+  delete nextPatch.commitments;
+  if (Array.isArray(current?.itemLedger)) {
+    if (isPlainObject(nextPatch.protagonist)) delete nextPatch.protagonist.inventory;
+    delete nextPatch.inventory;
+    delete nextPatch.resourceLedger;
+  }
+  if (Array.isArray(current?.commitments)) delete nextPatch.obligations;
   if (!narrativeContext) return nextPatch;
   const mode = normalizeNarrativeMode(narrativeContext?.mode);
   if (mode === 'free') return nextPatch;

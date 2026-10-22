@@ -184,13 +184,6 @@ export function createChatController(deps) {
         empty.append(createProviderOnboardingBanner({ onConfigure: openProviderSettings }));
       }
 
-      if (!messages.length && !state.pendingJourneyDraft) {
-        empty.append(createQuickStartGuide({
-          onOpenLibrary: openStoryLauncher,
-          onConfigure: openProviderSettings
-        }));
-      }
-
       if (tpl) {
         const title = document.createElement('h1');
         title.textContent = tpl.title;
@@ -218,9 +211,10 @@ export function createChatController(deps) {
 
         empty.append(title, subtitle, tagline, workflow, actions);
       } else {
-        const error = document.createElement('p');
-        error.textContent = '无法加载设定模板...';
-        empty.append(error);
+        empty.append(createQuickStartGuide({
+          onOpenLibrary: openStoryLauncher,
+          onConfigure: openProviderSettings
+        }));
       }
 
       els.messages.append(empty);

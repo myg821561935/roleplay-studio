@@ -370,7 +370,7 @@ const presetWorkspaceController = createPresetWorkspaceController({
 const { bindEvents: bindPresetWorkspaceEvents, renderPromptEditor, renderPromptPresetFavorites, setPromptDraft } = presetWorkspaceController;
 const promptStudioController = createPromptStudioController({
   state, els, apiRequest, getCurrentSessionId: () => currentSessionId, getPreviewContent: () => els.chatInput?.value || '',
-  setStatus, humanizeApiError, promptAction: prompt, onIntegrityChange: () => renderSessionSettings(), documentObject: document
+  setStatus, humanizeApiError, promptAction: prompt, onIntegrityChange: () => renderSessionSettings(), onOpenCopy: async (id) => { currentSessionId = id; localStorage.setItem('localRoleplaySessionId', id); await loadState(); }, documentObject: document
 });
 const promptTemplateCenterController = createPromptTemplateCenterController({
   state,

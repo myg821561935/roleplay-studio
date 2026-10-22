@@ -159,6 +159,17 @@ export class ConfigService {
   }
 }
 
+function normalizeOptionalSampling(provider) {
+  const result = {};
+  for (const [key, min, max] of [['topP', 0, 1], ['frequencyPenalty', -2, 2], ['presencePenalty', -2, 2], ['seed', Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]]) {
+    if (provider[key] === undefined || provider[key] === null || provider[key] === '') continue;
+    const value = Number(provider[key]);
+    if (!Number.isFinite(value) || value < min || value > max || (key === 'seed' && !Number.isSafeInteger(value))) throw new Error(`Invalid provider ${key}`);
+    result[key] = value;
+  }
+  return result;
+}
+
 function normalizeProviders(value) {
   const source = isPlainObject(value) ? value : {};
   return {
@@ -181,6 +192,7 @@ function normalizeProviders(value) {
       ttsModel: String(provider.ttsModel || ''),
       sttModel: String(provider.sttModel || ''),
       temperature: normalizeFiniteNumber(provider.temperature, 0.9),
+      ...normalizeOptionalSampling(provider),
       maxTokens: normalizePositiveFiniteNumber(provider.maxTokens, 2000),
       reasoningMode: normalizeReasoningMode(provider.reasoningMode),
       headers: isPlainObject(provider.headers) ? provider.headers : {}

@@ -112,7 +112,7 @@ function inspectResource(resourceType, sourcePath, bytes) {
       details: {
         name: imported.characterCard.name || path.basename(sourcePath),
         sourceSpec: imported.characterCard.sourceSpec,
-        worldBookEntries: countEntries(imported.worldBook?.entries)
+        worldBookEntries: countEntries(Array.isArray(imported.worldBook) ? imported.worldBook : imported.worldBook?.entries)
       }
     };
   }

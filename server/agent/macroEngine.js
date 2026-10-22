@@ -15,8 +15,9 @@
  */
 
 import { renderSafeTemplate } from '../compat/lightFrontendRuntime.js';
+import { normalizeWorldBookPosition } from './worldBookPosition.js';
 
-const MACRO_REGEX = /\{\{([^{}]+)\}\}/g;
+import { expandNestedMacros, assertMacroSourceLength } from './nestedMacros.js';
 
 /**
  * 展开 text 中的所有宏
@@ -26,24 +27,23 @@ const MACRO_REGEX = /\{\{([^{}]+)\}\}/g;
  */
 export function expandMacros(text, context = {}) {
   if (typeof text !== 'string' || !text) return text;
-  // 防止模板递归死循环
-  const depth = Number(context._depth || 0);
-  if (depth > 5) return text;
-  const safelyRendered = renderSafeTemplate(text, context, { unsupported: 'strip' });
-  return safelyRendered.replace(MACRO_REGEX, (full, rawBody) => {
-    const body = String(rawBody || '').trim();
-    if (!body) return full;
-    try {
-      const value = resolveMacro(body, context);
-      return value === null || value === undefined ? full : String(value);
-    } catch {
-      return full;
-    }
-  });
+  assertMacroSourceLength(text);
+  // Prompt content must not inherit the display renderer's 120k prefix truncation.
+  const safelyRendered = renderSafeTemplate(text, context, { unsupported: 'strip', maxSourceLength: text.length });
+  return expandNestedMacros(safelyRendered, context, resolveMacro);
 }
 
 function resolveMacro(body, context) {
   const lower = body.toLowerCase();
+  // Tavern Helper's read-only message-state macro. Missing state stays unknown;
+  // never fabricate zero-valued character variables or run the original script.
+  if (lower.startsWith('format_message_variable::')) {
+    const path = body.slice(body.indexOf('::') + 2).trim();
+    const explicit = readStatePath(context.messageVariables, path);
+    const value = explicit.found ? serializeMacroValue(explicit.value) : resolveLightFrontendState(path, context);
+    if (value === '') return 'null';
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+  }
 
   // —— 身份变量 ——
   if (lower === 'user') return context.user || '用户';
@@ -146,6 +146,11 @@ function resolveMacro(body, context) {
     return String(text.length);
   }
   if (lower === 'last_user_message' || lower === 'lastusermessage') {
+    // The pending turn is passed separately from committed history. Presets
+    // must see that turn; a macro in the input itself still refers to history.
+    if (typeof context.userMessage === 'string' && context.userMessage.trim()) {
+      return expandMacros(context.userMessage, { ...context, userMessage: undefined });
+    }
     const userMsgs = (context.messages || []).filter((m) => m.role === 'user' && !m.excluded);
     const last = userMsgs[userMsgs.length - 1];
     return last?.content || '';
@@ -486,8 +491,10 @@ function resolveTemplate(arg, context) {
   const templates = Array.isArray(context.templates) ? context.templates : [];
   const tpl = templates.find((t) => t.name === name);
   if (!tpl) return '';
-  // 模板内可能仍含宏，递归展开（限制深度防死循环）
-  return expandMacros(tpl.content || '', { ...context, _depth: (context._depth || 0) + 1 });
+  // 交由调用方共享递归预算展开，避免重新开始计数和重复执行。
+  const source = String(tpl.content || '');
+  assertMacroSourceLength(source);
+  return renderSafeTemplate(source, context, { unsupported: 'strip', maxSourceLength: source.length });
 }
 
 function isPlainObject(value) {
@@ -503,13 +510,21 @@ function resolveCharacterTextField(context, field) {
   return '';
 }
 
-// 世界书占位符渲染：position=before_character 渲染前置条目，null 渲染其余常驻条目
+// 世界书占位符渲染：position=before_character 渲染前置条目，before_eff/after_eff 渲染对应扩展条目，null 渲染其余常驻条目
 function renderWorldBookSection(context, position) {
   const cards = Array.isArray(context.worldBook) ? context.worldBook : [];
   const matched = cards.filter((card) => {
-    const cardPosition = String(card?.position || '').toLowerCase();
-    if (position === 'before_character') return cardPosition === 'before_character' || cardPosition === 'before';
-    return cardPosition !== 'before_character' && cardPosition !== 'before';
+    const cardPosition = normalizeWorldBookPosition(card?.position);
+    if (position === 'before_character') {
+      return cardPosition === 'before_character';
+    }
+    if (position === 'before_eff') {
+      return cardPosition === 'before_eff';
+    }
+    if (position === 'after_eff') {
+      return cardPosition === 'after_eff';
+    }
+    return cardPosition === 'after_character';
   });
   if (!matched.length) return '';
   return matched

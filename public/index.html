@@ -896,7 +896,7 @@
           <details id="sandbox-audit-panel" class="provider-tool-panel">
             <summary>第三方脚本审核与审计 <span id="sandbox-audit-count" class="sandbox-audit-count" hidden></span></summary>
             <div class="provider-tool-body">
-              <p class="tool-lead">第三方脚本只有在人工审核并绑定当前内容哈希后才会执行。脚本运行在无父页面权限、默认禁止联网的沙箱中；内容变化会自动撤销旧授权，执行尝试保留在本地审计记录中。</p>
+              <p class="tool-lead">本地探索模式下，第三方脚本会在无父页面权限、默认禁止联网的沙箱中观察运行并记录；可随时切换为严格逐项确认。内容变化会使既有确认失效，已拒绝的当前版本始终不会执行。</p>
               <div id="sandbox-audit-list"></div>
               <div id="sandbox-audit-empty" class="tool-empty" style="display: none;">当前会话无沙箱脚本规则。</div>
             </div>
@@ -1000,11 +1000,23 @@
                   <option value="director">导演 / 共创</option>
                   <option value="commentary">旁白解说</option>
                 </select>
+                <select id="session-prompt-execution-mode" class="form-input compact-select" aria-label="故事执行方式" title="自动模式让社区卡优先沿用原卡与预设">
+                  <option value="auto">自动选择</option>
+                  <option value="faithful">原卡优先</option>
+                  <option value="enhanced">Agent 增强</option>
+                </select>
+                <label>上下文预算 <input id="session-prompt-budget" class="form-input compact-select" type="number" min="1000" step="1000" aria-label="会话上下文预算" title="需与所用模型的上下文容量匹配" style="max-width: 100px;"></label>
                 <select id="session-response-length" class="form-input compact-select" style="max-width: 118px;" aria-label="每轮正文篇幅" title="控制当前会话每轮正文的篇幅与场景推进程度">
                   <option value="compact">紧凑 · 600-1000</option>
                   <option value="balanced" selected>标准 · 1200-2000</option>
                   <option value="long">长篇 · 2000-3200</option>
                 </select>
+                <details class="session-enhancements"><summary>可选增强</summary>
+                  <label title="控制记忆检索、摘要注入与自动整理；保留已有存档">长期记忆 <select id="enhancement-memory-recall" aria-label="长期记忆"><option value="auto">跟随默认</option><option value="true">开启</option><option value="false">关闭</option></select></label>
+                  <label title="控制离场人物自动推演与模拟提示">幕后人物 <select id="enhancement-npc-simulation" aria-label="幕后人物"><option value="auto">跟随默认</option><option value="true">开启</option><option value="false">关闭</option></select></label>
+                  <label title="控制系统导演提示与剧情节点自动推进">剧情引导 <select id="enhancement-plot-guidance" aria-label="剧情引导"><option value="auto">跟随默认</option><option value="true">开启</option><option value="false">关闭</option></select></label>
+                  <label title="控制系统补充的选项；原卡自行输出的选项仍保留">行动建议 <select id="enhancement-action-suggestions" aria-label="行动建议"><option value="auto">跟随默认</option><option value="true">开启</option><option value="false">关闭</option></select></label>
+                </details>
                 <output id="session-prompt-integrity" class="session-prompt-integrity" aria-live="polite" title="社区预设完整性状态">预设完整</output>
                 <label class="session-runtime-toggle" title="从当前角色卡、世界书和已声明人物生成可审阅的会话运行蓝图；不改写原始资源。">
                   <input id="card-runtime-enabled" type="checkbox" checked>
@@ -1543,6 +1555,7 @@
               <button id="reset-character-card" class="ghost-button compact" type="button">角色模板</button>
               <button id="save-character-card" class="primary-button compact" type="button">保存角色卡</button>
               <button id="export-character-card" class="ghost-button compact" type="button">导出 PNG</button>
+              <button id="export-character-card-v3" class="ghost-button compact" type="button">导出 V3 JSON</button>
             </div>
 
             <details class="group-section inspector-subsection">
@@ -1552,6 +1565,14 @@
               </summary>
               <div class="section-heading">
                 <h4>成员列表</h4>
+                <div class="group-strategy-picker">
+                  <label for="group-speaker-strategy">发言策略：</label>
+                  <select id="group-speaker-strategy" class="form-select compact">
+                    <option value="talkativeness">话唠度加权随机</option>
+                    <option value="list-order">列表顺序轮流</option>
+                    <option value="manual">仅手动指定</option>
+                  </select>
+                </div>
                 <button id="add-group-member" class="ghost-button compact" type="button">+ 添加角色</button>
               </div>
               <div id="group-members-list" class="group-members-list"></div>
@@ -1760,7 +1781,7 @@
                     <button id="prompt-studio-show-request" class="ghost-button compact" type="button">查看最终请求</button>
                   </div>
                 </header>
-                <p class="prompt-studio-lead">默认保护层始终保留主角、世界规则与互动契约。下列模块仅作用于当前会话：可拖动排序、开关或局部覆盖；未知脚本仍须先审核。</p>
+                <p class="prompt-studio-lead">最终请求由原卡、预设、世界书与所选增强共同组成。下列模块仅作用于当前会话：可拖动排序、开关或局部覆盖；未知脚本仍须先审核。</p>
                 <div id="prompt-studio-integrity" class="prompt-studio-integrity" aria-live="polite"></div>
                 <section class="prompt-studio-section">
                   <h4>可编辑预设模块</h4>
@@ -1770,6 +1791,8 @@
                   <h4>最终发送顺序</h4>
                   <ol id="prompt-studio-blocks" class="prompt-studio-blocks"></ol>
                 </section>
+                <details><summary>查看逐阶段变化</summary><div id="prompt-studio-changes"></div></details>
+                <button id="prompt-studio-export-comparison" class="ghost-button compact" type="button">导出同条件对照材料</button>
                 <pre id="prompt-studio-request" class="prompt-studio-request" hidden></pre>
                 <span id="prompt-studio-status" class="status-text" aria-live="polite"></span>
               </div>

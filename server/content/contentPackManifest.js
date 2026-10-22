@@ -6,7 +6,7 @@ import {
 } from '../compat/lightFrontendRuntime.js';
 
 export const CONTENT_PACK_SPEC = 'lra.content-pack/v1';
-export const DEFAULT_CONTENT_PACK_ENGINE_RANGE = '>=0.2.2 <1.0.0';
+export const DEFAULT_CONTENT_PACK_ENGINE_RANGE = '>=0.2.2 <2.0.0';
 
 const PACK_ID_PATTERN = /^[a-z][a-z0-9._-]{2,79}$/;
 const EXECUTABLE_FIELDS = ['entry', 'main', 'module', 'script', 'scripts', 'command', 'hooks'];

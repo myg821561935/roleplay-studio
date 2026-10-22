@@ -225,15 +225,26 @@ export function createOpeningWorkflowController({
     return errorPanel;
   }
 
+  const GENRE_FLAVORS = [
+    { pattern: /仙|修真|宗门|道友|飞升|炉鼎|九渊/, genre: 'xianxia', sub: '仙 途 问 鼎 · 命 途 开 启', tag: '大道三千，道心何往；逆天改命，天机将启。' },
+    { pattern: /现代|都市|催眠|总裁|职场|刑侦|校园/, genre: 'xianxia', sub: '都 市 风 云 · 抉 择 始 动', tag: '霓虹深处，暗流涌动；每一次抉择，皆重塑因果轨迹。' },
+    { pattern: /灵异|鬼|惊悚|恐怖|无眠|宾馆|诡异|异闻/, genre: 'lingyi', sub: '诡 谲 异 境 · 迷 局 初 现', tag: '夜幕深锁，禁忌悄至；不可言说的隐秘，正缓缓揭开。' },
+    { pattern: /明末|崇祯|大明|王朝|历史/, genre: 'mingmo', sub: '乾 坤 倾 覆 · 乱 世 抉 择', tag: '江山风雨，社稷飘摇；一念之间，定万世太平。' },
+    { pattern: /英雄志|乱世|江湖|武侠/, genre: 'yingxiongzhi', sub: '群 雄 逐 鹿 · 剑 指 天 涯', tag: '风云激荡，豪杰并起；快意恩仇，名动天下。' }
+  ];
+
   function getCurrentPrologueGenre() {
     const templates = state.prologueTemplate?.genres || {};
+    const boundPack = (state.contentPacks || []).find((item) => item.id === getBoundStoryPackId());
+    if (boundPack) {
+      const text = `${boundPack.title || ''} ${boundPack.description || ''} ${boundPack.genre || ''}`;
+      const matched = GENRE_FLAVORS.find((f) => f.pattern.test(text));
+      if (matched) return matched.genre;
+    }
     const sessionGenre = state.session?.memory?.worldState?.flags?.genre;
     const visualContentPack = state.session?.settings?.visualContentPack;
-    const cardGenre = state.config?.characterCard?.extensions?.contentPack
-      || state.config?.characterCard?.extensions?.genre;
-    const selectedPack = els.contentPackSelect?.dataset.userSelected === 'true'
-      ? els.contentPackSelect.value
-      : '';
+    const cardGenre = state.config?.characterCard?.extensions?.contentPack || state.config?.characterCard?.extensions?.genre;
+    const selectedPack = els.contentPackSelect?.dataset.userSelected === 'true' ? els.contentPackSelect.value : '';
     const candidates = [
       selectedPack,
       visualContentPack,
@@ -248,23 +259,26 @@ export function createOpeningWorkflowController({
   function resolvePrologueTemplate() {
     const templates = state.prologueTemplate?.genres || {};
     const genre = getCurrentPrologueGenre();
-    const boundPackId = getBoundStoryPackId();
-    const boundPack = (state.contentPacks || []).find((item) => item.id === boundPackId);
-    const customTemplate = boundPack?.custom === true
-      && boundPack.openingTemplate
-      && typeof boundPack.openingTemplate === 'object'
-      ? boundPack.openingTemplate
-      : null;
+    const boundPack = (state.contentPacks || []).find((item) => item.id === getBoundStoryPackId());
+    const customTemplate = boundPack?.custom === true && typeof boundPack.openingTemplate === 'object' ? boundPack.openingTemplate : null;
     if (customTemplate) {
-      const customGenre = getOpeningGenreIds().includes(customTemplate.genre)
-        ? customTemplate.genre
-        : genre;
-      return { genre: customGenre, tpl: customTemplate };
+      return { genre: getOpeningGenreIds().includes(customTemplate.genre) ? customTemplate.genre : genre, tpl: customTemplate };
     }
-    return {
-      genre,
-      tpl: templates[genre] || templates.xuanhuan
-    };
+    if (boundPack) {
+      const text = `${boundPack.title || ''} ${boundPack.description || ''}`;
+      const matched = GENRE_FLAVORS.find((f) => f.pattern.test(text));
+      return {
+        genre,
+        tpl: {
+          title: boundPack.title || state.session?.title || '新卷剧本',
+          subtitle: matched?.sub || '新 卷 初 启 · 命 途 开 篇',
+          tagline: boundPack.description || matched?.tag || '卷轴初展，天命自决；故事与世界，由你执笔书写。',
+          genre,
+          source: 'custom-pack'
+        }
+      };
+    }
+    return { genre, tpl: templates[genre] || templates.xuanhuan };
   }
 
   function inferPrologueGenreFromTemplate(tpl) {
@@ -272,13 +286,9 @@ export function createOpeningWorkflowController({
     if (getOpeningGenreIds().includes(tpl?.genre)) return tpl.genre;
     const direct = Object.entries(genres).find(([, candidate]) => candidate === tpl);
     if (direct) return direct[0];
-    const title = `${tpl?.title || ''} ${tpl?.subtitle || ''} ${tpl?.tagline || ''}`;
-    if (/仙|太虚|飞升|天道/.test(title)) return 'xianxia';
-    if (/英雄志|乱世文章|群像旧账/.test(title)) return 'yingxiongzhi';
-    if (/明末|崇祯|银粮|密诏/.test(title)) return 'mingmo';
-    if (/灵异|微笑|禁忌|永安|阴阳/.test(title)) return 'lingyi';
-    if (/神荒|武界|江湖|雁回/.test(title)) return 'xuanhuan';
-    return getCurrentPrologueGenre();
+    const text = `${tpl?.title || ''} ${tpl?.subtitle || ''} ${tpl?.tagline || ''}`;
+    const matched = GENRE_FLAVORS.find((f) => f.pattern.test(text));
+    return matched ? matched.genre : getCurrentPrologueGenre();
   }
 
   async function startGuidedJourney(genre) {

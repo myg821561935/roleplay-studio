@@ -1,4 +1,5 @@
 import { inflateSync } from 'node:zlib';
+import { normalizeWorldBookPosition } from '../agent/worldBookPosition.js';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 // ZIP 本地文件头签名（PK\x03\x04）。CharX 角色卡本质上是包含 card.json 与 assets/ 的 ZIP 包。
@@ -490,15 +491,7 @@ function normalizeSelectiveLogic(value) {
 }
 
 function normalizeCharacterBookPosition(position) {
-  if (typeof position === 'number') {
-    // SillyTavern 规范：0 = before_char（角色描述前）、1 = after_char（角色描述后）
-    return position === 1 ? 'after_character' : 'before_character';
-  }
-  const value = stringValue(position || 'after_character');
-  // 归一化历史值 after_char/before_char 到全局统一的 after_character/before_character
-  if (value === 'after_char') return 'after_character';
-  if (value === 'before_char') return 'before_character';
-  return value;
+  return normalizeWorldBookPosition(position);
 }
 
 function normalizeExampleDialog(value) {
